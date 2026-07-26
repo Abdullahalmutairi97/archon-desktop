@@ -1,0 +1,1287 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/nocturne-38807e4f-d454-4961-a46e-680d4437a82e/styles.css">
+<script src="_ds/nocturne-38807e4f-d454-4961-a46e-680d4437a82e/_ds_bundle.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Archivo:wght@400;500;600;700&family=Cormorant+Garamond:wght@400;500;600&family=Lora:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<style>
+html,body{margin:0;height:100%;overflow:hidden}
+body{background:#161826;color:#e9e9ed}
+a{color:var(--color-accent);text-decoration:none}
+a:hover{color:var(--color-accent-400,#b5abfc)}
+@keyframes ar-blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@keyframes ar-spin{to{transform:rotate(360deg)}}
+@keyframes ar-breathe{0%,100%{opacity:.5}50%{opacity:1}}
+@keyframes ar-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes ar-slide{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:rgba(147,151,171,.28);border-radius:8px}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+<div style="height:100vh;width:100%;background:#161826;color:#e9e9ed;font-family:Inter,system-ui,sans-serif;font-size:14px;overflow:hidden">
+<div dir="{{ dir }}" style="{{ vars }}" data-screen-label="Archon Desktop v2">
+<div style="position:relative;height:100vh;display:flex;flex-direction:column;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body);overflow:hidden">
+
+<div style="{{ ambient }}"></div>
+
+<div style="height:36px;flex:none;display:flex;align-items:center;gap:8px;padding:0 8px 0 11px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.08));position:relative;z-index:6">
+  <div onClick="{{ toggleSidebar }}" title="Toggle sidebar" style="width:26px;height:24px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.5;cursor:pointer" style-hover="opacity:1;background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-sidebar-simple" style="font-size:15px"></i></div>
+  <span style="font-size:11.5px;opacity:.5">{{ crumb }}</span>
+  <div style="margin-inline-start:auto;display:flex;align-items:center;gap:3px">
+    <sc-for list="{{ benchTabs }}" as="b" hint-placeholder-count="3">
+      <div onClick="{{ b.open }}" title="{{ b.title }}" style="{{ b.style }}"><i class="ph {{ b.icon }}" style="font-size:15px"></i><span style="{{ b.dot }}"></span></div>
+    </sc-for>
+    <div style="width:1px;height:16px;background:var(--ar-edge,rgba(233,233,237,.12));margin:0 5px"></div>
+    <div style="width:26px;height:24px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.45" style-hover="opacity:1;background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-minus" style="font-size:13px"></i></div>
+    <div style="width:26px;height:24px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.45" style-hover="opacity:1;background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-square" style="font-size:11px"></i></div>
+    <div style="width:26px;height:24px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.45" style-hover="opacity:1;background:#e0574c;color:#fff"><i class="ph ph-x" style="font-size:13px"></i></div>
+  </div>
+</div>
+
+<div style="flex:1;min-height:0;display:flex;flex-direction:var(--ar-flow,row);position:relative;z-index:2">
+
+  <sc-if value="{{ sidebar }}" hint-placeholder-val="{{ true }}">
+  <div style="width:262px;flex:none;display:flex;flex-direction:column;min-height:0;background:var(--ar-side,#191b28);border-inline-end:1px solid var(--ar-edge,rgba(233,233,237,.08))">
+    <div style="flex:none;padding:12px 12px 9px;display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:center;gap:9px;padding:0 2px">
+        <svg viewBox="0 0 32 32" style="width:20px;height:20px" aria-hidden="true"><path d="M4.5 27.5V16.5a11.5 11.5 0 0 1 23 0v11" fill="none" stroke="var(--color-accent)" stroke-width="2.1" stroke-linecap="round" opacity=".5"></path><path d="M16 4.5 21.4 13H10.6z" fill="var(--color-accent)"></path><path d="M11.2 27.5 16 17.6l4.8 9.9" fill="none" stroke="var(--color-text)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        <span style="font-family:var(--font-heading);font-size:14.5px;font-weight:500;letter-spacing:.02em">Archon</span>
+        <span style="font-size:9.5px;opacity:.35;letter-spacing:.06em;margin-top:3px">v0.3.1</span>
+      </div>
+      <button onClick="{{ newChat }}" style="display:flex;align-items:center;gap:8px;width:100%;height:34px;padding:0 11px;background:transparent;border:1px solid var(--color-accent);border-radius:var(--radius-md);color:var(--color-accent);font-family:var(--font-heading);font-size:13px;cursor:pointer" style-hover="background:color-mix(in srgb, var(--color-accent) 12%, transparent)">
+        <i class="ph ph-plus" style="font-size:14px"></i><span>New chat</span><span style="margin-inline-start:auto;font-size:10px;opacity:.55">⌃N</span>
+      </button>
+      <div style="display:flex;align-items:center;gap:8px;height:31px;padding:0 10px;background:var(--ar-panel,rgba(35,37,50,.72));backdrop-filter:blur(var(--ar-blur,14px));border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-md)">
+        <i class="ph ph-magnifying-glass" style="font-size:12.5px;opacity:.45"></i>
+        <input placeholder="Search chats" style="flex:1;min-width:0;background:transparent;border:0;outline:none;color:inherit;font:inherit;font-size:12px"></input>
+        <span style="font-size:9.5px;opacity:.35">⌘K</span>
+      </div>
+    </div>
+
+    <div style="flex:1;min-height:0;overflow-y:auto;padding:2px 8px 8px;display:flex;flex-direction:column;gap:3px">
+      <div style="display:flex;align-items:center;gap:7px;padding:9px 6px 4px">
+        <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Projects</span>
+        <i class="ph ph-caret-down" style="font-size:9px;opacity:.35"></i>
+      </div>
+      <sc-for list="{{ projects }}" as="p" hint-placeholder-count="4">
+        <div onClick="{{ p.open }}" style="{{ p.style }}">
+          <i class="ph ph-folder" style="font-size:13.5px;opacity:.6"></i>
+          <span style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.name }}</span>
+          <span style="margin-inline-start:auto;font-size:10px;opacity:.35">{{ p.n }}</span>
+        </div>
+      </sc-for>
+
+      <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <div style="padding:13px 6px 5px;font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">{{ g.label }}</div>
+          <sc-for list="{{ g.items }}" as="c" hint-placeholder-count="4">
+            <div onClick="{{ c.open }}" style="{{ c.style }}">
+              <span style="{{ c.badge }}"></span>
+              <div style="min-width:0;display:flex;flex-direction:column;gap:1px">
+                <span style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.title }}</span>
+                <span style="font-size:10.5px;opacity:.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.preview }}</span>
+              </div>
+              <span style="margin-inline-start:auto;font-size:10px;opacity:.3;flex:none">{{ c.when }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="flex:none;border-top:1px solid var(--ar-edge,rgba(233,233,237,.08));padding:8px 9px;display:flex;flex-direction:column;gap:5px">
+      <sc-for list="{{ sideNav }}" as="n" hint-placeholder-count="4">
+        <button onClick="{{ n.go }}" style="{{ n.style }}"><i class="ph {{ n.icon }}" style="font-size:14px"></i><span>{{ n.label }}</span><span style="margin-inline-start:auto;font-size:10px;opacity:.35">{{ n.meta }}</span></button>
+      </sc-for>
+      <div style="height:1px;margin:4px 3px 2px;background:var(--ar-edge,rgba(233,233,237,.09))"></div>
+      <div onClick="{{ openActivity }}" style="display:flex;align-items:center;gap:8px;padding:6px 7px;border-radius:var(--radius-md);cursor:pointer" style-hover="background:var(--ar-hover,rgba(233,233,237,.07))">
+        <span style="{{ liveDot }}"></span>
+        <div style="display:flex;flex-direction:column;gap:0">
+          <span style="font-size:11.5px">{{ liveLabel }}</span>
+          <span style="font-size:10px;opacity:.4">vps-archon-01 · tailscale</span>
+        </div>
+        <i class="ph ph-caret-right" style="font-size:11px;opacity:.35;margin-inline-start:auto"></i>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px">
+        <button onClick="{{ openSettings }}" style="flex:1;display:flex;align-items:center;gap:8px;padding:6px 7px;background:transparent;border:0;border-radius:var(--radius-md);color:inherit;font:inherit;font-size:11.5px;opacity:.65;cursor:pointer;text-align:start" style-hover="opacity:1;background:var(--ar-hover,rgba(233,233,237,.07))">
+          <i class="ph ph-gear-six" style="font-size:14px"></i><span>Settings</span><span style="margin-inline-start:auto;font-size:9.5px;opacity:.6">⌘,</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+
+    <sc-if value="{{ isNew }}" hint-placeholder-val="{{ true }}">
+    <div style="flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;padding:0 24px 40px">
+      <div style="width:100%;max-width:660px;margin:0 auto;display:flex;flex-direction:column;gap:26px">
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <svg viewBox="0 0 32 32" style="width:34px;height:34px" aria-hidden="true"><path d="M4.5 27.5V16.5a11.5 11.5 0 0 1 23 0v11" fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" opacity=".45"></path><path d="M16 4.5 21.4 13H10.6z" fill="var(--color-accent)"></path><path d="M11.2 27.5 16 17.6l4.8 9.9" fill="none" stroke="var(--color-text)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <span style="font-family:var(--font-heading);font-size:29px;font-weight:500;letter-spacing:-.02em;line-height:1.15">Evening, Abdullah.</span>
+            <span style="font-size:13.5px;opacity:.5">Two tasks are still running on the VPS. Pick up where you left off, or start something new.</span>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <div style="border:1px solid var(--ar-edge,rgba(233,233,237,.14));border-radius:var(--radius-lg);background:var(--ar-panel,rgba(35,37,50,.72));backdrop-filter:blur(var(--ar-blur,14px));overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.28)">
+            <textarea placeholder="Ask Archon anything, or give it a job to run on the server…" style="width:100%;min-height:74px;max-height:170px;padding:14px 15px 4px;background:transparent;border:0;outline:none;resize:none;color:inherit;font:inherit;font-size:14px;line-height:1.65"></textarea>
+            <div style="display:flex;align-items:center;gap:7px;padding:7px 10px 9px 12px">
+              <i class="ph ph-paperclip" style="font-size:15px;opacity:.45"></i>
+              <button onClick="{{ pickProject }}" style="display:flex;align-items:center;gap:6px;height:25px;padding:0 9px;background:transparent;border:1px solid var(--ar-edge,rgba(233,233,237,.14));border-radius:var(--radius-md);color:inherit;font:inherit;font-size:11px;opacity:.8;cursor:pointer" style-hover="opacity:1;border-color:var(--color-accent)"><i class="ph ph-folder" style="font-size:12px"></i>archon-desktop</button>
+              <button onClick="{{ openModels }}" style="display:flex;align-items:center;gap:6px;height:25px;padding:0 9px;background:transparent;border:1px solid var(--ar-edge,rgba(233,233,237,.14));border-radius:var(--radius-md);color:inherit;font:inherit;font-size:11px;opacity:.8;cursor:pointer" style-hover="opacity:1;border-color:var(--color-accent)"><i class="ph ph-cpu" style="font-size:12px"></i>{{ model }}</button>
+              <button style="margin-inline-start:auto;display:grid;place-items:center;width:29px;height:29px;background:transparent;border:1px solid var(--color-accent);border-radius:var(--radius-md);color:var(--color-accent);cursor:pointer" style-hover="background:color-mix(in srgb, var(--color-accent) 14%, transparent)"><i class="ph ph-arrow-up" style="font-size:15px"></i></button>
+            </div>
+          </div>
+          <span style="font-size:10.5px;opacity:.38;padding-inline-start:2px">Every message becomes a server-owned task — close the window and it keeps going.</span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.35">Pick up</span>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px">
+            <sc-for list="{{ suggestions }}" as="s" hint-placeholder-count="4">
+              <button onClick="{{ openThread }}" style="display:flex;align-items:center;gap:10px;padding:11px 12px;background:transparent;border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-md);color:inherit;font:inherit;text-align:start;cursor:pointer" style-hover="border-color:var(--color-accent);background:color-mix(in srgb, var(--color-accent) 7%, transparent)">
+                <i class="ph {{ s.icon }}" style="font-size:15px;color:var(--color-accent);opacity:.85;flex:none"></i>
+                <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+                  <span style="font-size:12.5px">{{ s.title }}</span>
+                  <span style="font-size:10.5px;opacity:.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.note }}</span>
+                </div>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ isThread }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+      <div style="flex:none;display:flex;align-items:center;gap:9px;padding:11px 22px 10px">
+        <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+          <span style="font-family:var(--font-heading);font-size:15px;font-weight:500">Ship v0.3.1 — real task cancellation</span>
+          <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;opacity:.45">
+            <span style="font-family:ui-monospace,'JetBrains Mono',monospace">~/archon/projects/archon-desktop</span>
+            <span>·</span><span>34 messages</span>
+          </div>
+        </div>
+        <div style="margin-inline-start:auto;display:flex;align-items:center;gap:6px">
+          <button onClick="{{ openModels }}" style="display:flex;align-items:center;gap:7px;height:28px;padding:0 10px;background:transparent;border:1px solid var(--ar-edge,rgba(233,233,237,.12));border-radius:var(--radius-md);color:inherit;font:inherit;font-size:11.5px;opacity:.85;cursor:pointer" style-hover="opacity:1;border-color:var(--color-accent)"><i class="ph ph-cpu" style="font-size:12.5px;color:var(--color-accent)"></i>{{ model }}</button>
+          <div style="width:28px;height:28px;display:grid;place-items:center;border-radius:var(--radius-md);opacity:.55;cursor:pointer" style-hover="opacity:1;background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-dots-three" style="font-size:15px"></i></div>
+        </div>
+      </div>
+
+      <div style="flex:1;min-height:0;overflow-y:auto;padding:8px 0 6px">
+        <div style="max-width:704px;margin:0 auto;padding:0 22px;display:flex;flex-direction:column;gap:24px">
+
+          <div style="display:flex;justify-content:flex-end">
+            <div style="max-width:80%;padding:11px 14px;background:var(--ar-panel,rgba(35,37,50,.72));border:1px solid var(--ar-edge,rgba(233,233,237,.09));border-radius:var(--radius-lg);font-size:14px;line-height:1.62">Cancel flips the record but the Hermes child keeps running. Fix it for real, then cut v0.3.1 for amd64 and arm64.</div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <svg viewBox="0 0 32 32" style="width:14px;height:14px" aria-hidden="true"><path d="M16 4.5 21.4 13H10.6z" fill="var(--color-accent)"></path><path d="M11.2 27.5 16 17.6l4.8 9.9" fill="none" stroke="var(--color-text)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              <span style="font-size:11.5px;letter-spacing:.06em;opacity:.55">Archon</span>
+              <span style="font-size:10.5px;opacity:.3">14:06</span>
+            </div>
+            <div style="font-size:14px;line-height:1.72;display:flex;flex-direction:column;gap:13px">
+              <p style="margin:0">Triaged as a build job, so it runs as four linked tasks rather than one. The record already changes state — the signal never reaches the process group, because the runner spawns a shell that spawns the agent.</p>
+              <div style="display:flex;flex-direction:column;gap:7px;padding:12px 14px;border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-md)">
+                <sc-for list="{{ plan }}" as="p" hint-placeholder-count="4">
+                  <div style="display:flex;align-items:flex-start;gap:9px;font-size:12.5px;line-height:1.5">
+                    <span style="{{ p.dot }}">{{ p.n }}</span>
+                    <span style="opacity:.85">{{ p.text }}</span>
+                    <span style="{{ p.chip }}">{{ p.state }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="border:1px solid var(--ar-edge,rgba(233,233,237,.11));border-radius:var(--radius-md);overflow:hidden">
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 11px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.09));font-size:10.5px;font-family:ui-monospace,'JetBrains Mono',monospace;opacity:.6">
+                  <i class="ph ph-file-py" style="font-size:12px"></i><span>backend/hermes/runner.py</span><span style="margin-inline-start:auto">+18 −6</span>
+                </div>
+                <pre style="margin:0;padding:11px 13px;background:rgba(0,0,0,.2);font-family:ui-monospace,'JetBrains Mono',monospace;font-size:11.5px;line-height:1.75;overflow-x:auto">os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+<span style="opacity:.5">try</span>:
+    <span style="opacity:.5">await</span> asyncio.wait_for(proc.wait(), timeout=<span style="color:var(--color-accent)">5</span>)
+<span style="opacity:.5">except</span> asyncio.TimeoutError:
+    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)</pre>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end">
+            <div style="max-width:80%;padding:11px 14px;background:var(--ar-panel,rgba(35,37,50,.72));border:1px solid var(--ar-edge,rgba(233,233,237,.09));border-radius:var(--radius-lg);font-size:14px;line-height:1.62">Run it. Package once the tests pass.</div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:11px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <svg viewBox="0 0 32 32" style="width:14px;height:14px;animation:ar-breathe 2.4s ease-in-out infinite" aria-hidden="true"><path d="M16 4.5 21.4 13H10.6z" fill="var(--color-accent)"></path><path d="M11.2 27.5 16 17.6l4.8 9.9" fill="none" stroke="var(--color-text)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              <span style="font-size:11.5px;letter-spacing:.06em;opacity:.55">Archon</span>
+              <span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;padding:2px 8px;border-radius:999px;background:color-mix(in srgb, var(--color-accent) 15%, transparent);color:var(--color-accent-300,#d2cefd)"><i class="ph ph-circle-notch" style="font-size:11px;animation:ar-spin 1.1s linear infinite"></i>working · 00:42</span>
+              <button onClick="{{ openActivity }}" style="background:transparent;border:0;color:inherit;font:inherit;font-size:10.5px;opacity:.4;cursor:pointer;text-decoration:underline;text-underline-offset:3px" style-hover="opacity:.8">task 7f21c9</button>
+            </div>
+            <div style="font-size:14px;line-height:1.72">
+              <p style="margin:0">Patch applied and <code style="font-family:ui-monospace,'JetBrains Mono',monospace;font-size:12.5px;opacity:.85">pytest -k cancel</code> is green — six passed. Killing a live child now to watch the escalation path<span style="display:inline-block;width:7px;height:15px;margin-inline-start:3px;background:var(--color-accent);vertical-align:-2px;animation:ar-blink 1s step-end infinite"></span></p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex:none;padding:0 0 14px">
+        <div style="max-width:704px;margin:0 auto;padding:0 22px;display:flex;flex-direction:column;gap:7px">
+          <div style="border:1px solid var(--ar-edge,rgba(233,233,237,.13));border-radius:var(--radius-lg);background:var(--ar-panel,rgba(35,37,50,.72));backdrop-filter:blur(var(--ar-blur,14px));overflow:hidden">
+            <textarea placeholder="Reply to Archon…" style="width:100%;min-height:56px;max-height:150px;padding:12px 14px 4px;background:transparent;border:0;outline:none;resize:none;color:inherit;font:inherit;font-size:14px;line-height:1.6"></textarea>
+            <div style="display:flex;align-items:center;gap:7px;padding:6px 10px 8px 12px">
+              <i class="ph ph-paperclip" style="font-size:14px;opacity:.45"></i>
+              <span style="font-size:10.5px;opacity:.35">Enter to send</span>
+              <div style="margin-inline-start:auto;display:flex;align-items:center;gap:7px">
+                <button style="display:flex;align-items:center;gap:6px;height:27px;padding:0 10px;background:rgba(224,87,76,.13);border:1px solid rgba(224,87,76,.45);border-radius:var(--radius-md);color:#f0a49d;font:inherit;font-size:11.5px;cursor:pointer" style-hover="background:rgba(224,87,76,.22)"><i class="ph ph-stop" style="font-size:12px"></i>Stop</button>
+                <button style="display:grid;place-items:center;width:28px;height:28px;background:transparent;border:1px solid var(--color-accent);border-radius:var(--radius-md);color:var(--color-accent);cursor:pointer" style-hover="background:color-mix(in srgb, var(--color-accent) 14%, transparent)"><i class="ph ph-arrow-up" style="font-size:14px"></i></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+  <sc-if value="{{ isSessions }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+    <div style="flex:none;display:flex;align-items:center;gap:10px;padding:13px 22px 11px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.08))">
+      <div style="display:flex;flex-direction:column;gap:2px;margin-inline-end:auto">
+        <span style="font-family:var(--font-heading);font-size:18px;font-weight:500">Sessions</span>
+        <span style="font-size:11.5px;opacity:.5">{{ sessionCount }} across four projects — desktop, CLI, TUI, Telegram and cron.</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;background:var(--ar-panel,rgba(35,37,50,.72));backdrop-filter:blur(var(--ar-blur,14px));border:1px solid var(--ar-edge,rgba(233,233,237,.11));border-radius:var(--radius-md);min-width:212px">
+        <i class="ph ph-magnifying-glass" style="font-size:12.5px;opacity:.45"></i>
+        <input placeholder="Title, preview or model" style="flex:1;min-width:0;background:transparent;border:0;outline:none;color:inherit;font:inherit;font-size:12px"></input>
+      </div>
+    </div>
+    <div style="flex:none;display:flex;align-items:center;gap:8px;padding:11px 22px 4px">
+      <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Sort</span>
+      <sc-for list="{{ sortOpts }}" as="o" hint-placeholder-count="4">
+        <button onClick="{{ o.set }}" style="{{ o.style }}">{{ o.label }}</button>
+      </sc-for>
+      <span style="margin-inline-start:auto;font-size:10.5px;opacity:.4">{{ sortNote }}</span>
+    </div>
+    <div style="flex:1;min-height:0;overflow-y:auto;padding:6px 22px 20px">
+      <div style="display:grid;grid-template-columns:1fr 148px 112px 66px 74px;gap:10px;padding:0 11px 7px;font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;opacity:.4">
+        <span>Session</span><span>Project</span><span>Model</span><span>Msgs</span><span>Activity</span>
+      </div>
+      <sc-for list="{{ sessionRows }}" as="x" hint-placeholder-count="10">
+        <div onClick="{{ x.open }}" style="{{ x.rowStyle }}">
+          <div style="min-width:0;display:flex;align-items:center;gap:9px">
+            <span style="{{ x.badge }}"></span>
+            <div style="min-width:0;display:flex;flex-direction:column;gap:1px">
+              <span style="font-size:12.5px;font-family:var(--font-heading);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ x.title }}</span>
+              <span style="font-size:10.5px;opacity:.42;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ x.preview }}</span>
+            </div>
+          </div>
+          <span class="tag tag-neutral" style="font-size:9.5px;justify-self:start">{{ x.project }}</span>
+          <span style="font-size:11px;opacity:.6">{{ x.model }}</span>
+          <span style="font-size:11px;opacity:.45">{{ x.msgs }}</span>
+          <span style="font-size:11px;opacity:.45">{{ x.when }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isProject }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+    <div style="flex:none;display:flex;align-items:center;gap:11px;padding:13px 22px 11px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.08))">
+      <i class="ph ph-folder-open" style="font-size:19px;color:var(--color-accent);opacity:.85"></i>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span style="font-family:var(--font-heading);font-size:18px;font-weight:500">{{ proj.name }}</span>
+        <span style="font-size:11px;opacity:.45;font-family:ui-monospace,'JetBrains Mono',monospace">{{ proj.path }}</span>
+      </div>
+      <button onClick="{{ newChat }}" style="margin-inline-start:auto;display:flex;align-items:center;gap:7px;height:30px;padding:0 11px;background:transparent;border:1px solid var(--color-accent);border-radius:var(--radius-md);color:var(--color-accent);font-family:var(--font-heading);font-size:12px;cursor:pointer" style-hover="background:color-mix(in srgb, var(--color-accent) 12%, transparent)"><i class="ph ph-plus" style="font-size:13px"></i>New chat here</button>
+    </div>
+    <div style="flex:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.08))">
+      <div style="padding:11px 22px;border-inline-end:1px solid var(--ar-edge,rgba(233,233,237,.07))"><div style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4;margin-bottom:3px">Sessions</div><div style="font-size:13px;font-family:var(--font-heading)">{{ proj.n }}</div></div>
+      <div style="padding:11px 16px;border-inline-end:1px solid var(--ar-edge,rgba(233,233,237,.07))"><div style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4;margin-bottom:3px">Last activity</div><div style="font-size:13px;font-family:var(--font-heading)">{{ proj.last }}</div></div>
+      <div style="padding:11px 16px;border-inline-end:1px solid var(--ar-edge,rgba(233,233,237,.07))"><div style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4;margin-bottom:3px">Running now</div><div style="font-size:13px;font-family:var(--font-heading)">{{ proj.running }}</div></div>
+      <div style="padding:11px 16px"><div style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4;margin-bottom:3px">Default model</div><div style="font-size:13px;font-family:var(--font-heading)">{{ proj.model }}</div></div>
+    </div>
+    <div style="flex:none;display:flex;align-items:center;gap:8px;padding:12px 22px 4px">
+      <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Sessions in this project</span>
+      <div style="margin-inline-start:auto;display:flex;gap:6px">
+        <sc-for list="{{ projSortOpts }}" as="o" hint-placeholder-count="3">
+          <button onClick="{{ o.set }}" style="{{ o.style }}">{{ o.label }}</button>
+        </sc-for>
+      </div>
+    </div>
+    <div style="flex:1;min-height:0;overflow-y:auto;padding:6px 22px 20px">
+      <sc-for list="{{ projSessions }}" as="x" hint-placeholder-count="6">
+        <div onClick="{{ x.open }}" style="{{ x.rowStyle2 }}">
+          <span style="{{ x.badge }}"></span>
+          <div style="min-width:0;display:flex;flex-direction:column;gap:1px">
+            <span style="font-size:12.5px;font-family:var(--font-heading);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ x.title }}</span>
+            <span style="font-size:10.5px;opacity:.42;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ x.preview }}</span>
+          </div>
+          <span style="flex:none;font-size:11px;opacity:.55">{{ x.model }}</span>
+          <span style="flex:none;font-size:11px;opacity:.4;width:56px;text-align:end">{{ x.when }}</span>
+        </div>
+      </sc-for>
+      <sc-if value="{{ projEmpty }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:9px;padding:26px 2px">
+          <span style="font-size:13px;opacity:.6">No sessions in this project yet.</span>
+          <button onClick="{{ newChat }}" class="btn btn-primary" style="height:30px;font-size:12px">Start one</button>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isSkills }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+    <div style="flex:none;display:flex;align-items:flex-end;gap:12px;padding:14px 22px 12px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.08))">
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span style="font-family:var(--font-heading);font-size:18px;font-weight:500">Skills</span>
+        <span style="font-size:11.5px;opacity:.5">Installed Archon skills. Toggling writes the profile immediately.</span>
+      </div>
+    </div>
+    <div style="flex:1;min-height:0;overflow-y:auto;padding:16px 22px 22px">
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <sc-for list="{{ setSkills }}" as="k" hint-placeholder-count="6">
+            <div style="display:flex;align-items:center;gap:11px;padding:10px 11px;border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-md)" style-hover="border-color:color-mix(in srgb, var(--color-accent) 45%, transparent)">
+              <div style="{{ k.knob }}"><div style="{{ k.dot }}"></div></div>
+              <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+                <div style="display:flex;align-items:center;gap:7px"><span style="font-size:12.5px;font-family:var(--font-heading);font-weight:500">{{ k.name }}</span><span class="tag tag-neutral" style="font-size:9.5px">{{ k.cat }}</span></div>
+                <span style="font-size:11px;opacity:.55">{{ k.desc }}</span>
+              </div>
+              <button style="margin-inline-start:auto;flex:none;background:transparent;border:1px solid var(--ar-edge,rgba(233,233,237,.14));border-radius:var(--radius-md);color:inherit;font:inherit;font-size:10.5px;padding:3px 9px;opacity:.65;cursor:pointer" style-hover="opacity:1;border-color:var(--color-accent);color:var(--color-accent)">Read SKILL.md</button>
+            </div>
+          </sc-for>
+        </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isAutomations }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+    <div style="flex:none;display:flex;align-items:flex-end;gap:12px;padding:14px 22px 12px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.08))">
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span style="font-family:var(--font-heading);font-size:18px;font-weight:500">Automations</span>
+        <span style="font-size:11.5px;opacity:.5">Live Hermes cron. Every mutation confirms first.</span>
+      </div>
+      <button class="btn btn-primary" style="margin-inline-start:auto;height:29px;font-size:11.5px"><i class="ph ph-plus" style="font-size:12px"></i>New job</button>
+    </div>
+    <div style="flex:1;min-height:0;overflow-y:auto;padding:16px 22px 22px">
+        <div style="display:flex;flex-direction:column;gap:13px">
+          <sc-for list="{{ setCrons }}" as="c" hint-placeholder-count="4">
+            <div style="display:grid;grid-template-columns:1fr 120px 120px 96px;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--radius-md);border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.07))" style-hover="background:var(--ar-hover,rgba(233,233,237,.07))">
+              <div style="min-width:0;display:flex;flex-direction:column;gap:1px">
+                <span style="font-size:12.5px;font-family:var(--font-heading);font-weight:500">{{ c.name }}</span>
+                <span style="{{ c.stateStyle }}">{{ c.state }} · last <span style="{{ c.lastStyle }}">{{ c.last }}</span></span>
+              </div>
+              <span style="font-size:11.5px;font-family:ui-monospace,'JetBrains Mono',monospace;opacity:.75">{{ c.sched }}</span>
+              <span style="font-size:11px;opacity:.55">{{ c.next }}</span>
+              <div style="justify-self:end;display:flex;gap:3px">
+                <div onClick="{{ c.run }}" title="Run now" style="width:25px;height:25px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.55;cursor:pointer" style-hover="opacity:1;color:var(--color-accent)"><i class="ph ph-play" style="font-size:12px"></i></div>
+                <div title="Pause" style="width:25px;height:25px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.55;cursor:pointer" style-hover="opacity:1;color:var(--color-accent)"><i class="ph ph-pause" style="font-size:12px"></i></div>
+                <div title="Edit" style="width:25px;height:25px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.55;cursor:pointer" style-hover="opacity:1;color:var(--color-accent)"><i class="ph ph-pencil-simple" style="font-size:12px"></i></div>
+                <div title="Remove" style="width:25px;height:25px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.55;cursor:pointer" style-hover="opacity:1;color:#e0574c"><i class="ph ph-trash" style="font-size:12px"></i></div>
+              </div>
+            </div>
+          </sc-for>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:4px;padding:13px;border:1px solid var(--ar-edge,rgba(233,233,237,.11));border-radius:var(--radius-md)">
+            <div class="field"><label>Name</label><input class="input" value="Morning brief" style="height:32px;font-size:12.5px"></input></div>
+            <div class="field"><label>Schedule</label><input class="input" value="0 7 * * *" style="height:32px;font-size:12.5px;font-family:ui-monospace,'JetBrains Mono',monospace"></input></div>
+            <div class="field"><label>Deliver to</label><input class="input" value="telegram:abdullah" style="height:32px;font-size:12.5px;font-family:ui-monospace,'JetBrains Mono',monospace"></input></div>
+            <div class="field"><label>Model</label><input class="input" value="Claude Haiku 4.5" style="height:32px;font-size:12.5px"></input></div>
+            <div class="field" style="grid-column:1 / -1"><label>Prompt</label><textarea class="input" style="min-height:70px;font-size:12.5px;line-height:1.6">Summarise overnight tasks, failures and disk headroom. Flag anything that needs a decision from me.</textarea></div>
+          </div>
+        </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isBackups }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+    <div style="flex:none;display:flex;align-items:flex-end;gap:12px;padding:14px 22px 12px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.08))">
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span style="font-family:var(--font-heading);font-size:18px;font-weight:500">Backups</span>
+        <span style="font-size:11.5px;opacity:.5">Sanitised, age-encrypted archives and the systemd timer.</span>
+      </div>
+    </div>
+    <div style="flex:1;min-height:0;overflow-y:auto;padding:16px 22px 22px">
+        <div style="display:flex;flex-direction:column;gap:13px">
+          <div style="display:flex;align-items:center;gap:10px;padding:11px 13px;border:1px solid var(--ar-edge,rgba(233,233,237,.11));border-radius:var(--radius-md)">
+            <span style="width:7px;height:7px;border-radius:50%;background:#6fca8f;box-shadow:0 0 0 3px rgba(111,202,143,.16)"></span>
+            <div style="display:flex;flex-direction:column"><span style="font-size:12.5px">Timer active · next 03:00</span><span style="font-size:10.5px;opacity:.45;font-family:ui-monospace,'JetBrains Mono',monospace">OnCalendar=*-*-* 03:00:00</span></div>
+            <button class="btn btn-secondary" style="margin-inline-start:auto;height:28px;font-size:11.5px">Change schedule</button>
+            <button onClick="{{ askBackup }}" class="btn btn-primary" style="height:28px;font-size:11.5px">Create now</button>
+          </div>
+          <sc-for list="{{ setBackups }}" as="b" hint-placeholder-count="3">
+            <div style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--radius-md);border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.07))" style-hover="background:var(--ar-hover,rgba(233,233,237,.07))">
+              <i class="ph ph-lock-key" style="font-size:14px;color:var(--color-accent);opacity:.8"></i>
+              <span style="font-size:12px;font-family:ui-monospace,'JetBrains Mono',monospace;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ b.name }}</span>
+              <span style="flex:none;font-size:11px;opacity:.5">{{ b.when }}</span>
+              <span style="flex:none;font-size:11px;opacity:.5">{{ b.size }}</span>
+              <span class="tag tag-neutral" style="flex:none;font-size:9.5px">{{ b.encLabel }}</span>
+              <button style="flex:none;background:transparent;border:1px solid var(--ar-edge,rgba(233,233,237,.14));border-radius:var(--radius-md);color:inherit;font:inherit;font-size:10.5px;padding:3px 8px;opacity:.65;cursor:pointer" style-hover="opacity:1;border-color:var(--color-accent);color:var(--color-accent)">Inspect</button>
+              <button onClick="{{ b.restore }}" style="flex:none;background:transparent;border:1px solid var(--color-accent);border-radius:var(--radius-md);color:var(--color-accent);font:inherit;font-size:10.5px;padding:3px 8px;cursor:pointer" style-hover="background:color-mix(in srgb, var(--color-accent) 12%, transparent)">Restore</button>
+            </div>
+          </sc-for>
+          <span style="font-size:11px;opacity:.45;line-height:1.55">Restore is all-or-nothing in this build; current files are saved aside first. Secret values are stripped before an archive is sealed.</span>
+        </div>
+    </div>
+  </div>
+  </sc-if>
+  </div>
+
+  <sc-if value="{{ bench }}" hint-placeholder-val="{{ false }}">
+  <div style="width:372px;flex:none;display:flex;flex-direction:column;min-height:0;background:var(--ar-side,#191b28);border-inline-start:1px solid var(--ar-edge,rgba(233,233,237,.1));animation:ar-slide .18s ease-out">
+    <div style="flex:none;display:flex;align-items:center;gap:4px;padding:8px 9px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.08))">
+      <sc-for list="{{ benchTabs }}" as="b" hint-placeholder-count="3">
+        <button onClick="{{ b.open }}" style="{{ b.tabStyle }}"><i class="ph {{ b.icon }}" style="font-size:13px"></i>{{ b.title }}</button>
+      </sc-for>
+      <div onClick="{{ closeBench }}" style="margin-inline-start:auto;width:24px;height:24px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.5;cursor:pointer" style-hover="opacity:1;background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-x" style="font-size:13px"></i></div>
+    </div>
+    <sc-if value="{{ benchActivity }}" hint-placeholder-val="{{ true }}">
+    <div style="flex:1;min-height:0;display:flex;flex-direction:column;overflow-y:auto">
+      <div style="padding:12px 13px;display:flex;flex-direction:column;gap:8px">
+        <sc-for list="{{ benchTasks }}" as="x" hint-placeholder-count="3">
+          <div style="display:flex;flex-direction:column;gap:6px;padding:10px 11px;border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-md)">
+            <div style="display:flex;align-items:center;gap:7px">
+              <span style="{{ x.chip }}">{{ x.state }}</span>
+              <span style="font-size:10.5px;opacity:.4;font-family:ui-monospace,'JetBrains Mono',monospace">{{ x.id }}</span>
+              <button onClick="{{ x.cancel }}" style="margin-inline-start:auto;background:transparent;border:1px solid var(--ar-edge,rgba(233,233,237,.14));border-radius:var(--radius-md);color:inherit;font:inherit;font-size:10.5px;padding:2px 8px;opacity:.6;cursor:pointer" style-hover="opacity:1;border-color:#e0574c;color:#e0574c">Cancel</button>
+            </div>
+            <span style="font-size:12.5px;line-height:1.45">{{ x.prompt }}</span>
+            <span style="font-size:10.5px;opacity:.42">{{ x.meta }}</span>
+          </div>
+        </sc-for>
+        <div style="display:flex;gap:8px;padding:9px 10px;border:1px solid rgba(224,162,76,.35);background:rgba(224,162,76,.09);border-radius:var(--radius-md)">
+          <i class="ph ph-warning-circle" style="font-size:14px;color:#e0a24c;flex:none;margin-top:1px"></i>
+          <span style="font-size:11px;line-height:1.5;opacity:.8">A cancelled record can outlive its process until 0.3.1 lands. Check with <code style="font-family:ui-monospace,'JetBrains Mono',monospace">pgrep -af hermes</code>.</span>
+        </div>
+      </div>
+      <div style="padding:4px 13px 12px;display:flex;flex-direction:column;gap:8px">
+        <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Event stream</span>
+        <sc-for list="{{ events }}" as="e" hint-placeholder-count="5">
+          <div style="display:flex;flex-direction:column;gap:2px;padding-inline-start:10px;border-inline-start:1px solid var(--ar-edge,rgba(233,233,237,.14));font-family:ui-monospace,'JetBrains Mono',monospace;font-size:10.5px">
+            <div style="display:flex;gap:7px"><span style="opacity:.4">{{ e.t }}</span><span style="color:var(--color-accent)">{{ e.k }}</span></div>
+            <span style="opacity:.65;line-height:1.5">{{ e.x }}</span>
+          </div>
+        </sc-for>
+        <div style="display:flex;align-items:center;gap:6px;opacity:.45;font-size:10.5px;padding-inline-start:10px"><i class="ph ph-circle-notch" style="font-size:11px;animation:ar-spin 1.1s linear infinite"></i><span>streaming…</span></div>
+      </div>
+      <div style="margin-top:auto;padding:11px 13px;border-top:1px solid var(--ar-edge,rgba(233,233,237,.08));display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:center;gap:7px;font-size:10px;letter-spacing:.11em;text-transform:uppercase;opacity:.4"><span>vps-archon-01</span><span style="margin-inline-start:auto;opacity:.8">up {{ vps.up }}</span></div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div style="display:flex;align-items:center;gap:9px;font-size:11px"><span style="width:34px;opacity:.5">CPU</span><div style="flex:1;height:4px;border-radius:999px;background:var(--ar-hover,rgba(233,233,237,.08));overflow:hidden"><div style="{{ vps.cpuBar }}"></div></div><span style="opacity:.65;width:36px;text-align:end">{{ vps.cpu }}</span></div>
+          <div style="display:flex;align-items:center;gap:9px;font-size:11px"><span style="width:34px;opacity:.5">RAM</span><div style="flex:1;height:4px;border-radius:999px;background:var(--ar-hover,rgba(233,233,237,.08));overflow:hidden"><div style="{{ vps.memBar }}"></div></div><span style="opacity:.65;width:74px;text-align:end;font-size:10px">{{ vps.mem }}</span></div>
+          <div style="display:flex;align-items:center;gap:9px;font-size:11px"><span style="width:34px;opacity:.5">Disk</span><div style="flex:1;height:4px;border-radius:999px;background:var(--ar-hover,rgba(233,233,237,.08));overflow:hidden"><div style="{{ vps.diskBar }}"></div></div><span style="opacity:.65;width:74px;text-align:end;font-size:10px">{{ vps.disk }}</span></div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ benchFiles }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+      <div style="flex:none;display:flex;align-items:center;gap:7px;padding:9px 12px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.08));font-size:11.5px;font-family:ui-monospace,'JetBrains Mono',monospace">
+        <i class="ph ph-house" style="font-size:13px;opacity:.55"></i><span style="color:var(--color-accent)">~/archon</span>
+        <div style="margin-inline-start:auto;display:flex;gap:4px">
+          <div title="Upload" style="width:24px;height:24px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.55;cursor:pointer" style-hover="opacity:1;background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-upload-simple" style="font-size:13px"></i></div>
+          <div title="Download" style="width:24px;height:24px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.55;cursor:pointer" style-hover="opacity:1;background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-download-simple" style="font-size:13px"></i></div>
+        </div>
+      </div>
+      <div style="flex:none;padding:7px 8px;display:flex;flex-direction:column;gap:1px;max-height:44%;overflow-y:auto">
+        <sc-for list="{{ benchFilesList }}" as="f" hint-placeholder-count="7">
+          <div style="{{ f.rowStyle }}">
+            <i class="ph {{ f.icon }}" style="font-size:13px;opacity:.65"></i>
+            <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">{{ f.name }}</span>
+            <span style="margin-inline-start:auto;flex:none;font-size:10px;opacity:.45">{{ f.size }}</span>
+            <sc-if value="{{ f.prot }}" hint-placeholder-val="{{ false }}">
+              <i class="ph ph-lock-simple" style="font-size:12px;flex:none;color:var(--color-accent);opacity:.7"></i>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+      <div style="flex:1;min-height:0;display:flex;flex-direction:column;border-top:1px solid var(--ar-edge,rgba(233,233,237,.08))">
+        <div style="flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:11.5px;font-family:ui-monospace,'JetBrains Mono',monospace">
+          <i class="ph ph-file-text" style="font-size:13px;color:var(--color-accent)"></i><span>notes.md</span>
+          <button class="btn btn-primary" style="margin-inline-start:auto;height:24px;font-size:10.5px;padding:0 9px">Save</button>
+        </div>
+        <div style="flex:1;min-height:0;overflow-y:auto;padding:2px 13px 12px;font-family:ui-monospace,'JetBrains Mono',monospace;font-size:11px;line-height:1.75;opacity:.82;white-space:pre-wrap"># Operating notes
+
+- Cancellation must reach the process group, not the pid.
+- Everything ingresses through Tailscale; no public listener.
+- Token in safeStorage when a keyring exists, else 0600.
+
+## Next
+1. Selective restore in the UI
+2. Show the event stream instead of polling<span style="display:inline-block;width:7px;height:13px;background:var(--color-accent);vertical-align:-2px;animation:ar-blink 1s step-end infinite"></span></div>
+        <div style="flex:none;padding:7px 13px;border-top:1px solid var(--ar-edge,rgba(233,233,237,.08));font-size:10px;opacity:.42;line-height:1.45">Saves replace atomically. Protected paths — .env, keys, credentials — can't be read or written from here.</div>
+      </div>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ benchTerminal }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+      <div style="flex:none;display:flex;align-items:center;gap:6px;padding:8px 11px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.08))">
+        <span style="font-size:11px;padding:3px 9px;border-radius:var(--radius-md);background:color-mix(in srgb, var(--color-accent) 15%, transparent);color:var(--color-accent)">deploy</span>
+        <span style="font-size:11px;padding:3px 9px;opacity:.5">logs</span>
+        <span style="font-size:11px;padding:3px 9px;opacity:.5">scratch</span>
+        <div style="margin-inline-start:auto;width:24px;height:24px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.55;cursor:pointer" style-hover="opacity:1;background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-plus" style="font-size:13px"></i></div>
+      </div>
+      <div style="flex:1;min-height:0;overflow-y:auto;padding:11px 13px;background:#0a0c12;font-family:ui-monospace,'JetBrains Mono',monospace;font-size:11px;line-height:1.75;color:#d6dae8">
+        <sc-for list="{{ termout }}" as="l" hint-placeholder-count="6">
+          <div style="white-space:pre-wrap">
+            <sc-if value="{{ l.c }}" hint-placeholder-val="{{ true }}">
+              <span><span style="color:#7fd1a3">archon</span><span style="opacity:.5">:~$ </span><span>{{ l.c }}</span></span>
+            </sc-if>
+            <sc-if value="{{ l.o }}" hint-placeholder-val="{{ false }}">
+              <span style="opacity:.7">{{ l.o }}</span>
+            </sc-if>
+          </div>
+        </sc-for>
+        <div><span style="color:#7fd1a3">archon</span><span style="opacity:.5">:~$ </span><span style="display:inline-block;width:7px;height:13px;background:#d6dae8;vertical-align:-2px;animation:ar-blink 1s step-end infinite"></span></div>
+      </div>
+      <div style="flex:none;display:flex;align-items:center;gap:10px;padding:5px 12px;background:#1d2233;font-family:ui-monospace,'JetBrains Mono',monospace;font-size:10.5px;color:#9fb0d8">
+        <span style="background:#7fd1a3;color:#0a0c12;padding:0 6px;border-radius:2px">deploy</span>
+        <span style="opacity:.7">0:bash*</span><span style="margin-inline-start:auto;opacity:.7">tmux · survives disconnect</span>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+  </sc-if>
+</div>
+
+<sc-if value="{{ settingsOpen }}" hint-placeholder-val="{{ false }}">
+<div style="position:absolute;inset:0;z-index:26;display:grid;place-items:center;padding:26px;background:color-mix(in srgb, var(--color-neutral-900,#292b31) 62%, transparent)">
+  <div style="width:min(1020px,100%);height:100%;max-height:660px;display:flex;flex-direction:column;background:var(--color-bg);border:1px solid var(--ar-edge,rgba(233,233,237,.16));border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);overflow:hidden;animation:ar-rise .18s ease-out">
+    <div style="flex:none;display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.09))">
+      <i class="ph ph-gear-six" style="font-size:15px;opacity:.6"></i>
+      <span style="font-family:var(--font-heading);font-size:13.5px;font-weight:500">Settings</span>
+      <span style="opacity:.3">/</span><span style="font-size:12.5px;opacity:.6">{{ settingsTitle }}</span>
+      <div onClick="{{ closeSettings }}" style="margin-inline-start:auto;width:26px;height:24px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.55;cursor:pointer" style-hover="opacity:1;background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-x" style="font-size:14px"></i></div>
+    </div>
+    <div style="flex:1;min-height:0;display:flex">
+      <div style="width:208px;flex:none;border-inline-end:1px solid var(--ar-edge,rgba(233,233,237,.09));background:var(--ar-side,#191b28);padding:10px 9px;display:flex;flex-direction:column;gap:2px;overflow-y:auto">
+        <sc-for list="{{ settingsTabs }}" as="x" hint-placeholder-count="10">
+          <button onClick="{{ x.go }}" style="{{ x.style }}"><i class="ph {{ x.icon }}" style="font-size:14px"></i><span>{{ x.label }}</span></button>
+        </sc-for>
+        <div style="margin-top:auto;padding:10px 8px 4px;font-size:10px;opacity:.35;line-height:1.5">Archon Desktop 0.3.1 · AppImage · arm64</div>
+      </div>
+      <div style="flex:1;min-width:0;overflow-y:auto;padding:18px 22px 24px">
+
+        <sc-if value="{{ tabGeneral }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;flex-direction:column;gap:18px;max-width:620px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Profile</span><span style="font-size:13px;font-family:ui-monospace,'JetBrains Mono',monospace">default</span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Archon root</span><span style="font-size:13px;font-family:ui-monospace,'JetBrains Mono',monospace">~/archon</span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Hermes home</span><span style="font-size:13px;font-family:ui-monospace,'JetBrains Mono',monospace">~/.hermes</span></div>
+          </div>
+          <div class="field"><label>Default working directory for new chats</label><input class="input" value="~/archon/projects/archon-desktop" style="font-family:ui-monospace,'JetBrains Mono',monospace;font-size:12.5px"></input></div>
+          <div style="display:flex;flex-direction:column;gap:9px">
+            <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Keyboard</span>
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px 20px">
+              <sc-for list="{{ shortcuts }}" as="k" hint-placeholder-count="8">
+                <div style="display:flex;align-items:center;gap:9px;font-size:12px;padding:3px 0;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.07))">
+                  <span style="opacity:.75">{{ k.label }}</span>
+                  <span style="margin-inline-start:auto;font-size:10.5px;opacity:.5;font-family:ui-monospace,'JetBrains Mono',monospace">{{ k.keys }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Migration</span>
+            <div style="display:flex;align-items:flex-start;gap:11px;padding:12px 13px;border:1px solid var(--ar-edge,rgba(233,233,237,.11));border-radius:var(--radius-md)">
+              <i class="ph ph-hard-drive" style="font-size:18px;color:var(--color-accent);flex:none;margin-top:2px"></i>
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <span style="font-size:12.5px;font-family:var(--font-heading);font-weight:500">Export the MiniPC manifest</span>
+                <span style="font-size:11.5px;opacity:.6;line-height:1.55">Inventories profile, session database, skills, memories, cron data and vault — an itinerary for the move, never the secrets themselves.</span>
+              </div>
+              <button class="btn btn-primary" style="flex:none;height:28px;font-size:11.5px;margin-top:2px">Export</button>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ tabConnection }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px;max-width:580px">
+          <div class="field"><label>Archon server URL</label><input class="input" value="http://vps-archon-01:8787" style="font-family:ui-monospace,'JetBrains Mono',monospace;font-size:12.5px"></input></div>
+          <div class="field"><label>Device token</label>
+            <div style="display:flex;gap:8px">
+              <input class="input" value="ark_live_••••••••••••••••4f2c" style="font-family:ui-monospace,'JetBrains Mono',monospace;font-size:12.5px"></input>
+              <button class="btn btn-secondary" style="flex:none;height:36px;font-size:12px">Test</button>
+              <button onClick="{{ askToken }}" class="btn btn-primary" style="flex:none;height:36px;font-size:12px">Save</button>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:#6fca8f"><i class="ph ph-check-circle" style="font-size:14px"></i><span>Reachable · 34 ms · bearer token accepted</span></div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:2px">
+            <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Posture</span>
+            <sc-for list="{{ security }}" as="s" hint-placeholder-count="5">
+              <div style="display:flex;align-items:flex-start;gap:9px;font-size:11.5px;opacity:.72;line-height:1.55"><i class="ph ph-shield-check" style="font-size:13px;color:var(--color-accent);flex:none;margin-top:2px"></i><span>{{ s }}</span></div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ tabModels }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:13px">
+          <div style="display:flex;align-items:center;gap:10px;padding:11px 13px;border:1px solid var(--color-accent);border-radius:var(--radius-md)">
+            <i class="ph ph-check-circle" style="font-size:16px;color:var(--color-accent)"></i>
+            <div style="display:flex;flex-direction:column"><span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.5">Profile default</span><span style="font-size:13px;font-family:var(--font-heading)">{{ model }}</span></div>
+            <span style="margin-inline-start:auto;font-size:11px;opacity:.45">Per-chat choices override this without touching the profile</span>
+          </div>
+          <sc-for list="{{ setModels }}" as="m" hint-placeholder-count="5">
+            <div style="display:grid;grid-template-columns:1fr 70px 110px 120px;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--radius-md);border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.07))" style-hover="background:var(--ar-hover,rgba(233,233,237,.07))">
+              <div style="min-width:0;display:flex;flex-direction:column;gap:1px">
+                <span style="font-size:12.5px;font-family:var(--font-heading);font-weight:500">{{ m.name }}</span>
+                <span style="font-size:10.5px;opacity:.42;font-family:ui-monospace,'JetBrains Mono',monospace">{{ m.id }}</span>
+              </div>
+              <span style="font-size:11px;opacity:.5">{{ m.ctx }}</span>
+              <span style="font-size:11px;opacity:.55">{{ m.note }}</span>
+              <div style="justify-self:end;display:flex;align-items:center;gap:4px">
+                <div title="Pin to the picker" style="width:25px;height:25px;display:grid;place-items:center;border-radius:var(--radius-sm);cursor:pointer" style-hover="background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-push-pin" style="{{ m.pinStyle }}"></i></div>
+                <div title="Hide" style="width:25px;height:25px;display:grid;place-items:center;border-radius:var(--radius-sm);opacity:.3;cursor:pointer" style-hover="opacity:.8;background:var(--ar-hover,rgba(233,233,237,.07))"><i class="ph ph-eye-slash" style="font-size:13px"></i></div>
+                <button onClick="{{ m.pick }}" style="background:transparent;border:1px solid var(--ar-edge,rgba(233,233,237,.14));border-radius:var(--radius-md);color:inherit;font:inherit;font-size:10.5px;padding:3px 8px;opacity:.65;cursor:pointer" style-hover="opacity:1;border-color:var(--color-accent);color:var(--color-accent)">Default</button>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        </sc-if>
+
+
+
+
+        <sc-if value="{{ tabAppearance }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(176px,1fr));gap:10px">
+            <sc-for list="{{ themeTiles }}" as="th" hint-placeholder-count="5">
+              <button onClick="{{ th.set }}" style="{{ th.tileStyle }}">
+                <span style="{{ th.nameStyle }}">{{ th.label }}</span>
+                <div style="display:flex;gap:4px">
+                  <sc-for list="{{ th.swatches }}" as="sw" hint-placeholder-count="4">
+                    <span style="{{ sw.style }}"></span>
+                  </sc-for>
+                </div>
+                <span style="{{ th.noteStyle }}">{{ th.note }}</span>
+              </button>
+            </sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Ambient effect</span>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  <sc-for list="{{ ambientOpts }}" as="o" hint-placeholder-count="5">
+                    <button onClick="{{ o.set }}" style="{{ o.style }}">{{ o.label }}</button>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:11px;padding:9px 11px;border:1px solid var(--ar-edge,rgba(233,233,237,.11));border-radius:var(--radius-md)">
+                <div style="display:flex;flex-direction:column;gap:1px"><span style="font-size:12px">Glass surfaces</span><span style="font-size:10.5px;opacity:.45">Blur panels over the ambient wash</span></div>
+                <div onClick="{{ toggleGlass }}" style="{{ glassKnob }}"><div style="{{ glassDot }}"></div></div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Colours</span>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                  <sc-for list="{{ colorRoles }}" as="r" hint-placeholder-count="6">
+                    <div style="display:flex;align-items:center;gap:8px;padding:5px 7px;border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-md);cursor:pointer" style-hover="border-color:var(--color-accent)">
+                      <span style="{{ r.chip }}"></span>
+                      <div style="display:flex;flex-direction:column;min-width:0"><span style="font-size:11px">{{ r.label }}</span><span style="font-size:9.5px;opacity:.4;font-family:ui-monospace,'JetBrains Mono',monospace">{{ r.hex }}</span></div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:9px">
+              <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Metrics</span>
+              <sc-for list="{{ sliders }}" as="s" hint-placeholder-count="9">
+                <div style="display:flex;flex-direction:column;gap:3px">
+                  <div style="display:flex;align-items:baseline;gap:7px;font-size:11.5px"><span style="opacity:.7">{{ s.label }}</span><span style="margin-inline-start:auto;opacity:.42;font-size:10.5px;font-family:ui-monospace,'JetBrains Mono',monospace">{{ s.value }}</span></div>
+                  <input type="range" min="{{ s.min }}" max="{{ s.max }}" value="{{ s.v }}" style="width:100%;height:3px;accent-color:var(--color-accent);cursor:pointer"></input>
+                </div>
+              </sc-for>
+              <div style="display:flex;gap:7px;margin-top:4px">
+                <button class="btn btn-secondary" style="height:28px;font-size:11.5px">Reset</button>
+                <button class="btn btn-secondary" style="height:28px;font-size:11.5px">Import</button>
+                <button class="btn btn-secondary" style="height:28px;font-size:11.5px">Export</button>
+                <button class="btn btn-primary" style="height:28px;font-size:11.5px">Save theme</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ tabLanguage }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:15px;max-width:640px">
+          <span style="font-size:11.5px;opacity:.5">Switching to Arabic mirrors the whole interface — the sidebar moves to the right, icons flip, and paths stay left-to-right inside Arabic text.</span>
+          <div style="display:flex;gap:10px">
+            <sc-for list="{{ langOpts }}" as="o" hint-placeholder-count="2">
+              <button onClick="{{ o.set }}" style="{{ o.style }}">
+                <span style="{{ o.dotStyle }}"></span>
+                <div style="display:flex;flex-direction:column;gap:1px"><span style="font-size:13px">{{ o.l }}</span><span style="font-size:10.5px;opacity:.5">{{ o.sub }}</span></div>
+              </button>
+            </sc-for>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Preview</span>
+            <div dir="rtl" style="display:flex;flex-direction:column;gap:13px;padding:15px 16px;border:1px solid var(--ar-edge,rgba(233,233,237,.11));border-radius:var(--radius-md)">
+              <div style="display:flex;justify-content:flex-end">
+                <div style="max-width:78%;padding:9px 12px;background:var(--ar-panel,rgba(35,37,50,.72));border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-lg);font-size:13px;line-height:1.8">زر الإلغاء يغيّر الحالة فقط، أما العملية على السيرفر فتظل تعمل. أصلحه ثم أصدر النسخة للمعماريتين.</div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <svg viewBox="0 0 32 32" style="width:13px;height:13px" aria-hidden="true"><path d="M16 4.5 21.4 13H10.6z" fill="var(--color-accent)"></path><path d="M11.2 27.5 16 17.6l4.8 9.9" fill="none" stroke="var(--color-text)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                  <span style="font-size:11px;opacity:.55">أركون</span>
+                  <span class="tag tag-outline" style="font-size:9.5px">تجزئة · أربع مهام</span>
+                </div>
+                <p style="margin:0;font-size:13px;line-height:1.85">الإشارة لا تصل إلى مجموعة العمليات، لأن المشغّل يبدأ صدفة تبدأ الوكيل. سأرسل SIGTERM إلى المجموعة ثم SIGKILL بعد خمس ثوان.</p>
+                <div style="display:flex;align-items:center;gap:8px;font-size:11px;opacity:.55;font-family:ui-monospace,'JetBrains Mono',monospace" dir="ltr"><i class="ph ph-git-diff" style="font-size:12px"></i><span>runner.py · +18 −6</span></div>
+              </div>
+            </div>
+            <span style="font-size:10.5px;opacity:.4;line-height:1.5">Numerals follow the language; commands, paths and code keep their own direction. The RTL groundwork is in the stylesheet — this switch turns it on.</span>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ tabBrand }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:26px;padding:20px 22px;border:1px solid var(--ar-edge,rgba(233,233,237,.11));border-radius:var(--radius-md)">
+            <svg viewBox="0 0 64 64" style="width:54px;height:54px" aria-hidden="true"><path d="M9 55V33a23 23 0 0 1 46 0v22" fill="none" stroke="var(--color-accent)" stroke-width="4" stroke-linecap="round" opacity=".5"></path><path d="M32 9l10.8 17H21.2z" fill="var(--color-accent)"></path><path d="M22.4 55L32 35.2 41.6 55" fill="none" stroke="var(--color-text)" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <span style="font-family:var(--font-heading);font-size:25px;font-weight:500;letter-spacing:.3em;line-height:1">ARCHON</span>
+              <span style="font-size:11px;opacity:.5;letter-spacing:.05em">operator console · hermes on the vps</span>
+            </div>
+            <span style="margin-inline-start:auto;max-width:250px;font-size:11px;opacity:.55;line-height:1.6">An arch needs its keystone before it carries anything. The stone sets in accent; the legs of the A are the arch, in text colour so it survives at 16px.</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+            <div style="display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--color-accent);border-radius:var(--radius-md);background:color-mix(in srgb, var(--color-accent) 6%, transparent)">
+              <div style="height:62px;display:grid;place-items:center"><svg viewBox="0 0 64 64" style="width:44px;height:44px"><path d="M9 55V33a23 23 0 0 1 46 0v22" fill="none" stroke="var(--color-accent)" stroke-width="4" stroke-linecap="round" opacity=".5"></path><path d="M32 9l10.8 17H21.2z" fill="var(--color-accent)"></path><path d="M22.4 55L32 35.2 41.6 55" fill="none" stroke="var(--color-text)" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+              <div style="display:flex;align-items:center;gap:6px"><span style="font-size:12px;font-family:var(--font-heading);font-weight:500">Keystone A</span><span class="tag tag-accent" style="font-size:9px;margin-inline-start:auto">in use</span></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-md)" style-hover="border-color:var(--color-accent)">
+              <div style="height:62px;display:grid;place-items:center"><svg viewBox="0 0 64 64" style="width:44px;height:44px"><path d="M12 54L32 10l20 44" fill="none" stroke="var(--color-text)" stroke-width="5" stroke-linecap="square"></path><path d="M21 40h22" fill="none" stroke="var(--color-accent)" stroke-width="5" stroke-linecap="square"></path></svg></div>
+              <span style="font-size:12px;font-family:var(--font-heading);font-weight:500">One-stroke A</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-md)" style-hover="border-color:var(--color-accent)">
+              <div style="height:62px;display:grid;place-items:center"><svg viewBox="0 0 64 64" style="width:44px;height:44px"><path d="M27 20h10l3 34H24z" fill="none" stroke="var(--color-text)" stroke-width="3.4" stroke-linejoin="round"></path><path d="M32 8l6 10H26z" fill="var(--color-accent)"></path><path d="M25 32h14M24.4 42h15.2" fill="none" stroke="var(--color-accent)" stroke-width="2.6" opacity=".75"></path></svg></div>
+              <span style="font-size:12px;font-family:var(--font-heading);font-weight:500">Stele</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-md)" style-hover="border-color:var(--color-accent)">
+              <div style="height:62px;display:grid;place-items:center"><svg viewBox="0 0 64 64" style="width:44px;height:44px"><rect x="14" y="14" width="36" height="36" transform="rotate(45 32 32)" fill="none" stroke="var(--color-text)" stroke-width="3"></rect><rect x="23" y="23" width="18" height="18" fill="none" stroke="var(--color-accent)" stroke-width="3"></rect><circle cx="32" cy="32" r="3.4" fill="var(--color-accent)"></circle></svg></div>
+              <span style="font-size:12px;font-family:var(--font-heading);font-weight:500">Sigil</span>
+            </div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px">
+            <div style="display:flex;flex-direction:column;gap:5px;align-items:center">
+              <div style="width:84px;height:84px;border-radius:20px;background:radial-gradient(120% 120% at 30% 10%, #2b2b52, #101220 70%);display:grid;place-items:center;box-shadow:0 8px 22px rgba(0,0,0,.4), inset 0 0 0 1px rgba(233,233,237,.1)"><svg viewBox="0 0 64 64" style="width:50px;height:50px"><path d="M9 55V33a23 23 0 0 1 46 0v22" fill="none" stroke="#9184d9" stroke-width="4" stroke-linecap="round" opacity=".55"></path><path d="M32 9l10.8 17H21.2z" fill="#9184d9"></path><path d="M22.4 55L32 35.2 41.6 55" fill="none" stroke="#e9e9ed" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+              <span style="font-size:10px;opacity:.42">512 · dark</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px;align-items:center">
+              <div style="width:56px;height:56px;border-radius:13px;background:#f3f2f2;display:grid;place-items:center;box-shadow:inset 0 0 0 1px rgba(32,31,29,.14)"><svg viewBox="0 0 64 64" style="width:34px;height:34px"><path d="M9 55V33a23 23 0 0 1 46 0v22" fill="none" stroke="#6c5fb0" stroke-width="4.4" stroke-linecap="round" opacity=".55"></path><path d="M32 9l10.8 17H21.2z" fill="#6c5fb0"></path><path d="M22.4 55L32 35.2 41.6 55" fill="none" stroke="#201f1d" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+              <span style="font-size:10px;opacity:.42">128 · light</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px;align-items:center">
+              <div style="width:38px;height:38px;border-radius:9px;background:#0e1018;display:grid;place-items:center"><svg viewBox="0 0 64 64" style="width:24px;height:24px"><path d="M32 12l11 18H21z" fill="#9184d9"></path><path d="M22 54L32 34l10 20" fill="none" stroke="#e9e9ed" stroke-width="6.4" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+              <span style="font-size:10px;opacity:.42">64</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px;align-items:center">
+              <div style="width:24px;height:24px;border-radius:6px;background:#0e1018;display:grid;place-items:center"><svg viewBox="0 0 64 64" style="width:16px;height:16px"><path d="M32 12l11 18H21z" fill="#9184d9"></path><path d="M22 54L32 34l10 20" fill="none" stroke="#e9e9ed" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+              <span style="font-size:10px;opacity:.42">16 · tray</span>
+            </div>
+            <span style="max-width:250px;font-size:10.5px;opacity:.45;line-height:1.55">Below 64 the arch drops away. The tray glyph carries state: accent while a task works, red when one fails.</span>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ tabAbout }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px;max-width:600px">
+          <div style="display:flex;align-items:center;gap:14px">
+            <svg viewBox="0 0 64 64" style="width:40px;height:40px" aria-hidden="true"><path d="M9 55V33a23 23 0 0 1 46 0v22" fill="none" stroke="var(--color-accent)" stroke-width="4" stroke-linecap="round" opacity=".5"></path><path d="M32 9l10.8 17H21.2z" fill="var(--color-accent)"></path><path d="M22.4 55L32 35.2 41.6 55" fill="none" stroke="var(--color-text)" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <span style="font-family:var(--font-heading);font-size:17px;font-weight:500">Archon Desktop 0.3.1</span>
+              <span style="font-size:11.5px;opacity:.5">Electron renderer · FastAPI + SQLite backend · AppImage and .deb for amd64 and arm64</span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <span style="font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;opacity:.4">Known limits in this build</span>
+            <sc-for list="{{ limits }}" as="l" hint-placeholder-count="5">
+              <div style="display:flex;align-items:flex-start;gap:9px;font-size:11.5px;opacity:.7;line-height:1.55"><i class="ph ph-minus" style="font-size:12px;flex:none;margin-top:3px;opacity:.5"></i><span>{{ l }}</span></div>
+            </sc-for>
+          </div>
+          <div style="display:flex;gap:7px">
+            <button class="btn btn-secondary" style="height:28px;font-size:11.5px">Release notes</button>
+            <button class="btn btn-secondary" style="height:28px;font-size:11.5px">Copy diagnostics</button>
+          </div>
+        </div>
+        </sc-if>
+
+      </div>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ palette }}" hint-placeholder-val="{{ false }}">
+<div onClick="{{ closePalette }}" style="position:absolute;inset:0;z-index:30;background:color-mix(in srgb, var(--color-neutral-900,#292b31) 55%, transparent);display:flex;justify-content:center;padding-top:80px">
+  <div style="width:min(540px,92%);height:fit-content;background:var(--color-surface);border:1px solid var(--ar-edge,rgba(233,233,237,.16));border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);overflow:hidden;animation:ar-rise .16s ease-out">
+    <div style="display:flex;align-items:center;gap:9px;padding:12px 14px;border-bottom:1px solid var(--ar-edge,rgba(233,233,237,.09))">
+      <i class="ph ph-magnifying-glass" style="font-size:15px;opacity:.55"></i>
+      <input autofocus placeholder="Chats, projects, files, skills…" style="flex:1;background:transparent;border:0;outline:none;color:inherit;font:inherit;font-size:14px"></input>
+      <span style="font-size:10px;opacity:.4;border:1px solid var(--ar-edge,rgba(233,233,237,.16));border-radius:4px;padding:1px 5px">esc</span>
+    </div>
+    <div style="padding:6px;display:flex;flex-direction:column;gap:1px;max-height:290px;overflow-y:auto">
+      <sc-for list="{{ paletteItems }}" as="p" hint-placeholder-count="7">
+        <button onClick="{{ p.run }}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:transparent;border:0;border-radius:var(--radius-md);color:inherit;font:inherit;font-size:13px;text-align:start;cursor:pointer" style-hover="background:var(--ar-hover,rgba(233,233,237,.07))">
+          <i class="ph {{ p.icon }}" style="font-size:15px;opacity:.65"></i><span>{{ p.label }}</span><span style="margin-inline-start:auto;font-size:10.5px;opacity:.32">{{ p.hint }}</span>
+        </button>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ dialog }}" hint-placeholder-val="{{ false }}">
+<div style="position:absolute;inset:0;z-index:34;display:grid;place-items:center;background:color-mix(in srgb, var(--color-neutral-900,#292b31) 58%, transparent)">
+  <div style="width:min(440px,92%);display:flex;flex-direction:column;gap:11px;padding:18px;background:var(--color-surface);border:1px solid var(--ar-edge,rgba(233,233,237,.16));border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);animation:ar-rise .16s ease-out">
+    <span style="font-family:var(--font-heading);font-size:17px;font-weight:500">{{ dialogTitle }}</span>
+    <span style="font-size:13px;line-height:1.6;opacity:.8">{{ dialogBody }}</span>
+    <span style="font-size:11.5px;font-family:ui-monospace,'JetBrains Mono',monospace;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid var(--ar-edge,rgba(233,233,237,.1));border-radius:var(--radius-md);opacity:.72">{{ dialogTarget }}</span>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:2px">
+      <button onClick="{{ closeDialog }}" class="btn btn-secondary">Cancel</button>
+      <button onClick="{{ closeDialog }}" class="btn btn-primary">{{ dialogConfirm }}</button>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;carbon&quot;,&quot;ivory&quot;,&quot;blueprint&quot;,&quot;moss&quot;,&quot;ember&quot;],&quot;default&quot;:&quot;carbon&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;options&quot;:[&quot;#9184d9&quot;,&quot;#79b892&quot;,&quot;#e08a4c&quot;,&quot;#ec3013&quot;],&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;ambient&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;halo&quot;,&quot;aurora&quot;,&quot;mesh&quot;,&quot;grid&quot;,&quot;none&quot;],&quot;default&quot;:&quot;halo&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;glass&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;navSide&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;left&quot;,&quot;right&quot;],&quot;default&quot;:&quot;left&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Layout&quot;},&quot;rtl&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Layout&quot;}}">
+class Component extends DCLogic {
+  state = { view: 'new', bench: null, settings: null, sidebar: true, palette: false, dialog: null,
+    theme: null, model: 'Sonnet 4.6', chat: null, tick: 0, lang: 'en', sort: 'recent', project: 0 };
+
+  THEMES = {
+    carbon: { label: 'Carbon', note: 'the default — blue-grey ground, blurple line', bg: '#161826', surface: '#232532', text: '#e9e9ed', accent: '#9184d9',
+      side: '#191b28', panel: 'rgba(35,37,50,.72)', edge: 'rgba(233,233,237,.10)', hover: 'rgba(233,233,237,.07)',
+      chip: '#3f424d', chipText: '#f3f5fe', aChip: '#423a6a', aChipText: '#e7e5fe', rad: '8px',
+      fh: '"Inter", system-ui, sans-serif', fb: '"Inter", system-ui, sans-serif', dark: true },
+    ivory: { label: 'Ivory', note: 'paper ground, Cormorant over Lora', bg: '#f3f2f2', surface: '#fbfaf8', text: '#201f1d', accent: '#b68235',
+      side: '#f1eee8', panel: 'rgba(255,255,255,.72)', edge: 'rgba(32,31,29,.14)', hover: 'rgba(32,31,29,.05)',
+      chip: '#e6e1d6', chipText: '#3a352c', aChip: '#f0e2c9', aChipText: '#6d4d18', rad: '4px',
+      fh: '"Cormorant Garamond", Georgia, serif', fb: '"Lora", Georgia, serif', dark: false },
+    blueprint: { label: 'Blueprint', note: 'zero radius, Archivo, red accent', bg: '#f3f2f2', surface: '#ffffff', text: '#201e1d', accent: '#ec3013',
+      side: '#eceaea', panel: 'rgba(255,255,255,.8)', edge: 'rgba(32,30,29,.2)', hover: 'rgba(32,30,29,.06)',
+      chip: '#e2dfdf', chipText: '#201e1d', aChip: '#fadfd9', aChipText: '#9c2210', rad: '0px',
+      fh: '"Archivo", system-ui, sans-serif', fb: '"Archivo", system-ui, sans-serif', dark: false },
+    moss: { label: 'Moss', note: 'cooler dark, softer corners', bg: '#121a17', surface: '#1b2622', text: '#e4ece7', accent: '#79b892',
+      side: '#161f1c', panel: 'rgba(27,38,34,.72)', edge: 'rgba(228,236,231,.10)', hover: 'rgba(228,236,231,.07)',
+      chip: '#33443c', chipText: '#e4ece7', aChip: '#284437', aChipText: '#cfe9da', rad: '10px',
+      fh: '"Inter", system-ui, sans-serif', fb: '"Inter", system-ui, sans-serif', dark: true },
+    ember: { label: 'Ember', note: 'warm dark for late nights', bg: '#1a1411', surface: '#261d18', text: '#f1e7e0', accent: '#e08a4c',
+      side: '#1f1815', panel: 'rgba(38,29,24,.72)', edge: 'rgba(241,231,224,.10)', hover: 'rgba(241,231,224,.07)',
+      chip: '#48372d', chipText: '#f1e7e0', aChip: '#573419', aChipText: '#f7d9be', rad: '6px',
+      fh: '"Inter", system-ui, sans-serif', fb: '"Inter", system-ui, sans-serif', dark: true }
+  };
+
+  PROJECTS = [
+    { name: 'archon-desktop', n: 34, path: '~/archon/projects/archon-desktop', last: 'now', running: '2 tasks', model: 'Sonnet 4.6' },
+    { name: 'archon-core', n: 121, path: '~/archon', last: '2h', running: 'none', model: 'Sonnet 4.6' },
+    { name: 'hermes-skills', n: 27, path: '~/archon/skills', last: 'Wed', running: 'none', model: 'Opus 4.1' },
+    { name: 'vault', n: 6, path: '~/archon/vault', last: 'Jul 14', running: 'none', model: 'Haiku 4.5' }
+  ];
+
+  SESSIONS = [
+    { title: 'Ship v0.3.1 — real cancellation', project: 'archon-desktop', model: 'Sonnet 4.6', when: 'now', ts: 0, msgs: 34, state: 'working', preview: 'killing a live child to confirm escalation' },
+    { title: 'Ordered event replay endpoint', project: 'archon-core', model: 'Sonnet 4.6', when: '2h', ts: 120, msgs: 18, state: 'done', preview: 'SSE cursor replay straight from SQLite' },
+    { title: 'RTL groundwork audit', project: 'archon-desktop', model: 'Sonnet 4.6', when: '5h', ts: 300, msgs: 22, state: 'done', preview: 'logical properties in, the switch was missing' },
+    { title: 'Package both architectures', project: 'archon-desktop', model: 'Haiku 4.5', when: '7h', ts: 420, msgs: 9, state: 'queued', preview: 'AppImage and deb for amd64 + arm64' },
+    { title: 'Nightly backup failed once', project: 'vault', model: 'Haiku 4.5', when: 'Wed', ts: 1500, msgs: 12, state: 'error', preview: 'age recipient key rotated on the 12th' },
+    { title: 'Triage skill rewrite', project: 'hermes-skills', model: 'Opus 4.1', when: 'Wed', ts: 1620, msgs: 41, state: 'done', preview: 'answer · single task · decompose' },
+    { title: 'MiniPC migration manifest', project: 'archon-core', model: 'Opus 4.1', when: 'Wed', ts: 1740, msgs: 15, state: 'done', preview: 'profile, sessions, skills, vault inventoried' },
+    { title: 'Selective restore in the UI', project: 'archon-core', model: 'Sonnet 4.6', when: 'Mon', ts: 4300, msgs: 7, state: 'done', preview: 'backend supports per-path already' },
+    { title: 'Skills registry crawl', project: 'hermes-skills', model: 'Haiku 4.5', when: 'Mon', ts: 4400, msgs: 5, state: 'error', preview: 'cancelled — child outlived its record' },
+    { title: 'Telegram gateway retirement', project: 'archon-core', model: 'Sonnet 4.6', when: 'Jul 14', ts: 14000, msgs: 26, state: 'done', preview: 'read-only until cron delivery moves' },
+    { title: 'Rotate the age recipient', project: 'vault', model: 'Sonnet 4.6', when: 'Jul 14', ts: 14200, msgs: 11, state: 'done', preview: 're-encrypt the nightly archives' },
+    { title: 'Tailscale-only ingress check', project: 'archon-core', model: 'Haiku 4.5', when: 'Jul 11', ts: 18800, msgs: 8, state: 'done', preview: 'no public listener; token file at 0600' }
+  ];
+
+  GROUPS = [
+    { label: 'Today', items: [
+      { title: 'Ship v0.3.1 — real cancellation', preview: 'killing a live child to confirm', when: 'now', state: 'working' },
+      { title: 'Event replay endpoint', preview: 'SSE cursor from SQLite', when: '2h', state: 'done' },
+      { title: 'RTL groundwork audit', preview: 'logical properties in, switch missing', when: '5h', state: 'done' } ] },
+    { label: 'Yesterday', items: [
+      { title: 'Nightly backup failed once', preview: 'age recipient rotated on the 12th', when: 'Wed', state: 'error' },
+      { title: 'MiniPC migration manifest', preview: 'profile, sessions, skills, vault', when: 'Wed', state: 'done' } ] },
+    { label: 'Earlier', items: [
+      { title: 'Selective restore in the UI', preview: 'backend supports per-path already', when: 'Mon', state: 'done' },
+      { title: 'Tailscale-only ingress check', preview: 'no public listener; 0600 token', when: 'Jul 11', state: 'done' } ] }
+  ];
+
+  SUGGEST = [
+    { icon: 'ph-pulse', title: 'Two tasks still running', note: '7f21c9 working · a03e41 queued' },
+    { icon: 'ph-warning-circle', title: 'A cancel didn\u2019t take', note: 'child pid 20114 outlived its record' },
+    { icon: 'ph-sun-horizon', title: 'Morning brief', note: 'cron_8f21 · runs 07:00 daily' },
+    { icon: 'ph-package', title: 'Cut v0.3.1 packages', note: 'AppImage + deb, amd64 and arm64' }
+  ];
+
+  PLAN = [
+    { n: '1', text: 'Spawn every task in its own process group', state: 'done' },
+    { n: '2', text: 'SIGTERM the group, escalate to SIGKILL after 5s', state: 'done' },
+    { n: '3', text: 'Reconcile the SQLite record after the wait returns', state: 'working' },
+    { n: '4', text: 'Rebuild AppImage and .deb for both architectures', state: 'queued' }
+  ];
+
+  componentDidMount() {
+    this._key = (e) => {
+      const k = (e.key || '').toLowerCase();
+      if ((e.metaKey || e.ctrlKey) && k === 'k') { e.preventDefault(); this.setState({ palette: !this.state.palette }); }
+      if ((e.metaKey || e.ctrlKey) && k === ',') { e.preventDefault(); this.setState({ settings: 'general' }); }
+      if ((e.ctrlKey) && k === 'n') { e.preventDefault(); this.setState({ view: 'new', chat: null }); }
+      if (k === 'escape') this.setState({ palette: false, dialog: null, settings: null });
+    };
+    window.addEventListener('keydown', this._key);
+    this._t = setInterval(() => this.setState(s => ({ tick: s.tick + 1 })), 5000);
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this._key); clearInterval(this._t); }
+
+  th() { return this.THEMES[this.state.theme || this.props.theme || 'carbon']; }
+  glassOn() { return this.state.glass == null ? (this.props.glass !== false) : this.state.glass; }
+  amb() { return this.state.ambient || this.props.ambient || 'halo'; }
+  rtlOn() { return this.state.lang === 'ar' || !!this.props.rtl; }
+
+  vars() {
+    const t = this.th(), a = this.props.accent || t.accent;
+    return {
+      '--color-bg': t.bg, '--color-surface': t.surface, '--color-text': t.text, '--color-accent': a,
+      '--color-divider': t.edge, '--color-neutral-800': t.chip, '--color-neutral-100': t.chipText,
+      '--color-accent-800': t.aChip, '--color-accent-100': t.aChipText, '--color-neutral-900': t.dark ? '#0b0d14' : '#c9c6c0',
+      '--radius-sm': t.rad === '0px' ? '0px' : '4px', '--radius-md': t.rad,
+      '--radius-lg': t.rad === '0px' ? '0px' : `calc(${t.rad} + 6px)`,
+      '--font-heading': t.fh, '--font-body': t.fb,
+      '--ar-side': t.side, '--ar-panel': this.glassOn() ? t.panel : t.surface, '--ar-edge': t.edge,
+      '--ar-hover': t.hover, '--ar-blur': this.glassOn() ? '14px' : '0px',
+      '--ar-flow': this.props.navSide === 'right' ? 'row-reverse' : 'row',
+      background: t.bg, color: t.text, fontFamily: t.fb, height: '100vh', width: '100%'
+    };
+  }
+
+  ambientStyle() {
+    const a = this.amb(), t = this.th(), c = this.props.accent || t.accent;
+    const base = { position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none', opacity: t.dark ? 0.85 : 0.5 };
+    if (a === 'none') return { display: 'none' };
+    if (a === 'aurora') return { ...base, background: `radial-gradient(900px 340px at 16% -6%, color-mix(in srgb, ${c} 20%, transparent), transparent 68%), radial-gradient(700px 300px at 90% 6%, color-mix(in srgb, ${c} 11%, transparent), transparent 62%)` };
+    if (a === 'mesh') return { ...base, background: `radial-gradient(420px 300px at 8% 6%, color-mix(in srgb, ${c} 18%, transparent), transparent 65%), radial-gradient(520px 380px at 96% 22%, color-mix(in srgb, ${c} 13%, transparent), transparent 68%), radial-gradient(600px 420px at 60% 106%, color-mix(in srgb, ${c} 14%, transparent), transparent 70%)` };
+    if (a === 'grid') return { ...base, opacity: t.dark ? 0.45 : 0.3,
+      background: `repeating-linear-gradient(0deg, ${t.edge} 0 1px, transparent 1px 44px), repeating-linear-gradient(90deg, ${t.edge} 0 1px, transparent 1px 44px)`,
+      maskImage: 'radial-gradient(120% 90% at 50% 0%, #000 30%, transparent 78%)' };
+    return { ...base, background: `radial-gradient(780px 420px at 50% -14%, color-mix(in srgb, ${c} 22%, transparent), transparent 70%)` };
+  }
+
+  renderVals() {
+    const s = this.state, t = this.th();
+    const tint = { working: t.accent, queued: '#8f93a6', done: '#6fca8f', error: '#e0574c' };
+    const ask = (title, body, target, confirm) => () => this.setState({ dialog: { title, body, target, confirm } });
+    const benchDefs = [
+      { id: 'activity', icon: 'ph-pulse', title: 'Activity', live: true },
+      { id: 'files', icon: 'ph-folder-open', title: 'Files' },
+      { id: 'terminal', icon: 'ph-terminal-window', title: 'Terminal' }
+    ];
+    const dlg = s.dialog || {};
+    return {
+      ...this.settingsVals(),
+      vars: this.vars(), ambient: this.ambientStyle(), dir: this.rtlOn() ? 'rtl' : 'ltr',
+      crumb: { new: 'New chat', thread: 'archon-desktop · Ship v0.3.1', sessions: 'All sessions',
+        project: (this.PROJECTS[s.project] || {}).name, skills: 'Skills', automations: 'Automations', backups: 'Backups' }[s.view] || 'Archon',
+      sidebar: s.sidebar, toggleSidebar: () => this.setState({ sidebar: !s.sidebar }),
+      isNew: s.view === 'new', isThread: s.view === 'thread',
+      newChat: () => this.setState({ view: 'new', chat: null }), openThread: () => this.setState({ view: 'thread', chat: 0 }),
+      model: s.model, openModels: () => this.setState({ settings: 'models' }),
+      pickProject: () => this.setState({ settings: 'general' }),
+      projects: this.PROJECTS.map((p, i) => ({ ...p, open: () => this.setState({ view: 'project', project: i }),
+        style: { display: 'flex', alignItems: 'center', gap: '9px', padding: '6px 7px', borderRadius: 'var(--radius-md)',
+          cursor: 'pointer', opacity: (s.view === 'project' && s.project === i) ? 1 : 0.78,
+          background: (s.view === 'project' && s.project === i) ? `color-mix(in srgb, ${t.accent} 13%, transparent)` : 'transparent',
+          color: (s.view === 'project' && s.project === i) ? t.accent : 'inherit' } })),
+      ...this.sessionVals(tint),
+      groups: this.GROUPS.map((g, gi) => ({ label: g.label, items: g.items.map((c, i) => {
+        const on = s.chat === 0 && gi === 0 && i === 0 && s.view === 'thread';
+        return { ...c, open: () => this.setState({ view: 'thread', chat: gi === 0 && i === 0 ? 0 : 1 }),
+          style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 7px', borderRadius: 'var(--radius-md)',
+            cursor: 'pointer', background: on ? `color-mix(in srgb, ${t.accent} 14%, transparent)` : 'transparent' },
+          badge: { width: '5px', height: '5px', flex: 'none', borderRadius: '50%', background: c.state === 'done' ? 'transparent' : tint[c.state],
+            boxShadow: c.state === 'done' ? `inset 0 0 0 1px color-mix(in srgb, ${t.text} 30%, transparent)` : 'none',
+            animation: c.state === 'working' ? 'ar-breathe 1.8s ease-in-out infinite' : 'none' } }; }) })),
+      suggestions: this.SUGGEST,
+      plan: this.PLAN.map(p => ({ ...p,
+        dot: { flex: 'none', width: '18px', height: '18px', display: 'grid', placeItems: 'center', borderRadius: '50%',
+          fontSize: '10px', fontFamily: 'ui-monospace, monospace',
+          background: `color-mix(in srgb, ${tint[p.state]} 20%, transparent)`, color: tint[p.state] },
+        chip: { marginInlineStart: 'auto', flex: 'none', fontSize: '10px', letterSpacing: '.04em', color: tint[p.state], opacity: 0.9 } })),
+      bench: !!s.bench, closeBench: () => this.setState({ bench: null }),
+      openActivity: () => this.setState({ bench: 'activity' }),
+      benchTabs: benchDefs.map(b => ({ ...b, open: () => this.setState({ bench: b.id }),
+        style: { position: 'relative', width: '26px', height: '24px', display: 'grid', placeItems: 'center', cursor: 'pointer',
+          borderRadius: 'var(--radius-sm)', opacity: s.bench === b.id ? 1 : 0.45,
+          color: s.bench === b.id ? t.accent : 'inherit',
+          background: s.bench === b.id ? `color-mix(in srgb, ${t.accent} 14%, transparent)` : 'transparent' },
+        dot: { display: b.live ? 'block' : 'none', position: 'absolute', top: '3px', insetInlineEnd: '3px', width: '5px', height: '5px',
+          borderRadius: '50%', background: t.accent, animation: 'ar-breathe 1.8s ease-in-out infinite' },
+        tabStyle: { display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 10px', border: 0, borderRadius: 'var(--radius-md)',
+          font: 'inherit', fontSize: '11.5px', cursor: 'pointer', color: s.bench === b.id ? t.accent : 'inherit',
+          opacity: s.bench === b.id ? 1 : 0.6,
+          background: s.bench === b.id ? `color-mix(in srgb, ${t.accent} 14%, transparent)` : 'transparent' } })),
+      benchActivity: s.bench === 'activity', benchFiles: s.bench === 'files', benchTerminal: s.bench === 'terminal',
+      liveDot: { width: '6px', height: '6px', flex: 'none', borderRadius: '50%', background: t.accent,
+        boxShadow: `0 0 0 3px color-mix(in srgb, ${t.accent} 18%, transparent)`, animation: 'ar-breathe 1.8s ease-in-out infinite' },
+      liveLabel: '2 tasks running',
+      palette: s.palette, closePalette: () => this.setState({ palette: false }),
+      paletteItems: [
+        { icon: 'ph-plus', label: 'New chat', hint: '⌃N', go: () => this.setState({ view: 'new', chat: null }) },
+        { icon: 'ph-pulse', label: 'Activity — running tasks', hint: 'panel', go: () => this.setState({ bench: 'activity' }) },
+        { icon: 'ph-folder-open', label: 'VPS files', hint: 'panel', go: () => this.setState({ bench: 'files' }) },
+        { icon: 'ph-terminal-window', label: 'Terminal', hint: 'panel', go: () => this.setState({ bench: 'terminal' }) },
+        { icon: 'ph-cpu', label: 'Models', hint: 'settings', go: () => this.setState({ settings: 'models' }) },
+        { icon: 'ph-clock-counter-clockwise', label: 'All sessions', hint: 'page', go: () => this.setState({ view: 'sessions' }) },
+        { icon: 'ph-graduation-cap', label: 'Skills', hint: 'page', go: () => this.setState({ view: 'skills' }) },
+        { icon: 'ph-alarm', label: 'Automations', hint: 'page', go: () => this.setState({ view: 'automations' }) },
+        { icon: 'ph-archive-box', label: 'Backups', hint: 'page', go: () => this.setState({ view: 'backups' }) },
+        { icon: 'ph-palette', label: 'Appearance', hint: 'settings', go: () => this.setState({ settings: 'appearance' }) },
+        { icon: 'ph-translate', label: 'Language and layout direction', hint: 'settings', go: () => this.setState({ settings: 'language' }) }
+      ].map(p => ({ ...p, run: () => { p.go(); this.setState({ palette: false }); } })),
+      openSettings: () => this.setState({ settings: 'general' }),
+      dialog: !!s.dialog, dialogTitle: dlg.title, dialogBody: dlg.body, dialogTarget: dlg.target,
+      dialogConfirm: dlg.confirm, closeDialog: () => this.setState({ dialog: null }),
+      askCancel: ask('Cancel task 7f21c9?', 'The record flips at once; the signal goes to the whole process group and escalates to SIGKILL after five seconds.', 'SIGTERM → -pgid 20097', 'Cancel task')
+    };
+  }
+
+  TABS = [
+    { id: 'general', icon: 'ph-sliders-horizontal', label: 'General', group: 'App' },
+    { id: 'connection', icon: 'ph-plugs', label: 'Connection', group: 'App' },
+    { id: 'models', icon: 'ph-cpu', label: 'Models', group: 'Agent' },
+    { id: 'appearance', icon: 'ph-palette', label: 'Appearance', group: 'Look' },
+    { id: 'language', icon: 'ph-translate', label: 'Language', group: 'Look' },
+    { id: 'brand', icon: 'ph-diamonds-four', label: 'Brand', group: 'Look' },
+    { id: 'about', icon: 'ph-info', label: 'About', group: 'Look' }
+  ];
+
+  MODELS = [
+    { name: 'Claude Sonnet 4.6', id: 'claude-sonnet-4-6', ctx: '200K', note: 'default', pin: true },
+    { name: 'Claude Opus 4.1', id: 'claude-opus-4-1', ctx: '200K', note: 'deep work', pin: true },
+    { name: 'Claude Haiku 4.5', id: 'claude-haiku-4-5', ctx: '200K', note: 'cron passes', pin: true },
+    { name: 'GPT-5.1', id: 'gpt-5.1', ctx: '400K', note: '', pin: false },
+    { name: 'Qwen3-Coder 30B', id: 'qwen3-coder:30b', ctx: '128K', note: 'local on the VPS', pin: false }
+  ];
+
+  SKILLS = [
+    { name: 'archon-triage', cat: 'Orchestration', on: true, desc: 'Answer, single task, or decompose.' },
+    { name: 'archon-pipeline', cat: 'Orchestration', on: true, desc: 'Stage wiring and handoffs for builds.' },
+    { name: 'vps-hygiene', cat: 'Ops', on: true, desc: 'Disk, journal and systemd checks.' },
+    { name: 'backup-restore', cat: 'Ops', on: true, desc: 'Sanitised archives and safe restores.' },
+    { name: 'web-research', cat: 'Research', on: false, desc: 'Findings grounded in live sources.' },
+    { name: 'telegram-relay', cat: 'Delivery', on: false, desc: 'Legacy gateway, read-only.' }
+  ];
+
+  CRONS = [
+    { name: 'Morning brief', sched: '0 7 * * *', next: 'Tomorrow 07:00', on: true, last: 'ok' },
+    { name: 'Nightly backup', sched: '0 3 * * *', next: 'Tomorrow 03:00', on: true, last: 'ok' },
+    { name: 'Weekly skills audit', sched: '0 9 * * MON', next: 'Mon 09:00', on: true, last: 'ok' },
+    { name: 'Token-spend digest', sched: '0 20 * * FRI', next: 'paused', on: false, last: 'failed' }
+  ];
+
+  BACKUPS = [
+    { name: 'archon-2026-07-24.tar.zst.age', when: 'Today 03:00', size: '211 MB', enc: true },
+    { name: 'archon-2026-07-23.tar.zst.age', when: 'Yesterday 03:00', size: '209 MB', enc: true },
+    { name: 'pre-migration-snapshot.tar.zst', when: 'Jul 20 21:44', size: '215 MB', enc: false }
+  ];
+
+  FILES = [
+    { name: 'projects', kind: 'dir', size: '12 items', prot: false },
+    { name: 'skills', kind: 'dir', size: '9 items', prot: false },
+    { name: 'sessions.db', kind: 'db', size: '48.2 MB', prot: false },
+    { name: 'notes.md', kind: 'md', size: '4.1 KB', prot: false },
+    { name: 'hermes.service', kind: 'file', size: '812 B', prot: false },
+    { name: '.env', kind: 'lock', size: '—', prot: true },
+    { name: 'id_ed25519', kind: 'lock', size: '—', prot: true }
+  ];
+
+  EVENTS = [
+    { t: '14:11:02', k: 'task.started', x: 'pgid 20097 · start_new_session=True' },
+    { t: '14:11:19', k: 'tool.edit', x: 'runner.py +18 −6' },
+    { t: '14:11:44', k: 'shell', x: 'pytest -k cancel' },
+    { t: '14:11:58', k: 'stdout', x: '6 passed in 12.41s' },
+    { t: '14:12:03', k: 'signal', x: 'SIGTERM → -20097 · exited 143' }
+  ];
+
+  TERMOUT = [
+    { c: 'systemctl --user status hermes-backend' },
+    { o: '● hermes-backend.service — Archon/Hermes backend' },
+    { o: '   Active: active (running) since 03:12:04 UTC; 10h 59min ago' },
+    { c: 'pgrep -af hermes | head -3' },
+    { o: '20097 python -m hermes.runner --task 7f21c9' },
+    { o: '20114 claude --print --model claude-sonnet-4-6' }
+  ];
+
+  LIMITS = [
+    'Linux only — Windows, macOS and browser clients are not built yet.',
+    'Projects and skills can be opened and toggled, but not created or edited here.',
+    'Backup restore is all-or-nothing; the backend already supports selective restore.',
+    'The cron editor covers name, schedule, destination and prompt — nothing advanced.',
+    'Cancellation updates the record but does not always kill the child process. Being fixed in 0.3.1.'
+  ];
+
+  sortPills(opts) {
+    const s = this.state, t = this.th();
+    return opts.map(o => ({ ...o, set: () => this.setState({ sort: o.k }),
+      style: { padding: '4px 10px', fontSize: '11.5px', cursor: 'pointer', border: 0, font: 'inherit', borderRadius: 'var(--radius-md)',
+        color: s.sort === o.k ? t.accent : 'inherit', opacity: s.sort === o.k ? 1 : 0.65,
+        background: s.sort === o.k ? `color-mix(in srgb, ${t.accent} 14%, transparent)` : 'transparent',
+        boxShadow: `inset 0 0 0 1px ${s.sort === o.k ? t.accent : t.edge}` } }));
+  }
+
+  sessionVals(tint) {
+    const s = this.state, t = this.th();
+    const sorts = { recent: (a, b) => a.ts - b.ts, project: (a, b) => a.project.localeCompare(b.project) || a.ts - b.ts,
+      model: (a, b) => a.model.localeCompare(b.model) || a.ts - b.ts,
+      status: (a, b) => ['working', 'queued', 'error', 'done'].indexOf(a.state) - ['working', 'queued', 'error', 'done'].indexOf(b.state) || a.ts - b.ts,
+      msgs: (a, b) => b.msgs - a.msgs };
+    const notes = { recent: 'newest first', project: 'grouped by project, newest first inside each',
+      model: 'grouped by model', status: 'working, queued, failed, then finished', msgs: 'longest conversations first' };
+    const badge = (st) => ({ width: '6px', height: '6px', flex: 'none', borderRadius: '50%',
+      background: st === 'done' ? 'transparent' : tint[st],
+      boxShadow: st === 'done' ? `inset 0 0 0 1px color-mix(in srgb, ${t.text} 28%, transparent)` : 'none',
+      animation: st === 'working' ? 'ar-breathe 1.8s ease-in-out infinite' : 'none' });
+    const deco = (x) => ({ ...x, open: () => this.setState({ view: 'thread', chat: 0 }), badge: badge(x.state),
+      rowStyle: { display: 'grid', gridTemplateColumns: '1fr 148px 112px 66px 74px', alignItems: 'center', gap: '10px',
+        padding: '8px 11px', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+        borderBottom: `1px solid ${t.edge}` },
+      rowStyle2: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 11px', borderRadius: 'var(--radius-md)',
+        cursor: 'pointer', borderBottom: `1px solid ${t.edge}` } });
+    const all = this.SESSIONS.slice().sort(sorts[s.sort] || sorts.recent);
+    const proj = this.PROJECTS[s.project] || this.PROJECTS[0];
+    const mine = all.filter(x => x.project === proj.name);
+    const nav = [{ id: 'sessions', icon: 'ph-clock-counter-clockwise', label: 'All sessions', meta: String(this.SESSIONS.length) },
+      { id: 'skills', icon: 'ph-graduation-cap', label: 'Skills', meta: '6' },
+      { id: 'automations', icon: 'ph-alarm', label: 'Automations', meta: '4' },
+      { id: 'backups', icon: 'ph-archive-box', label: 'Backups', meta: '3' }];
+    return {
+      isSessions: s.view === 'sessions', isProject: s.view === 'project', isSkills: s.view === 'skills',
+      isAutomations: s.view === 'automations', isBackups: s.view === 'backups',
+      sessionRows: all.map(deco), projSessions: mine.map(deco), projEmpty: mine.length === 0,
+      sessionCount: this.SESSIONS.length + ' sessions',
+      proj: { ...proj },
+      sortNote: notes[s.sort] || '',
+      sortOpts: this.sortPills([{ k: 'recent', label: 'Recent' }, { k: 'project', label: 'Project' }, { k: 'model', label: 'Model' }, { k: 'status', label: 'Status' }]),
+      projSortOpts: this.sortPills([{ k: 'recent', label: 'Recent' }, { k: 'model', label: 'Model' }, { k: 'msgs', label: 'Msgs' }, { k: 'status', label: 'Status' }]),
+      unusedSortOpts: [].map(o => ({ ...o, set: () => this.setState({ sort: o.k }),
+          style: { padding: '4px 10px', fontSize: '11.5px', cursor: 'pointer', border: 0, font: 'inherit', borderRadius: 'var(--radius-md)',
+            color: s.sort === o.k ? t.accent : 'inherit', opacity: s.sort === o.k ? 1 : 0.65,
+            background: s.sort === o.k ? `color-mix(in srgb, ${t.accent} 14%, transparent)` : 'transparent',
+            boxShadow: `inset 0 0 0 1px ${s.sort === o.k ? t.accent : t.edge}` } })),
+      sideNav: nav.map(n => ({ ...n, go: () => this.setState({ view: n.id }),
+        style: { display: 'flex', alignItems: 'center', gap: '9px', padding: '6px 7px', background: s.view === n.id ? `color-mix(in srgb, ${t.accent} 13%, transparent)` : 'transparent',
+          border: 0, borderRadius: 'var(--radius-md)', font: 'inherit', fontSize: '11.5px', cursor: 'pointer', textAlign: 'start',
+          color: s.view === n.id ? t.accent : 'inherit', opacity: s.view === n.id ? 1 : 0.68 } }))
+    };
+  }
+
+  settingsVals() {
+    const s = this.state, t = this.th(), open = s.settings;
+    const tint = { working: t.accent, queued: '#8f93a6', done: '#6fca8f', error: '#e0574c' };
+    const ask = (title, body, target, confirm) => () => this.setState({ dialog: { title, body, target, confirm } });
+    const knob = (on) => ({ width: '30px', height: '17px', flex: 'none', borderRadius: '999px', position: 'relative', cursor: 'pointer',
+      background: on ? `color-mix(in srgb, ${t.accent} 55%, transparent)` : `color-mix(in srgb, ${t.text} 12%, transparent)`,
+      boxShadow: `inset 0 0 0 1px ${t.edge}` });
+    const dot = (on) => ({ position: 'absolute', top: '2.5px', insetInlineStart: on ? '15px' : '3px', width: '12px', height: '12px',
+      borderRadius: '50%', background: on ? t.accent : `color-mix(in srgb, ${t.text} 40%, transparent)`, transition: 'inset-inline-start .15s ease' });
+    const pill = (on) => ({ padding: '5px 11px', fontSize: '12px', textTransform: 'capitalize', cursor: 'pointer', border: 0, font: 'inherit',
+      borderRadius: 'var(--radius-md)', color: on ? t.accent : 'inherit',
+      background: on ? `color-mix(in srgb, ${t.accent} 14%, transparent)` : 'transparent',
+      boxShadow: `inset 0 0 0 1px ${on ? t.accent : t.edge}` });
+    return {
+      settingsOpen: !!open, closeSettings: () => this.setState({ settings: null }),
+      settingsTitle: (this.TABS.find(x => x.id === open) || {}).label || 'Settings',
+      settingsTabs: this.TABS.map(x => ({ ...x, go: () => this.setState({ settings: x.id }),
+        style: { display: 'flex', alignItems: 'center', gap: '9px', padding: '7px 10px', border: 0, borderRadius: 'var(--radius-md)',
+          font: 'inherit', fontSize: '12.5px', cursor: 'pointer', textAlign: 'start', width: '100%',
+          color: open === x.id ? t.accent : 'inherit', opacity: open === x.id ? 1 : 0.65,
+          background: open === x.id ? `color-mix(in srgb, ${t.accent} 13%, transparent)` : 'transparent' } })),
+      tabGeneral: open === 'general', tabConnection: open === 'connection', tabModels: open === 'models',
+      tabAppearance: open === 'appearance', tabLanguage: open === 'language', tabBrand: open === 'brand', tabAbout: open === 'about',
+      setModels: this.MODELS.map(m => ({ ...m, pick: () => this.setState({ model: m.name.replace('Claude ', '') }),
+        pinStyle: { fontSize: '13px', opacity: m.pin ? 1 : 0.3, color: m.pin ? t.accent : 'inherit' } })),
+      setSkills: this.SKILLS.map(k => ({ ...k, knob: knob(k.on), dot: dot(k.on), state: k.on ? 'enabled' : 'off' })),
+      setCrons: this.CRONS.map(c => ({ ...c, state: c.on ? 'enabled' : 'paused',
+        stateStyle: { fontSize: '10.5px', color: c.on ? '#6fca8f' : `color-mix(in srgb, ${t.text} 50%, transparent)` },
+        lastStyle: { fontSize: '10.5px', color: c.last === 'ok' ? '#6fca8f' : '#e0574c' },
+        run: ask('Run “' + c.name + '” now?', 'The job runs immediately as a server-owned task. Its schedule is untouched.', c.sched, 'Run now') })),
+      setBackups: this.BACKUPS.map(b => ({ ...b, encLabel: b.enc ? 'age' : 'plain',
+        restore: ask('Restore ' + b.name + '?', 'Everything under the Archon root is replaced. Current files are moved aside to a timestamped folder first.', 'restore --all', 'Restore all') })),
+      askBackup: ask('Create a backup now?', 'Archon writes a sanitised, age-encrypted archive. Secret values are stripped before it is sealed.', 'backup create --encrypt --sanitise', 'Create backup'),
+      askToken: ask('Replace the device token?', 'The token is verified against the VPS before it is stored in Electron safeStorage.', 'PUT /v1/auth/device', 'Test and save'),
+      themeTiles: Object.keys(this.THEMES).map(k => { const x = this.THEMES[k], on = (s.theme || this.props.theme || 'carbon') === k;
+        return { key: k, label: x.label, note: x.note, set: () => this.setState({ theme: k }),
+          tileStyle: { display: 'flex', flexDirection: 'column', gap: '9px', padding: '11px', cursor: 'pointer', textAlign: 'start',
+            background: x.bg, color: x.text, border: `1px solid ${on ? x.accent : x.edge}`, borderRadius: 'var(--radius-md)', font: 'inherit',
+            boxShadow: on ? `0 0 0 2px color-mix(in srgb, ${t.accent} 45%, transparent)` : 'none' },
+          nameStyle: { fontFamily: x.fh, fontSize: '14px', fontWeight: 500 },
+          noteStyle: { fontFamily: x.fb, fontSize: '10.5px', opacity: 0.55, lineHeight: 1.4 },
+          swatches: [x.accent, x.surface, x.side, x.text].map(c => ({ style: { width: '14px', height: '14px', borderRadius: '4px', background: c, boxShadow: `inset 0 0 0 1px ${x.edge}` } })) }; }),
+      ambientOpts: ['halo', 'aurora', 'mesh', 'grid', 'none'].map(a => ({ key: a, label: a, set: () => this.setState({ ambient: a }), style: pill(this.amb() === a) })),
+      glassKnob: knob(this.glassOn()), glassDot: dot(this.glassOn()), toggleGlass: () => this.setState({ glass: !this.glassOn() }),
+      sliders: [['Font scale', '100%', 80, 130, 100], ['Interface density', '0.70×', 50, 130, 70], ['Corner radius', '8px', 0, 20, 8],
+        ['Glass blur', '14px', 0, 30, 14], ['Ambient strength', '85%', 0, 100, 85], ['Motion speed', '1.0×', 0, 200, 100],
+        ['Icon stroke', '1.6px', 10, 30, 16], ['Sidebar width', '262px', 200, 380, 262], ['Composer width', '704px', 560, 1000, 704]]
+        .map(([label, value, min, max, v]) => ({ label, value, min, max, v })),
+      colorRoles: [['Canvas', t.bg], ['Sidebar', t.side], ['Panels', t.surface], ['Text', t.text], ['Accent', this.props.accent || t.accent], ['Borders', t.edge]]
+        .map(([label, hex]) => ({ label, hex: String(hex).startsWith('#') ? hex : 'derived',
+          chip: { width: '18px', height: '18px', flex: 'none', borderRadius: 'var(--radius-sm)', background: hex, boxShadow: `inset 0 0 0 1px ${t.edge}` } })),
+      langOpts: [{ k: 'en', l: 'English', sub: 'left to right' }, { k: 'ar', l: 'العربية', sub: 'من اليمين إلى اليسار' }].map(o => ({ ...o,
+        set: () => this.setState({ lang: o.k }),
+        style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 13px', border: `1px solid ${(s.lang === o.k) ? t.accent : t.edge}`,
+          borderRadius: 'var(--radius-md)', cursor: 'pointer', font: 'inherit', color: 'inherit', textAlign: 'start', flex: 1,
+          background: s.lang === o.k ? `color-mix(in srgb, ${t.accent} 9%, transparent)` : 'transparent' },
+        dotStyle: { width: '14px', height: '14px', flex: 'none', borderRadius: '50%',
+          border: `1.5px solid ${s.lang === o.k ? t.accent : t.edge}`, background: s.lang === o.k ? t.accent : 'transparent',
+          boxShadow: s.lang === o.k ? `inset 0 0 0 3px ${t.bg}` : 'none' } })),
+      isArabic: s.lang === 'ar',
+      shortcuts: [['New chat', '⌃N'], ['Command palette', '⌘K'], ['Settings', '⌘,'], ['Model picker', '⌃⇧M'],
+        ['Toggle sidebar', '⌘\\'], ['Activity panel', '⌘1'], ['Files panel', '⌘2'], ['Terminal panel', '⌘3']]
+        .map(([label, keys]) => ({ label, keys })),
+      security: ['Bearer-token auth against a FastAPI + SQLite backend of its own.',
+        'Token encrypted with Electron safeStorage when a keyring exists, else a 0600 file.',
+        'Renderer: context isolation on, Node off, sandbox on, navigation locked, permissions denied.',
+        'Provider credentials and the server .env never reach the renderer.',
+        'Reachable only over the private Tailscale network.'],
+      limits: this.LIMITS,
+      benchFilesList: this.FILES.map(f => ({ ...f,
+        icon: { dir: 'ph-folder', db: 'ph-database', md: 'ph-file-text', lock: 'ph-shield-check', file: 'ph-file' }[f.kind],
+        rowStyle: { display: 'flex', alignItems: 'center', gap: '9px', padding: '6px 9px', borderRadius: 'var(--radius-md)',
+          fontSize: '12px', fontFamily: 'ui-monospace, "JetBrains Mono", monospace', cursor: f.prot ? 'not-allowed' : 'pointer',
+          opacity: f.prot ? 0.55 : 1, background: f.name === 'notes.md' ? `color-mix(in srgb, ${t.accent} 12%, transparent)` : 'transparent' } })),
+      events: this.EVENTS, termout: this.TERMOUT,
+      benchTasks: [
+        { id: '7f21c9', state: 'working', prompt: 'Reconcile the task record after wait()', meta: '00:42 · Sonnet 4.6' },
+        { id: 'a03e41', state: 'queued', prompt: 'Rebuild AppImage + .deb, both arches', meta: 'waiting on 7f21c9' },
+        { id: 'c8b7d2', state: 'error', prompt: 'Skills registry crawl', meta: 'cancelled — child 20114 still alive' }
+      ].map(x => ({ ...x, chip: { fontSize: '10px', padding: '2px 7px', borderRadius: '999px', textTransform: 'capitalize',
+          background: `color-mix(in srgb, ${tint[x.state]} 18%, transparent)`, color: tint[x.state] },
+        cancel: ask('Cancel task ' + x.id + '?', 'The record flips at once; the signal goes to the process group and escalates to SIGKILL after five seconds.', 'SIGTERM → -pgid', 'Cancel task') })),
+      vps: { cpu: Math.max(8, 34 + Math.round(Math.sin(s.tick * 1.7) * 6)) + '%', mem: '3.4 / 7.8 GB', disk: '38.2 / 78 GB', up: '18d 04:22',
+        cpuBar: { width: Math.max(8, 34 + Math.round(Math.sin(s.tick * 1.7) * 6)) + '%', height: '100%', background: t.accent, transition: 'width .6s ease' },
+        memBar: { width: '44%', height: '100%', background: t.accent }, diskBar: { width: '49%', height: '100%', background: t.accent } }
+    };
+  }
+}
+</script>
+</body>
+</html>

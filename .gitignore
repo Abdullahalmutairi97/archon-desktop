@@ -1,0 +1,22 @@
+# Python
+backend/.venv/
+**/__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
+# Node
+desktop/node_modules/
+desktop/out/
+desktop/dist/
+desktop/release/
+# Runtime
+.runtime/
+*.db
+*.db-shm
+*.db-wal
+.env
+# Test/build
+coverage/
+test-results/
+desktop/artifacts/
+.hermes/

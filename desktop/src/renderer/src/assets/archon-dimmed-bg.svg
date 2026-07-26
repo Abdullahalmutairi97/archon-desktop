@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1200" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d2830"/>
+      <stop offset=".46" stop-color="#0c1218"/>
+      <stop offset="1" stop-color="#1a2026"/>
+    </linearGradient>
+    <radialGradient id="cold" cx="70%" cy="16%" r="76%">
+      <stop offset="0" stop-color="#778a96" stop-opacity=".88"/>
+      <stop offset=".27" stop-color="#42515c" stop-opacity=".55"/>
+      <stop offset=".66" stop-color="#141b22" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#070b0f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="stoneA" x1=".1" y1=".1" x2=".9" y2=".9">
+      <stop offset="0" stop-color="#66747c"/>
+      <stop offset=".23" stop-color="#303b44"/>
+      <stop offset=".56" stop-color="#11181e"/>
+      <stop offset=".82" stop-color="#39444b"/>
+      <stop offset="1" stop-color="#0b1015"/>
+    </linearGradient>
+    <linearGradient id="stoneB" x1=".8" y1="0" x2=".2" y2="1">
+      <stop offset="0" stop-color="#8a9498" stop-opacity=".78"/>
+      <stop offset=".34" stop-color="#39434a" stop-opacity=".9"/>
+      <stop offset=".72" stop-color="#11171c"/>
+      <stop offset="1" stop-color="#4b565c" stop-opacity=".65"/>
+    </linearGradient>
+    <filter id="sculpt" x="-30%" y="-30%" width="160%" height="160%">
+      <feTurbulence type="fractalNoise" baseFrequency=".004 .009" numOctaves="3" seed="19" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="42" xChannelSelector="R" yChannelSelector="B" result="shift"/>
+      <feGaussianBlur in="shift" stdDeviation="4"/>
+    </filter>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency=".68" numOctaves="4" seed="7" stitchTiles="stitch"/>
+      <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 .16 0"/>
+    </filter>
+    <filter id="soft"><feGaussianBlur stdDeviation="42"/></filter>
+  </defs>
+  <rect width="1920" height="1200" fill="url(#base)"/>
+  <rect width="1920" height="1200" fill="url(#cold)"/>
+  <g filter="url(#sculpt)" opacity=".9">
+    <path d="M-240 1120C40 756 242 444 530 192c132-116 295-207 477-209 92-1 173 24 214 81 48 68 11 153-77 219-159 120-388 151-526 281-124 117-183 310-338 464-126 126-293 194-520 92z" fill="url(#stoneA)"/>
+    <path d="M733 1264c-52-173 44-374 225-535 170-151 346-193 458-376 81-132 123-290 250-382 132-95 332-68 423 37 102 117 48 297-65 418-117 125-279 196-368 344-93 154-107 364-260 491-162 136-470 179-663 3z" fill="url(#stoneB)"/>
+    <path d="M1506-87c-52 176-133 320-274 430-109 84-233 123-311 227-47 63-68 144-48 213 20 69 84 124 161 119 125-8 209-162 320-223 154-85 357-55 475-190 103-119 135-343 18-480-77-91-212-120-341-96z" fill="#8b979b" opacity=".22"/>
+  </g>
+  <ellipse cx="1080" cy="570" rx="390" ry="265" fill="#9aabb4" opacity=".1" filter="url(#soft)"/>
+  <rect width="1920" height="1200" filter="url(#grain)" opacity=".38" style="mix-blend-mode:soft-light"/>
+  <rect width="1920" height="1200" fill="none" stroke="#a9bbc5" stroke-opacity=".05" stroke-width="2"/>
+</svg>
