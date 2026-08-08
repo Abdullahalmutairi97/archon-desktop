@@ -10,6 +10,17 @@ from .db import Database
 from .hermes_runner import RunnerCancelled
 
 
+MAX_EVENT_TEXT = 4096
+_EVENT_TRUNCATION_MARKER = "\n…[truncated]"
+
+
+def _cap_event_text(value: str) -> str:
+    if len(value) <= MAX_EVENT_TEXT:
+        return value
+    room = MAX_EVENT_TEXT - len(_EVENT_TRUNCATION_MARKER)
+    return value[:room] + _EVENT_TRUNCATION_MARKER
+
+
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -32,15 +43,15 @@ class TaskStore:
     def submit(self, prompt: str, cwd: str | None = None, model: str | None = None,
                provider: str | None = None, skills: list[str] | None = None,
                session_id: str | None = None, approval_mode: str = "approve",
-               chat_only: bool = False) -> dict[str, Any]:
+               chat_only: bool = False, profile: str | None = None) -> dict[str, Any]:
         task_id = uuid.uuid4().hex
         now = utcnow()
         with self.db.transaction() as conn:
             conn.execute(
                 """INSERT INTO tasks
-                   (id,prompt,cwd,model,provider,session_id,approval_mode,chat_only,skills_json,status,created_at,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,'queued',?,?)""",
-                (task_id, prompt, cwd, model, provider, session_id, approval_mode, int(chat_only), json.dumps(skills or []), now, now),
+                   (id,prompt,cwd,model,provider,session_id,profile,approval_mode,chat_only,skills_json,status,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,'queued',?,?)""",
+                (task_id, prompt, cwd, model, provider, session_id, profile, approval_mode, int(chat_only), json.dumps(skills or []), now, now),
             )
             self._append_event(conn, task_id, "task.queued", {"status": "queued"})
         return self.get(task_id)
@@ -69,6 +80,42 @@ class TaskStore:
                 "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 500)),)
             ).fetchall()
         return [_decode(row) for row in rows]
+
+    def has_running_session(self, session_id: str) -> bool:
+        with self.db.connect() as conn:
+            return conn.execute(
+                "SELECT 1 FROM tasks WHERE session_id=? AND status='running' LIMIT 1", (session_id,)
+            ).fetchone() is not None
+
+    def running_sessions(self, session_ids: list[str]) -> list[str]:
+        unique_ids = list(dict.fromkeys(session_ids))
+        if not unique_ids:
+            return []
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"SELECT DISTINCT session_id FROM tasks WHERE status='running' AND session_id IN ({placeholders})",
+                unique_ids,
+            ).fetchall()
+        return [row["session_id"] for row in rows]
+
+    def purge_session(self, session_id: str) -> None:
+        """Delete all backend task history associated with a deleted Hermes session."""
+        self.purge_sessions([session_id])
+
+    def purge_sessions(self, session_ids: list[str]) -> None:
+        """Delete backend task history for a batch of deleted Hermes sessions."""
+        unique_ids = list(dict.fromkeys(session_ids))
+        if not unique_ids:
+            return
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self.db.transaction() as conn:
+            conn.execute(
+                f"DELETE FROM events WHERE task_id IN (SELECT id FROM tasks WHERE session_id IN ({placeholders}))",
+                unique_ids,
+            )
+            conn.execute(f"DELETE FROM tasks WHERE session_id IN ({placeholders})", unique_ids)
+            conn.execute(f"DELETE FROM session_locations WHERE session_id IN ({placeholders})", unique_ids)
 
     def events(self, task_id: str, after: int = 0, limit: int = 1000) -> list[dict[str, Any]]:
         with self.db.connect() as conn:
@@ -123,15 +170,49 @@ class TaskStore:
             self._append_event(conn, row["id"], "task.running", {"status": "running"})
         return self.get(row["id"])
 
-    def complete(self, task_id: str, result: dict[str, Any]) -> None:
+    def set_session(self, task_id: str, session_id: str) -> None:
+        """Attach a session to a task while it is still running.
+
+        COALESCE keeps whatever is already there, so a resumed task never has its
+        session rewritten by a late announcement.
+        """
         now = utcnow()
         with self.db.transaction() as conn:
+            existing = conn.execute("SELECT session_id,cwd FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if existing is None:
+                raise KeyError(task_id)
+            conn.execute(
+                "UPDATE tasks SET session_id=COALESCE(session_id,?),updated_at=? WHERE id=?",
+                (session_id, now, task_id),
+            )
+            # Only a task that opened a session is allowed to establish its
+            # location. A resumed task may inherit a process cwd, but it must not
+            # move the existing Hermes session to a different project.
+            if not existing["session_id"]:
+                self.db.remember_session_location(session_id, existing["cwd"], "task", conn=conn)
+
+    def complete(self, task_id: str, result: dict[str, Any]) -> None:
+        now = utcnow()
+        event_result = dict(result)
+        if isinstance(event_result.get("text"), str):
+            event_result["text"] = _cap_event_text(event_result["text"])
+        with self.db.transaction() as conn:
+            existing = conn.execute("SELECT session_id,cwd FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if existing is None:
+                raise KeyError(task_id)
             conn.execute(
                 """UPDATE tasks SET status='completed',result_json=?,error=NULL,
                    session_id=COALESCE(?,session_id),completed_at=?,updated_at=? WHERE id=?""",
                 (json.dumps(result), result.get("session_id"), now, now, task_id),
             )
-            self._append_event(conn, task_id, "task.completed", {"status": "completed", "result": result})
+            if not existing["session_id"]:
+                self.db.remember_session_location(str(result.get("session_id") or ""), existing["cwd"], "task", conn=conn)
+            self._append_event(
+                conn,
+                task_id,
+                "task.completed",
+                {"status": "completed", "result": event_result},
+            )
 
     def fail(self, task_id: str, error: str) -> None:
         now = utcnow()
@@ -177,6 +258,12 @@ class TaskEngine:
             return False
 
         async def emit(event_type: str, data: dict[str, Any]) -> None:
+            # Hermes announces its session id on stderr as soon as it has one,
+            # long before the task finishes. Persist it the moment it arrives so
+            # the row is addressable while it is still running — otherwise every
+            # follow-up prompt has no session to continue and opens a new one.
+            if event_type == "session" and data.get("session_id"):
+                self.store.set_session(task["id"], str(data["session_id"]))
             self.store.append_event(task["id"], event_type, data)
 
         try:

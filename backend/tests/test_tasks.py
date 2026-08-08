@@ -66,6 +66,63 @@ def test_completion_persists_the_new_hermes_session_id(tmp_path):
     assert store.get(task["id"])["session_id"] == "20260725_session"
 
 
+def test_completion_event_is_capped_but_task_keeps_full_result(tmp_path):
+    store = TaskStore(Database(tmp_path / "state.db"))
+    task = store.submit("produce a long answer")
+    full_text = "x" * 9000
+
+    store.complete(task["id"], {"text": full_text, "session_id": "session-long"})
+
+    saved = store.get(task["id"])
+    completed = store.events(task["id"])[-1]
+    assert saved["result"]["text"] == full_text
+    assert completed["type"] == "task.completed"
+    assert len(completed["data"]["result"]["text"]) <= 4096
+    assert completed["data"]["result"]["text"].endswith("…[truncated]")
+    assert completed["data"]["result"]["session_id"] == "session-long"
+
+
+def test_set_session_persists_new_id_and_preserves_resumed_id(tmp_path):
+    store = TaskStore(Database(tmp_path / "state.db"))
+    new_task = store.submit("start a chat")
+    resumed_task = store.submit("continue a chat", session_id="existing-session")
+
+    store.set_session(new_task["id"], "new-session")
+    store.set_session(resumed_task["id"], "late-announcement")
+
+    assert store.get(new_task["id"])["session_id"] == "new-session"
+    assert store.get(resumed_task["id"])["session_id"] == "existing-session"
+
+
+@pytest.mark.asyncio
+async def test_engine_persists_announced_session_while_task_is_running(tmp_path):
+    class SessionAnnouncingRunner:
+        def __init__(self):
+            self.announced = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def run(self, task, emit):
+            await emit("session", {"session_id": "running-session"})
+            self.announced.set()
+            await self.release.wait()
+            return {"text": "done", "session_id": "running-session"}
+
+    store = TaskStore(Database(tmp_path / "state.db"))
+    runner = SessionAnnouncingRunner()
+    engine = TaskEngine(store, runner)
+    task = store.submit("start a chat")
+    worker = asyncio.create_task(engine.run_once())
+    await asyncio.wait_for(runner.announced.wait(), timeout=2)
+
+    running = store.get(task["id"])
+    assert running["status"] == "running"
+    assert running["session_id"] == "running-session"
+    assert any(event["type"] == "session" for event in store.events(task["id"]))
+
+    runner.release.set()
+    await asyncio.wait_for(worker, timeout=2)
+
+
 def test_existing_database_is_migrated_without_losing_tasks(tmp_path):
     path = tmp_path / "legacy.db"
     with sqlite3.connect(path) as conn:

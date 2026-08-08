@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     model TEXT,
     provider TEXT,
     session_id TEXT,
+    profile TEXT,
     approval_mode TEXT NOT NULL DEFAULT 'approve' CHECK(approval_mode IN ('auto','approve','plan')),
     chat_only INTEGER NOT NULL DEFAULT 0,
     skills_json TEXT NOT NULL DEFAULT '[]',
@@ -39,6 +41,14 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS session_locations (
+    session_id TEXT PRIMARY KEY,
+    cwd TEXT NOT NULL,
+    source TEXT NOT NULL CHECK(source IN ('task','hermes')),
+    discovered_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_locations_updated ON session_locations(updated_at DESC);
 """
 
 
@@ -55,6 +65,26 @@ class Database:
                 conn.execute("ALTER TABLE tasks ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'approve'")
             if "chat_only" not in columns:
                 conn.execute("ALTER TABLE tasks ADD COLUMN chat_only INTEGER NOT NULL DEFAULT 0")
+            if "profile" not in columns:
+                conn.execute("ALTER TABLE tasks ADD COLUMN profile TEXT")
+            location_columns = {row[1] for row in conn.execute("PRAGMA table_info(session_locations)")}
+            if "source" not in location_columns:
+                conn.execute("ALTER TABLE session_locations ADD COLUMN source TEXT NOT NULL DEFAULT 'hermes'")
+            if "discovered_at" not in location_columns:
+                conn.execute("ALTER TABLE session_locations ADD COLUMN discovered_at TEXT NOT NULL DEFAULT ''")
+            if "updated_at" not in location_columns:
+                conn.execute("ALTER TABLE session_locations ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+            # Sessions created before this registry existed already have their
+            # dispatch directory in the task ledger. Seed the durable registry
+            # once from those records, without overwriting a newer live mapping.
+            conn.execute(
+                """INSERT OR IGNORE INTO session_locations(session_id,cwd,source,discovered_at,updated_at)
+                   SELECT session_id,cwd,'task',created_at,updated_at
+                   FROM tasks
+                   WHERE NULLIF(TRIM(session_id),'') IS NOT NULL
+                     AND NULLIF(TRIM(cwd),'') IS NOT NULL
+                   ORDER BY created_at ASC"""
+            )
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -79,3 +109,63 @@ class Database:
                 raise
             else:
                 conn.commit()
+
+    def session_locations(self, session_ids: list[str]) -> dict[str, dict[str, str]]:
+        """Return durable working directories by Hermes session id."""
+        unique_ids = list(dict.fromkeys(session_id for session_id in session_ids if session_id))
+        if not unique_ids:
+            return {}
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT session_id,cwd,source FROM session_locations WHERE session_id IN ({placeholders})",
+                unique_ids,
+            ).fetchall()
+        return {row["session_id"]: {"cwd": row["cwd"], "source": row["source"]} for row in rows}
+
+    def remember_session_location(
+        self,
+        session_id: str,
+        cwd: str | None,
+        source: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        """Persist the first known session working directory without losing task truth.
+
+        A task's requested working directory is authoritative. Hermes can omit its
+        saved cwd after compaction or an upgrade, so a later read from Hermes must
+        never replace a task-proven location.
+        """
+        normalized_id = session_id.strip()
+        normalized_cwd = (cwd or "").strip()
+        if not normalized_id or not normalized_cwd:
+            return
+        if source not in {"task", "hermes"}:
+            raise ValueError("Invalid session location source")
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        def write(target: sqlite3.Connection) -> None:
+            target.execute(
+                """INSERT INTO session_locations(session_id,cwd,source,discovered_at,updated_at)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(session_id) DO UPDATE SET
+                     cwd=CASE
+                       WHEN session_locations.source='task' AND excluded.source='hermes'
+                         THEN session_locations.cwd
+                       ELSE excluded.cwd
+                     END,
+                     source=CASE
+                       WHEN session_locations.source='task' AND excluded.source='hermes'
+                         THEN session_locations.source
+                       ELSE excluded.source
+                     END,
+                     updated_at=excluded.updated_at""",
+                (normalized_id, normalized_cwd, source, timestamp, timestamp),
+            )
+
+        if conn is not None:
+            write(conn)
+            return
+        with self.transaction() as transaction:
+            write(transaction)

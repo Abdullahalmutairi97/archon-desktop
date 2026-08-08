@@ -6,7 +6,7 @@ Archon Desktop is Abdullah's private Linux control center for Archon. It replace
 
 The production service binds directly to the VPS Tailscale address and is reachable only inside Abdullah's tailnet:
 
-- Current backend listener and desktop endpoint: `http://100.80.70.23:9700` (configured by `ARCHON_DESKTOP_BIND_HOST` and `ARCHON_DESKTOP_BIND_PORT`)
+- Current backend listener and desktop endpoint: `http://100.94.49.55:9700` (configured by `ARCHON_DESKTOP_BIND_HOST` and `ARCHON_DESKTOP_BIND_PORT`)
 - Authentication: bearer token stored only in `backend/.env`
 - Database: `~/.local/share/archon-desktop/archon-desktop.db`
 
@@ -39,7 +39,7 @@ chmod +x Archon-Desktop-0.5.0-arm64.AppImage
 Choose the `x86_64` artifact on normal Intel/AMD Linux desktops. Enter the server URL above and copy the token locally from the VPS over SSH; never paste it into chat:
 
 ```bash
-ssh archonvps "sed -n 's/^ARCHON_DESKTOP_AUTH_TOKEN=//p' /home/archon/projects/archon-desktop/backend/.env"
+ssh archonvm "sed -n 's/^ARCHON_DESKTOP_AUTH_TOKEN=//p' /home/archon/projects/archon-desktop/backend/.env"
 ```
 
 ## Development and verification

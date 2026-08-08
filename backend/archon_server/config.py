@@ -34,11 +34,22 @@ class Settings(BaseSettings):
     desktop_artifact: Path | None = None
     desktop_version: str = "0.6.1"
     start_worker: bool = True
+    # How many tasks run at once. Each worker claims one task and awaits it to
+    # completion, so this is literally the number of concurrent agent process
+    # groups. 2 suits this host: 2 cores, no swap, and agent turns are mostly
+    # network-bound. Raise with ARCHON_DESKTOP_WORKER_COUNT, and watch RAM rather
+    # than CPU — with no swap, exhausting memory means the OOM killer rather
+    # than a graceful slowdown.
+    worker_count: int = Field(default=2, ge=1)
     worker_poll_seconds: float = 0.5
 
     @property
     def profile_home(self) -> Path:
         return self.hermes_home / "profiles" / self.profile
+
+    @property
+    def kanban_db(self) -> Path:
+        return self.hermes_home / "kanban.db"
 
     @property
     def config_path(self) -> Path:

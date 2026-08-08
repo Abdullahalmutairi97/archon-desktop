@@ -6,13 +6,17 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from ..db import Database
 
-def _readonly(path: Path) -> sqlite3.Connection:
+
+def _connection(path: Path, *, readonly: bool = True) -> sqlite3.Connection:
     if not path.exists():
         raise FileNotFoundError(path)
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    uri = f"file:{path}?mode=ro" if readonly else str(path)
+    conn = sqlite3.connect(uri, uri=readonly, timeout=5)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA query_only=ON")
+    if readonly:
+        conn.execute("PRAGMA query_only=ON")
     return conn
 
 
@@ -60,7 +64,7 @@ class ProjectService:
     def list(self) -> list[dict[str, Any]]:
         if not self.database_path.exists():
             return []
-        with _readonly(self.database_path) as conn:
+        with _connection(self.database_path) as conn:
             rows = conn.execute(
                 """SELECT id,slug,name,description,icon,color,primary_path
                    FROM projects WHERE COALESCE(archived,0)=0 ORDER BY name COLLATE NOCASE"""
@@ -102,15 +106,16 @@ class ProjectService:
 class SessionService:
     CHAT_SOURCES = ("archon-desktop", "cli", "tui", "telegram", "dashboard", "desktop")
 
-    def __init__(self, database_path: Path, projects: ProjectService):
+    def __init__(self, database_path: Path, projects: ProjectService, locations: Database | None = None):
         self.database_path = Path(database_path)
         self.projects = projects
+        self.locations = locations
 
     def list(self, limit: int = 120, project_id: str | None = None) -> list[dict[str, Any]]:
         if not self.database_path.exists():
             return []
         placeholders = ",".join("?" for _ in self.CHAT_SOURCES)
-        with _readonly(self.database_path) as conn:
+        with _connection(self.database_path) as conn:
             rows = conn.execute(
                 f"""SELECT s.id,s.source,s.title,s.model,s.cwd,s.started_at,s.ended_at,s.message_count,
                     COALESCE((SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id=s.id),s.ended_at,s.started_at) AS last_active,
@@ -121,9 +126,19 @@ class SessionService:
                     ORDER BY last_active DESC LIMIT ?""",
                 (*self.CHAT_SOURCES, max(1, min(limit, 500))),
             ).fetchall()
+        tracked = self.locations.session_locations([str(row["id"]) for row in rows]) if self.locations else {}
         result = []
         for row in rows:
-            resolved_project = self.projects.project_for_path(row["cwd"])
+            session_id = str(row["id"])
+            reported_cwd = str(row["cwd"] or "").strip()
+            remembered = tracked.get(session_id)
+            if self.locations and reported_cwd and not remembered:
+                # This discovers sessions that predate the task ledger. Once
+                # captured, a future Hermes blank cwd cannot orphan the session.
+                self.locations.remember_session_location(session_id, reported_cwd, "hermes")
+                remembered = {"cwd": reported_cwd, "source": "hermes"}
+            cwd = str(remembered["cwd"]) if remembered else reported_cwd
+            resolved_project = self.projects.project_for_path(cwd)
             if project_id and resolved_project != project_id:
                 continue
             preview = _text(row["preview"])
@@ -136,10 +151,11 @@ class SessionService:
             result.append(
                 {
                     "id": row["id"], "source": row["source"], "title": title,
-                    "model": row["model"] or "", "cwd": row["cwd"] or "",
+                    "model": row["model"] or "", "cwd": cwd,
                     "project_id": resolved_project, "started_at": row["started_at"],
                     "last_active": row["last_active"], "message_count": row["message_count"] or 0,
                     "active": row["ended_at"] is None, "preview": preview[:180],
+                    "location_source": remembered["source"] if remembered else "",
                 }
             )
         return result
@@ -147,7 +163,7 @@ class SessionService:
     def messages(self, session_id: str, limit: int = 500) -> list[dict[str, Any]]:
         if not session_id or len(session_id) > 200 or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-." for char in session_id):
             raise ValueError("Invalid session id")
-        with _readonly(self.database_path) as conn:
+        with _connection(self.database_path) as conn:
             exists = conn.execute("SELECT 1 FROM sessions WHERE id=?", (session_id,)).fetchone()
             if not exists:
                 raise KeyError(session_id)
@@ -165,3 +181,25 @@ class SessionService:
                 continue
             messages.append({"id": row["id"], "role": row["role"], "content": content, "timestamp": row["timestamp"]})
         return messages
+
+    def delete(self, session_id: str) -> bool:
+        return bool(self.delete_many([session_id]))
+
+    def delete_many(self, session_ids: list[str]) -> list[str]:
+        unique_ids = list(dict.fromkeys(session_ids))
+        if not unique_ids:
+            raise ValueError("At least one session id is required")
+        for session_id in unique_ids:
+            if not session_id or len(session_id) > 200 or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-." for char in session_id):
+                raise ValueError("Invalid session id")
+        placeholders = ",".join("?" for _ in unique_ids)
+        with _connection(self.database_path, readonly=False) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            found = {row["id"] for row in conn.execute(f"SELECT id FROM sessions WHERE id IN ({placeholders})", unique_ids)}
+            if len(found) != len(unique_ids):
+                conn.rollback()
+                return []
+            conn.execute(f"DELETE FROM messages WHERE session_id IN ({placeholders})", unique_ids)
+            conn.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", unique_ids)
+            conn.commit()
+        return unique_ids

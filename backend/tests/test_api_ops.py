@@ -23,7 +23,7 @@ def test_operational_pages_have_real_backing_data(tmp_path):
     (backups / "archon-backup-20260724_040000.tar.gz").write_bytes(b"backup")
     settings = Settings(
         archon_root=root, hermes_home=root / ".hermes", data_dir=root / ".data",
-        backup_dir=backups, auth_token="token", start_worker=False,
+        backup_dir=backups, auth_token="token", start_worker=False, profile="archon",
     )
 
     with TestClient(create_app(settings)) as client:
@@ -44,7 +44,7 @@ def test_operational_pages_have_real_backing_data(tmp_path):
 def test_file_write_and_destructive_routes_require_confirmation(tmp_path):
     root = tmp_path / "host"
     root.mkdir()
-    settings = Settings(archon_root=root, hermes_home=root / ".hermes", data_dir=root / ".data", auth_token="token", start_worker=False)
+    settings = Settings(archon_root=root, hermes_home=root / ".hermes", data_dir=root / ".data", auth_token="token", start_worker=False, profile="archon")
     headers = {"Authorization": "Bearer token"}
 
     with TestClient(create_app(settings)) as client:

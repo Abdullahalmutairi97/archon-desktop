@@ -44,4 +44,32 @@ describe('ArchonApi', () => {
     expect(events.map(({ seq, type }) => ({ seq, type }))).toEqual([{ seq: 41, type: 'task.running' }, { seq: 42, type: 'output' }])
     expect(cursor).toBe(42)
   })
+
+  it('removes the selected sessions through the authenticated batch endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, deleted: ['one', 'two'] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const api = new ArchonApi({ serverUrl: 'http://vps:8765', token: 'secret' })
+
+    await api.deleteSessions(['one', 'two'])
+
+    expect(fetchMock).toHaveBeenCalledWith('http://vps:8765/api/sessions', expect.objectContaining({
+      method: 'DELETE', headers: expect.objectContaining({ Authorization: 'Bearer secret' }), body: JSON.stringify({ session_ids: ['one', 'two'] }),
+    }))
+  })
+
+  it('falls back to the existing per-session endpoint when the server lacks batch removal', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'Method Not Allowed' }), { status: 405, statusText: 'Method Not Allowed' }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ tasks: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const api = new ArchonApi({ serverUrl: 'http://vps:8765', token: 'secret' })
+
+    await api.deleteSessions(['one', 'two'])
+
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://vps:8765/api/tasks', expect.anything())
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://vps:8765/api/sessions/one', expect.objectContaining({ method: 'DELETE' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://vps:8765/api/sessions/two', expect.objectContaining({ method: 'DELETE' }))
+  })
 })

@@ -20,13 +20,15 @@ from .hermes_runner import HermesRunner
 from .services.backups import BackupScheduleService, BackupService
 from .services.commands import CommandRunner
 from .services.cron import CronService
-from .services.files import FileService
+from .services.files import DEFAULT_READ_BYTES, MAX_READ_BYTES, FileService
 from .services.logs import LogService
 from .services.migration import MigrationService
 from .services.models import ModelService
 from .services.skills import SkillService
 from .services.status import StatusService
 from .services.terminal import TmuxService
+from .services.agents import AgentService
+from .services.kanban import KanbanService
 from .services.voice import VoiceService
 from .services.workspace import ProjectService, SessionService
 from .tasks import TaskEngine, TaskStore
@@ -38,9 +40,25 @@ class TaskCreate(BaseModel):
     model: str | None = None
     provider: str | None = None
     session_id: str | None = Field(default=None, max_length=200)
+    profile: str | None = Field(default=None, max_length=64)
     approval_mode: str = Field(default="approve", pattern="^(auto|approve|plan)$")
     chat_only: bool = False
     skills: list[str] = Field(default_factory=list)
+
+
+class KanbanCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    body: str = Field(default="", max_length=100_000)
+    assignee: str | None = Field(default=None, max_length=64)
+    priority: int = Field(default=0, ge=0, le=100)
+
+
+class KanbanAssign(BaseModel):
+    assignee: str = Field(min_length=1, max_length=64)
+
+
+class KanbanComment(BaseModel):
+    body: str = Field(min_length=1, max_length=20_000)
 
 
 class ModelUpdate(BaseModel):
@@ -61,6 +79,21 @@ class TextWrite(BaseModel):
 class FileDelete(BaseModel):
     path: str
     confirm: bool = False
+
+
+class SessionsDelete(BaseModel):
+    session_ids: list[str] = Field(min_length=1, max_length=120)
+
+
+class FileMove(BaseModel):
+    """Rename or copy. `path` is the source, `destination` the new path."""
+
+    path: str
+    destination: str
+
+
+class DirCreate(BaseModel):
+    path: str
 
 
 class BackupCreate(BaseModel):
@@ -132,12 +165,14 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     settings = settings or Settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     command_runner = CommandRunner()
+    agents = AgentService(settings.hermes_home, settings.profile)
+    kanban = KanbanService(settings.kanban_db, settings.hermes_executable, agents)
     store = TaskStore(Database(settings.database_path))
     engine = TaskEngine(store, runner or HermesRunner(settings.hermes_executable, settings.profile, settings.archon_root), settings.worker_poll_seconds)
     files = FileService(settings.archon_root)
     models = ModelService(settings.config_path, settings.profile_home / "provider_models_cache.json")
     projects = ProjectService(settings.profile_home / "projects.db")
-    sessions = SessionService(settings.profile_home / "state.db", projects)
+    sessions = SessionService(settings.profile_home / "state.db", projects, store.db)
     skills = SkillService(settings.skills_dir, settings.config_path)
     backups = BackupService(settings.backup_dir, settings.backup_script, settings.restore_script, command_runner)
     backup_schedule = BackupScheduleService(command_runner)
@@ -147,27 +182,36 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     terminals = TmuxService(settings.archon_root, command_runner)
     logs = LogService(settings.profile_home / "logs")
     voice = VoiceService(settings.hermes_home / "hermes-agent", settings.profile_home, command_runner)
-    worker_task: asyncio.Task | None = None
+    worker_tasks: list[asyncio.Task] = []
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal worker_task
+        nonlocal worker_tasks
         app.state.settings = settings
         app.state.store = store
         app.state.engine = engine
-        app.state.services = {"files": files, "models": models, "projects": projects, "sessions": sessions, "skills": skills, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice}
+        app.state.services = {"files": files, "models": models, "projects": projects, "sessions": sessions, "skills": skills, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
         if settings.start_worker:
-            worker_task = asyncio.create_task(engine.run_forever(), name="archon-task-worker")
+            # Each worker claims its own row. claim_next() is an atomic
+            # compare-and-swap (UPDATE ... WHERE id=? AND status='queued', then a
+            # rowcount check), so two workers can never take the same task.
+            worker_tasks = [
+                asyncio.create_task(engine.run_forever(), name=f"archon-task-worker-{index}")
+                for index in range(settings.worker_count)
+            ]
         yield
         engine.stop()
-        if worker_task:
-            worker_task.cancel()
+        # Signal them all first, then await — cancelling serially would let each
+        # worker start another task while the ones behind it are still running.
+        for worker in worker_tasks:
+            worker.cancel()
+        for worker in worker_tasks:
             try:
-                await worker_task
+                await worker
             except asyncio.CancelledError:
                 pass
 
-    app = FastAPI(title="Archon Desktop Server", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Archon Desktop Server", version="0.2.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"^(null|file://|https?://(127\.0\.0\.1|localhost)(:\d+)?)$",
@@ -194,6 +238,12 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     async def missing_file(_request, exc: FileNotFoundError):
         return JSONResponse(status_code=404, content={"detail": str(exc)})
 
+    # A name collision is the caller's to resolve, not a server fault. Without
+    # this it inherits OSError and surfaces as a 500.
+    @app.exception_handler(FileExistsError)
+    async def existing_file(_request, exc: FileExistsError):
+        return JSONResponse(status_code=409, content={"detail": f"{exc} already exists"})
+
     @app.exception_handler(KeyError)
     async def missing_key(_request, exc: KeyError):
         return JSONResponse(status_code=404, content={"detail": str(exc)})
@@ -210,6 +260,38 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     def server_info():
         return {"profile": settings.profile, "archon_root": str(settings.archon_root), "hermes_home": str(settings.hermes_home)}
 
+    @app.get("/api/agents", dependencies=protected)
+    def list_agents():
+        return {"agents": agents.list()}
+
+    @app.get("/api/kanban/tasks", dependencies=protected)
+    def kanban_list(limit: int = Query(300, ge=1, le=1000), archived: bool = False):
+        return {"cards": kanban.list(limit, archived), "stats": kanban.stats()}
+
+    @app.post("/api/kanban/tasks", status_code=201, dependencies=protected)
+    def kanban_create(payload: KanbanCreate):
+        return kanban.create(payload.title, payload.body, payload.assignee, payload.priority)
+
+    @app.get("/api/kanban/tasks/{task_id}", dependencies=protected)
+    def kanban_show(task_id: str):
+        return kanban.show(task_id)
+
+    @app.get("/api/kanban/tasks/{task_id}/log", dependencies=protected)
+    def kanban_log(task_id: str):
+        return kanban.log(task_id)
+
+    @app.post("/api/kanban/tasks/{task_id}/assign", dependencies=protected)
+    def kanban_assign(task_id: str, payload: KanbanAssign):
+        return kanban.assign(task_id, payload.assignee)
+
+    @app.post("/api/kanban/tasks/{task_id}/comment", dependencies=protected)
+    def kanban_comment(task_id: str, payload: KanbanComment):
+        return kanban.comment(task_id, payload.body)
+
+    @app.post("/api/kanban/tasks/{task_id}/{verb}", dependencies=protected)
+    def kanban_action(task_id: str, verb: str):
+        return kanban.action(task_id, verb)
+
     @app.get("/api/tasks", dependencies=protected)
     def list_tasks(limit: int = Query(100, ge=1, le=500)):
         return {"tasks": store.list(limit)}
@@ -221,6 +303,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         return {"task": store.submit(
             payload.prompt, payload.cwd, payload.model, payload.provider, payload.skills,
             payload.session_id, payload.approval_mode, payload.chat_only,
+            agents.resolve(payload.profile),
         )}
 
     @app.get("/api/tasks/{task_id}", dependencies=protected)
@@ -306,6 +389,36 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     def get_session_messages(session_id: str, limit: int = Query(500, ge=1, le=2000)):
         return {"messages": sessions.messages(session_id, limit=limit)}
 
+    @app.delete("/api/sessions", dependencies=protected)
+    def delete_sessions(payload: SessionsDelete):
+        session_ids = list(dict.fromkeys(payload.session_ids))
+        running = store.running_sessions(session_ids)
+        if running:
+            raise HTTPException(status_code=409, detail="Cancel the running task before deleting its session")
+        try:
+            deleted = sessions.delete_many(session_ids)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="One or more sessions were not found")
+        store.purge_sessions(deleted)
+        return {"ok": True, "deleted": deleted}
+
+    @app.delete("/api/sessions/{session_id}", dependencies=protected)
+    def delete_session(session_id: str):
+        if store.has_running_session(session_id):
+            raise HTTPException(status_code=409, detail="Cancel the running task before deleting its session")
+        try:
+            deleted = sessions.delete(session_id)
+        except ValueError as exc:
+            # A malformed id is the caller's mistake, not a server fault — the
+            # service raises, and an uncaught raise here would surface as a 500.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Session not found")
+        store.purge_session(session_id)
+        return {"ok": True}
+
     @app.get("/api/models", dependencies=protected)
     def get_models():
         return models.get()
@@ -331,8 +444,15 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         return {"root": str(settings.archon_root), "path": path, "items": files.list_dir(path)}
 
     @app.get("/api/files/read", dependencies=protected)
-    def read_file(path: str):
-        return files.read_text(path)
+    def read_file(
+        path: str,
+        max_bytes: int = Query(DEFAULT_READ_BYTES, ge=1, le=MAX_READ_BYTES),
+        allow_binary: bool = Query(False),
+    ):
+        # `allow_binary` is a read-only affordance: the reply is lossy for
+        # undecodable bytes and is flagged `binary` so the caller refuses to
+        # write it back. Same for `truncated` on an oversized file.
+        return files.read_text(path, max_bytes, allow_binary=allow_binary)
 
     @app.put("/api/files/text", dependencies=protected)
     def write_text(payload: TextWrite):
@@ -358,6 +478,18 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     def download_file(path: str):
         resolved = files.resolve(path)
         return FileResponse(resolved, filename=resolved.name)
+
+    @app.post("/api/files/rename", dependencies=protected)
+    def rename_file(payload: FileMove):
+        return files.rename(payload.path, payload.destination)
+
+    @app.post("/api/files/copy", dependencies=protected)
+    def copy_file(payload: FileMove):
+        return files.copy(payload.path, payload.destination)
+
+    @app.post("/api/files/mkdir", dependencies=protected)
+    def make_dir(payload: DirCreate):
+        return files.mkdir(payload.path)
 
     @app.delete("/api/files", dependencies=protected)
     def delete_file(payload: FileDelete):

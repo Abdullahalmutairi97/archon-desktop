@@ -62,6 +62,17 @@ export class ArchonApi {
   async projects() { return (await this.request<{ projects: Project[] }>('/api/projects')).projects }
   async sessions(projectId?: string) { const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''; return (await this.request<{ sessions: HermesSession[] }>(`/api/sessions${query}`)).sessions }
   async sessionMessages(id: string) { return (await this.request<{ messages: ChatMessage[] }>(`/api/sessions/${encodeURIComponent(id)}/messages`)).messages }
+  async deleteSessions(sessionIds: string[]) {
+    try {
+      return await this.request<{ ok: boolean; deleted: string[] }>('/api/sessions', { method: 'DELETE', body: JSON.stringify({ session_ids: sessionIds }) })
+    } catch (cause) {
+      if (!(cause instanceof Error) || cause.message !== 'Method Not Allowed') throw cause
+      const running = (await this.listTasks()).some((task) => task.status === 'running' && sessionIds.includes(task.session_id || ''))
+      if (running) throw new Error('Cancel the running task before deleting its session')
+      await Promise.all(sessionIds.map((sessionId) => this.request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })))
+      return { ok: true, deleted: sessionIds }
+    }
+  }
   setModel(provider: string, model: string) { return this.request('/api/models/default', { method: 'PUT', body: JSON.stringify({ provider, model }) }) }
   async skills() { return (await this.request<{ skills: Skill[] }>('/api/skills')).skills }
   inspectSkill(name: string) { return this.request<Skill>(`/api/skills/${encodeURIComponent(name)}`) }

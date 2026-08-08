@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -58,6 +59,49 @@ async def test_runner_returns_the_session_id_reported_by_hermes(tmp_path):
     )
 
     assert result == {"text": "answer", "exit_code": 0, "session_id": "20260725_session"}
+
+
+@pytest.mark.asyncio
+async def test_runner_announces_session_before_process_exit_and_only_once(tmp_path):
+    executable = tmp_path / "fake-hermes"
+    release_file = tmp_path / "release"
+    executable.write_text(
+        f'''#!/usr/bin/env bash
+printf 'session_id: live-session\\n' >&2
+while [ ! -e "{release_file}" ]; do sleep 0.02; done
+printf 'session_id: live-session\\n' >&2
+printf 'done\\n'
+'''
+    )
+    executable.chmod(0o755)
+    runner = HermesRunner(executable, profile="archon")
+    events = []
+    announced = asyncio.Event()
+
+    async def record(kind, data):
+        events.append((kind, data))
+        if kind == "session":
+            announced.set()
+
+    running = asyncio.create_task(
+        runner.run(
+            {"id": "live-session-task", "prompt": "hello", "cwd": str(tmp_path), "skills": []},
+            record,
+        )
+    )
+    try:
+        await asyncio.wait_for(announced.wait(), timeout=2)
+        assert not running.done()
+        assert [(kind, data) for kind, data in events if kind == "session"] == [
+            ("session", {"session_id": "live-session"})
+        ]
+    finally:
+        release_file.touch()
+
+    result = await asyncio.wait_for(running, timeout=2)
+
+    assert result["session_id"] == "live-session"
+    assert len([kind for kind, _ in events if kind == "session"]) == 1
 
 
 @pytest.mark.asyncio
@@ -131,6 +175,117 @@ printf 'done\\n'
         assert any(value.startswith("APPROVE STEPS MODE:") for value in args)
     if approval_mode == "plan":
         assert any(value.startswith("PLAN MODE:") for value in args)
+
+
+@pytest.mark.asyncio
+async def test_runner_translates_archon_controls_and_preserves_existing_streams(tmp_path):
+    executable = tmp_path / "fake-hermes"
+    executable.write_text(
+        '''#!/usr/bin/env python3
+import json
+import sys
+
+def control(payload):
+    print("@@archon " + json.dumps(payload, separators=(",", ":")), file=sys.stderr, flush=True)
+
+control({"event": "message.delta", "text": "Hello "})
+control({"event": "tool", "id": "call-1", "phase": "start", "tool": "shell", "target": "pytest -k cancel"})
+control({"event": "message.delta", "text": "world"})
+control({"event": "tool", "id": "call-1", "phase": "end", "tool": "shell", "target": "pytest -k cancel", "duration": 12.41, "exit_code": 0, "detail": "x" * 5000})
+control({"event": "message.done"})
+print("@@archon not-json", file=sys.stderr, flush=True)
+print("session_id: live-session", file=sys.stderr, flush=True)
+print("final output", flush=True)
+'''
+    )
+    executable.chmod(0o755)
+    runner = HermesRunner(executable, profile="archon")
+    events = []
+
+    result = await runner.run(
+        {"id": "control-task", "prompt": "hello", "cwd": str(tmp_path), "skills": []},
+        lambda kind, data: _record(events, kind, data),
+    )
+
+    controls = [(kind, data) for kind, data in events if kind in {"message.delta", "message.done", "tool"}]
+    assert [kind for kind, _ in controls] == [
+        "message.delta", "tool", "message.delta", "tool", "message.done"
+    ]
+    deltas = [data for kind, data in controls if kind == "message.delta"]
+    assert "".join(delta["text"] for delta in deltas) == "Hello world"
+    assert len({delta["message_id"] for delta in deltas}) == 1
+    assert controls[-1] == ("message.done", {})
+    tool_end = next(data for kind, data in controls if kind == "tool" and data["phase"] == "end")
+    assert tool_end["id"] == "call-1"
+    assert tool_end["duration"] == 12.41
+    assert tool_end["exit_code"] == 0
+    assert len(tool_end["detail"]) <= 4000
+    assert ("diagnostic", {"text": "@@archon not-json"}) in events
+    assert not any(
+        kind == "diagnostic" and data.get("text", "").startswith("@@archon {")
+        for kind, data in events
+    )
+    assert any(kind == "output" and data["text"] == "final output" for kind, data in events)
+    assert ("session", {"session_id": "live-session"}) in events
+    assert result["session_id"] == "live-session"
+
+
+@pytest.mark.asyncio
+async def test_runner_caps_and_chunks_text_payloads_without_losing_content(tmp_path):
+    executable = tmp_path / "fake-hermes"
+    executable.write_text(
+        '''#!/usr/bin/env python3
+import json
+import sys
+
+print("O" * 9000, flush=True)
+print("D" * 9000, file=sys.stderr, flush=True)
+print("@@archon " + json.dumps({"event": "message.delta", "text": "M" * 9000}), file=sys.stderr, flush=True)
+print("@@archon " + json.dumps({"event": "message.done"}), file=sys.stderr, flush=True)
+'''
+    )
+    executable.chmod(0o755)
+    runner = HermesRunner(executable, profile="archon")
+    events = []
+
+    await runner.run(
+        {"id": "cap-task", "prompt": "hello", "cwd": str(tmp_path), "skills": []},
+        lambda kind, data: _record(events, kind, data),
+    )
+
+    for kind in ("output", "diagnostic", "message.delta"):
+        payloads = [data["text"] for event_kind, data in events if event_kind == kind]
+        assert payloads
+        assert all(len(text) <= 4096 for text in payloads)
+    assert "".join(data["text"] for kind, data in events if kind == "output") == "O" * 9000
+    assert "".join(data["text"] for kind, data in events if kind == "diagnostic") == "D" * 9000
+    assert "".join(data["text"] for kind, data in events if kind == "message.delta") == "M" * 9000
+
+
+@pytest.mark.asyncio
+async def test_runner_uses_a_new_message_id_for_each_reply(tmp_path):
+    executable = tmp_path / "fake-hermes"
+    executable.write_text(
+        '''#!/usr/bin/env python3
+import json
+import sys
+print("@@archon " + json.dumps({"event": "message.delta", "text": "reply"}), file=sys.stderr)
+print("@@archon " + json.dumps({"event": "message.done"}), file=sys.stderr)
+'''
+    )
+    executable.chmod(0o755)
+    runner = HermesRunner(executable, profile="archon")
+    reply_ids = []
+
+    for task_id in ("reply-one", "reply-two"):
+        events = []
+        await runner.run(
+            {"id": task_id, "prompt": "hello", "cwd": str(tmp_path), "skills": []},
+            lambda kind, data: _record(events, kind, data),
+        )
+        reply_ids.append(next(data["message_id"] for kind, data in events if kind == "message.delta"))
+
+    assert reply_ids[0] != reply_ids[1]
 
 
 async def _record(events, kind, data):

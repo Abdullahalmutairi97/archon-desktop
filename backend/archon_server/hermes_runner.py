@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
+import uuid
 from pathlib import Path
+
+
+CONTROL_PREFIX = "@@archon "
+MAX_EVENT_TEXT = 4096
+MAX_TOOL_DETAIL = 4000
+MAX_TOOL_TARGET = 1000
 
 
 class RunnerCancelled(RuntimeError):
@@ -40,7 +48,7 @@ class HermesRunner:
             )
         else:
             toolset = ""
-        argv = [str(self.executable), "--profile", self.profile, "chat", "-q", prompt, "-Q", "--source", "archon-desktop"]
+        argv = [str(self.executable), "--profile", task.get("profile") or self.profile, "chat", "-q", prompt, "-Q", "--source", "archon-desktop"]
         if toolset:
             # `context_engine` is Hermes' valid zero-tool toolset. Do not use
             # `safe` here: that set still exposes web, vision and image tools.
@@ -59,8 +67,16 @@ class HermesRunner:
         if skills:
             argv += ["-s", ",".join(skills)]
         cwd = task.get("cwd") or str(self.default_cwd)
+        child_env = os.environ.copy()
+        child_env["ARCHON_DESKTOP_CONTROL_MODULE"] = str(
+            Path(__file__).with_name("hermes_control.py")
+        )
         process = await asyncio.create_subprocess_exec(
-            *argv, cwd=cwd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            *argv,
+            cwd=cwd,
+            env=child_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
         )
         task_id = task["id"]
@@ -68,15 +84,115 @@ class HermesRunner:
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
 
+        announced_session = False
+        reply_message_id = uuid.uuid4().hex
+
+        async def emit_text(event_type: str, text: str) -> None:
+            for start in range(0, len(text), MAX_EVENT_TEXT):
+                await emit(event_type, {"text": text[start : start + MAX_EVENT_TEXT]})
+
+        async def handle_control(payload: object) -> bool:
+            if not isinstance(payload, dict):
+                return False
+            event = payload.get("event")
+            if event == "message.delta":
+                text = payload.get("text")
+                if not isinstance(text, str):
+                    return False
+                for start in range(0, len(text), MAX_EVENT_TEXT):
+                    await emit(
+                        "message.delta",
+                        {
+                            "message_id": reply_message_id,
+                            "text": text[start : start + MAX_EVENT_TEXT],
+                        },
+                    )
+                return True
+            if event == "message.done":
+                await emit("message.done", {})
+                return True
+            if event == "output":
+                text = payload.get("text")
+                if not isinstance(text, str):
+                    return False
+                await emit_text("output", text)
+                return True
+            if event != "tool":
+                return False
+
+            call_id = payload.get("id")
+            phase = payload.get("phase")
+            tool = payload.get("tool")
+            target = payload.get("target")
+            if (
+                not isinstance(call_id, str)
+                or not call_id
+                or not isinstance(tool, str)
+                or not tool
+                or not isinstance(target, str)
+                or not target
+            ):
+                return False
+            if phase not in {"start", "end"}:
+                return False
+            bounded: dict[str, object] = {
+                "id": call_id[:200],
+                "phase": phase,
+                "tool": tool[:100],
+                "target": target[:MAX_TOOL_TARGET],
+            }
+            if phase == "end":
+                duration = payload.get("duration")
+                exit_code = payload.get("exit_code")
+                detail = payload.get("detail", "")
+                if not isinstance(duration, (int, float)) or isinstance(duration, bool):
+                    return False
+                if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+                    return False
+                if not isinstance(detail, str):
+                    return False
+                bounded.update(
+                    {
+                        "duration": round(max(0.0, float(duration)), 2),
+                        "exit_code": exit_code,
+                        "detail": detail[:MAX_TOOL_DETAIL],
+                    }
+                )
+                for key in ("added", "removed"):
+                    value = payload.get(key)
+                    if value is not None:
+                        if not isinstance(value, int) or isinstance(value, bool):
+                            return False
+                        bounded[key] = max(0, value)
+            await emit("tool", bounded)
+            return True
+
         async def pump(stream, sink, event_type):
+            nonlocal announced_session
             while True:
                 raw = await stream.readline()
                 if not raw:
                     break
                 text = raw.decode(errors="replace").rstrip("\r\n")
+                if event_type == "diagnostic" and text.startswith(CONTROL_PREFIX):
+                    try:
+                        payload = json.loads(text[len(CONTROL_PREFIX) :])
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        payload = None
+                    if payload is not None and await handle_control(payload):
+                        continue
                 sink.append(text)
+                # Hermes prints "session_id: <id>" on stderr early in the run.
+                # Announcing it here rather than waiting for exit is what makes a
+                # running task addressable: the row gets its session immediately,
+                # so follow-up prompts continue it instead of opening a new one.
+                if not announced_session and text.startswith("session_id:"):
+                    session_id = text.split(":", 1)[1].strip()
+                    if session_id:
+                        announced_session = True
+                        await emit("session", {"session_id": session_id[:256]})
                 if text:
-                    await emit(event_type, {"text": text})
+                    await emit_text(event_type, text)
 
         try:
             await asyncio.gather(

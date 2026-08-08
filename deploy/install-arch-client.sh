@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REMOTE="${ARCHON_VPS:-archon@100.80.70.23}"
+REMOTE="${ARCHON_HOST:-archon@100.94.49.55}"
 REMOTE_ROOT="/home/archon/projects/archon-desktop"
 VERSION="0.5.0"
 LAUNCH=false

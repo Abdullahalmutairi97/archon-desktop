@@ -4,7 +4,7 @@ import type { ConnectionConfig } from '../lib/types'
 import { BrandGlyph } from './BrandGlyph'
 
 export function ConnectionSetup({ initial, onSave }: { initial?: ConnectionConfig; onSave(value: ConnectionConfig): Promise<void> }) {
-  const [serverUrl,setServerUrl] = useState(initial?.serverUrl || 'http://100.80.70.23:8719')
+  const [serverUrl,setServerUrl] = useState(initial?.serverUrl || 'http://100.94.49.55:9700')
   const [token,setToken] = useState(initial?.token || '')
   const [error,setError] = useState('')
   const [saving,setSaving] = useState(false)
