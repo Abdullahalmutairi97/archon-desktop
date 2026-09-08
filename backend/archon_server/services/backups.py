@@ -21,11 +21,17 @@ class BackupService:
 
     def list(self) -> list[dict]:
         grouped: dict[str, dict] = {}
-        if not self.backup_dir.exists():
+        try:
+            paths = list(self.backup_dir.iterdir()) if self.backup_dir.exists() else []
+        except OSError:
             return []
-        for path in self.backup_dir.iterdir():
+        for path in paths:
             match = _BACKUP_RE.match(path.name)
-            if not match or not path.is_file():
+            try:
+                is_file = path.is_file()
+            except OSError:
+                continue
+            if not match or not is_file:
                 continue
             backup_id = match.group(1)
             item = grouped.setdefault(backup_id, {
@@ -33,13 +39,17 @@ class BackupService:
                 "plain_path": None, "encrypted_path": None, "plain_size": None,
                 "encrypted_size": None, "encrypted": False,
             })
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
             if path.name.endswith(".age"):
                 item["encrypted_path"] = str(path)
-                item["encrypted_size"] = path.stat().st_size
+                item["encrypted_size"] = size
                 item["encrypted"] = True
             else:
                 item["plain_path"] = str(path)
-                item["plain_size"] = path.stat().st_size
+                item["plain_size"] = size
         return sorted(grouped.values(), key=lambda item: item["id"], reverse=True)
 
     async def create(self, *, confirm: bool) -> dict:
@@ -89,10 +99,13 @@ class BackupScheduleService:
                 key, value = line.split("=", 1)
                 values[key] = value
         calendar = None
-        if self.override_path.exists():
-            for line in self.override_path.read_text().splitlines():
-                if line.startswith("OnCalendar=") and line != "OnCalendar=":
-                    calendar = line.split("=", 1)[1]
+        try:
+            override_lines = self.override_path.read_text().splitlines() if self.override_path.exists() else []
+        except OSError:
+            override_lines = []
+        for line in override_lines:
+            if line.startswith("OnCalendar=") and line != "OnCalendar=":
+                calendar = line.split("=", 1)[1]
         return {"calendar": calendar, **values}
 
     async def set_schedule(self, calendar: str, *, confirm: bool) -> dict:
@@ -107,9 +120,11 @@ class BackupScheduleService:
         except PermissionError:
             with tempfile.NamedTemporaryFile("w", delete=False) as handle:
                 handle.write(content)
-                temp_path = handle.name
-            result = await self.commands.run(["sudo", "install", "-D", "-m", "0644", temp_path, str(self.override_path)])
-            Path(temp_path).unlink(missing_ok=True)
+                temp_path = Path(handle.name)
+            try:
+                result = await self.commands.run(["sudo", "install", "-D", "-m", "0644", str(temp_path), str(self.override_path)])
+            finally:
+                temp_path.unlink(missing_ok=True)
             if result["returncode"]:
                 raise RuntimeError(result["stderr"] or "Could not install timer override")
         for argv in (["sudo", "systemctl", "daemon-reload"], ["sudo", "systemctl", "restart", "archon-backup.timer"]):

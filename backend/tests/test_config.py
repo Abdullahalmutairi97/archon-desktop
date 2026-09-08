@@ -3,6 +3,14 @@ from pathlib import Path
 from archon_server.config import Settings
 
 
+def test_desktop_release_default_matches_verified_baseline(monkeypatch):
+    import json
+
+    monkeypatch.delenv("ARCHON_DESKTOP_DESKTOP_VERSION", raising=False)
+    baseline = Path(__file__).resolve().parents[2] / "current" / "baseline.json"
+    assert Settings(_env_file=None).desktop_version == json.loads(baseline.read_text())["version"]
+
+
 def test_paths_are_derived_from_config_for_mini_pc_migration(tmp_path):
     home = tmp_path / "new-machine"
     settings = Settings(

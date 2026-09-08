@@ -3,6 +3,7 @@ export {}
 declare global {
   interface Window {
     archon?: {
+      readClipboardImage(): Promise<string | null>
       getConnection(): Promise<{ serverUrl: string; token: string; secureStorage: boolean }>
       setConnection(value: { serverUrl: string; token: string }): Promise<{ serverUrl: string; token: string; secureStorage: boolean }>
       getSettings(): Promise<Record<string, unknown>>

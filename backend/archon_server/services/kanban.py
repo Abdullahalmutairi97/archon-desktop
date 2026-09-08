@@ -51,13 +51,25 @@ class KanbanService:
                     ORDER BY priority DESC, created_at DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
-            runs = {
-                r["task_id"]: dict(r)
-                for r in conn.execute(
-                    """SELECT task_id, outcome, summary, profile, started_at, ended_at
-                       FROM task_runs WHERE id IN (SELECT MAX(id) FROM task_runs GROUP BY task_id)"""
-                ).fetchall()
-            }
+            runs = {}
+            if rows:
+                task_ids = [str(row["id"]) for row in rows]
+                placeholders = ",".join("?" for _ in task_ids)
+                runs = {
+                    r["task_id"]: dict(r)
+                    for r in conn.execute(
+                        f"""SELECT r.task_id, r.outcome, r.summary, r.profile,
+                                   r.started_at, r.ended_at
+                            FROM task_runs AS r
+                            JOIN (
+                                SELECT task_id, MAX(id) AS id
+                                FROM task_runs
+                                WHERE task_id IN ({placeholders})
+                                GROUP BY task_id
+                            ) AS latest ON latest.id = r.id""",
+                        task_ids,
+                    ).fetchall()
+                }
         out = []
         for row in rows:
             item = dict(row)

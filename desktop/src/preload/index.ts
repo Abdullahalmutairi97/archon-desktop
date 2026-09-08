@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('archon', {
+  readClipboardImage: () => ipcRenderer.invoke('clipboard:read-image'),
   getConnection: () => ipcRenderer.invoke('connection:get'),
   setConnection: (value: { serverUrl: string; token: string }) => ipcRenderer.invoke('connection:set', value),
   getSettings: () => ipcRenderer.invoke('settings:get'),

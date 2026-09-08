@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ArchonApi } from '../lib/api'
-import type { HermesSession, ModelCatalog, Task } from '../lib/types'
+import type { PrimeSession, ModelCatalog, Task } from '../lib/types'
 import { ErrorNotice } from '../components'
 import { QuillGlyph, WaveGlyph } from '../components/ComposerGlyphs'
 import { ModelPicker } from '../components/ModelPicker'
@@ -22,7 +22,7 @@ const clock = (value: string | number) => new Date(value).toLocaleTimeString([],
 
 export function ChatsPage({ api, sessions, tasks, catalog, onOpen, onCreated }: {
   api: ArchonApi
-  sessions: HermesSession[]
+  sessions: PrimeSession[]
   tasks: Task[]
   catalog?: ModelCatalog
   onOpen(sessionId: string): void
@@ -30,7 +30,7 @@ export function ChatsPage({ api, sessions, tasks, catalog, onOpen, onCreated }: 
 }) {
   const chats = useMemo(() => sessions.filter((session) => !session.project_id), [sessions])
   const groups = useMemo(() => {
-    const value = new Map<string,HermesSession[]>()
+    const value = new Map<string,PrimeSession[]>()
     chats.forEach((chat) => { const key = day(chat.last_active); value.set(key,[...(value.get(key)||[]),chat]) })
     return [...value.entries()]
   }, [chats])

@@ -1,5 +1,6 @@
 import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
 from archon_server.app import create_app
@@ -57,8 +58,11 @@ def test_delete_session_purges_its_backend_tasks_and_events(tmp_path):
     with TestClient(app) as client:
         task = app.state.store.submit("delete this chat", session_id=session_id, chat_only=True)
         app.state.store.append_event(task["id"], "progress", {"message": "saved"})
+        app.state.store.complete(task["id"], {"text": "done"})
 
         response = client.delete(f"/api/sessions/{session_id}", headers=headers)
+        with pytest.raises(ValueError, match="deleted"):
+            app.state.store.submit("late turn", session_id=session_id)
 
     assert response.status_code == 200
     assert _count(settings.profile_home / "state.db", "sessions", "WHERE id=?", (session_id,)) == 0
@@ -121,6 +125,8 @@ def test_delete_multiple_sessions_purges_all_selected_session_history(tmp_path):
     with TestClient(app) as client:
         first_task = app.state.store.submit("first history", session_id=first, chat_only=True)
         second_task = app.state.store.submit("second history", session_id=second, chat_only=True)
+        app.state.store.complete(first_task["id"], {"text": "done"})
+        app.state.store.complete(second_task["id"], {"text": "done"})
         response = client.request(
             "DELETE", "/api/sessions", headers=headers, json={"session_ids": [first, second]}
         )
@@ -161,3 +167,19 @@ def test_delete_multiple_sessions_refuses_the_entire_batch_when_one_is_running(t
     assert _count(settings.profile_home / "state.db", "sessions") == 2
     assert _count(settings.profile_home / "state.db", "messages") == 2
     assert _count(settings.database_path, "tasks", "WHERE id IN (?,?)", (queued_task["id"], running_task["id"])) == 2
+
+
+def test_delete_queued_session_is_refused_without_losing_the_turn(tmp_path):
+    settings = _settings(tmp_path)
+    session_id = "queued-delete-session"
+    _seed_state(settings.profile_home / "state.db", session_id)
+    headers = {"Authorization": "Bearer token"}
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        task = app.state.store.submit("accepted turn", session_id=session_id, chat_only=True)
+        response = client.delete(f"/api/sessions/{session_id}", headers=headers)
+
+    assert response.status_code == 409
+    assert _count(settings.profile_home / "state.db", "sessions", "WHERE id=?", (session_id,)) == 1
+    assert _count(settings.database_path, "tasks", "WHERE id=?", (task["id"],)) == 1

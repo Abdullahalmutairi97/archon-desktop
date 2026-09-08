@@ -53,3 +53,24 @@ async def test_tmux_rejects_cwd_outside_root(tmp_path):
     service = TmuxService(tmp_path, FakeCommands())
     with pytest.raises(PermissionError):
         await service.create("bad", "../outside")
+
+
+@pytest.mark.asyncio
+async def test_tmux_list_ignores_malformed_metadata(tmp_path):
+    commands = FakeCommands([
+        {
+            "returncode": 0,
+            "stdout": "archon-desktop-bad|not-a-number|1700000000\narchon-desktop-good|1|1700000000\n",
+            "stderr": "",
+        }
+    ])
+    service = TmuxService(tmp_path, commands)
+
+    sessions = await service.list()
+
+    assert sessions == [{
+        "name": "archon-desktop-good",
+        "windows": 1,
+        "created_at_epoch": 1700000000,
+        "persistent": True,
+    }]

@@ -1,0 +1,13 @@
+{
+  "name": "archon-desktop-repository",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Archon Desktop — verified AbdullahPC v0.3.0 baseline and legacy history",
+  "scripts": {
+    "setup": "npm --prefix current ci",
+    "test": "npm --prefix current test",
+    "build": "npm --prefix current run build --",
+    "test:backend": "python3 scripts/test-backend.py",
+    "test:legacy": "npm --prefix desktop test"
+  }
+}

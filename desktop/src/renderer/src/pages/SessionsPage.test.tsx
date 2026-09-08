@@ -3,9 +3,9 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import '@testing-library/jest-dom/vitest'
 import { vi } from 'vitest'
 import { SessionsPage } from './SessionsPage'
-import type { HermesSession } from '../lib/types'
+import type { PrimeSession } from '../lib/types'
 
-const sessions: HermesSession[] = [
+const sessions: PrimeSession[] = [
   { id: 'first', source: 'desktop', title: 'First session', model: 'gpt-test', cwd: '/work', started_at: '2026-08-02T10:00:00Z', last_active: '2026-08-02T10:00:00Z', message_count: 2, active: false, preview: 'First preview' },
   { id: 'second', source: 'desktop', title: 'Second session', model: 'gpt-test', cwd: '/work', started_at: '2026-08-02T09:00:00Z', last_active: '2026-08-02T09:00:00Z', message_count: 3, active: false, preview: 'Second preview' },
 ]

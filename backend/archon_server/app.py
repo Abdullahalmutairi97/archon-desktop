@@ -4,7 +4,10 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
+import re
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
@@ -12,11 +15,12 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .config import Settings
 from .db import Database
-from .hermes_runner import HermesRunner
+from .prime_runner import PrimeRunner
+from .pi_runner import PiRunner
 from .services.backups import BackupScheduleService, BackupService
 from .services.commands import CommandRunner
 from .services.cron import CronService
@@ -25,25 +29,83 @@ from .services.logs import LogService
 from .services.migration import MigrationService
 from .services.models import ModelService
 from .services.skills import SkillService
+from .services.prime_skills import PrimeSkillService
+from .services.agent_resources import AgentResourceService
 from .services.status import StatusService
 from .services.terminal import TmuxService
 from .services.agents import AgentService
+from .services.telegram import TelegramBotClient, TelegramBridge
 from .services.kanban import KanbanService
 from .services.voice import VoiceService
-from .services.workspace import ProjectService, SessionService
+from .services.workspace import ProjectService, SessionService, PrimeSessionService
 from .tasks import TaskEngine, TaskStore
+
+
+logger = logging.getLogger(__name__)
 
 
 class TaskCreate(BaseModel):
     prompt: str = Field(min_length=1, max_length=100_000)
-    cwd: str | None = None
-    model: str | None = None
-    provider: str | None = None
+    cwd: str | None = Field(default=None, max_length=1000)
+    model: str | None = Field(default=None, max_length=100)
+    provider: str | None = Field(default=None, max_length=100)
     session_id: str | None = Field(default=None, max_length=200)
+    project_id: str | None = Field(default=None, max_length=200)
     profile: str | None = Field(default=None, max_length=64)
     approval_mode: str = Field(default="approve", pattern="^(auto|approve|plan)$")
     chat_only: bool = False
-    skills: list[str] = Field(default_factory=list)
+    skills: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=50)
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    path: str | None = Field(default=None, max_length=1000)
+    description: str = Field(default="", max_length=2000)
+
+
+class SessionProjectUpdate(BaseModel):
+    project_id: str | None = Field(default=None, max_length=200)
+
+
+class SessionDeleteBatch(BaseModel):
+    session_ids: list[str] = Field(min_length=1, max_length=500)
+
+
+class CollaborationMessage(BaseModel):
+    sender: str
+    body: str = Field(min_length=1, max_length=100_000)
+    recipient: str | None = None
+    kind: str = "message"
+
+
+class EchoRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str
+
+    @field_validator("message")
+    @classmethod
+    def normalize_message(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("message must not be empty")
+        if len(normalized) > 200:
+            raise ValueError("message must be 200 characters or fewer")
+        return normalized
+
+
+class CollaborationStatus(BaseModel):
+    status: str
+    task: str = ""
+
+
+class CollaborationContext(BaseModel):
+    value: Any
+
+
+class CollaborationLock(BaseModel):
+    owner: str
+    reason: str = ""
 
 
 class KanbanCreate(BaseModel):
@@ -72,8 +134,8 @@ class SkillToggle(BaseModel):
 
 
 class TextWrite(BaseModel):
-    path: str
-    content: str
+    path: str = Field(max_length=1000)
+    content: str = Field(max_length=10_000_000)
 
 
 class FileDelete(BaseModel):
@@ -88,12 +150,12 @@ class SessionsDelete(BaseModel):
 class FileMove(BaseModel):
     """Rename or copy. `path` is the source, `destination` the new path."""
 
-    path: str
-    destination: str
+    path: str = Field(max_length=1000)
+    destination: str = Field(max_length=1000)
 
 
 class DirCreate(BaseModel):
-    path: str
+    path: str = Field(max_length=1000)
 
 
 class BackupCreate(BaseModel):
@@ -101,11 +163,11 @@ class BackupCreate(BaseModel):
 
 
 class BackupInspect(BaseModel):
-    source: str
+    source: str = Field(max_length=1000)
 
 
 class BackupRestore(BaseModel):
-    source: str
+    source: str = Field(max_length=1000)
     paths: list[str] = Field(default_factory=list)
     all_files: bool = False
     confirm: bool = False
@@ -122,10 +184,10 @@ class CronAction(BaseModel):
 
 
 class CronCreate(BaseModel):
-    schedule: str
-    prompt: str
-    name: str = ""
-    deliver: str = "local"
+    schedule: str = Field(max_length=120)
+    prompt: str = Field(min_length=1, max_length=100_000)
+    name: str = Field(default="", max_length=300)
+    deliver: str = Field(default="local", max_length=64)
     confirm: bool = False
 
 
@@ -161,6 +223,17 @@ def _event_cursor(after: int, last_event_id: str | None) -> int:
     return max(0, after, header_cursor)
 
 
+def _sse_event_batch(store: TaskStore, cursor: int, limit: int = 512) -> tuple[int, list[str]]:
+    """Encode one ordered event burst without adding a delay between tokens."""
+    frames: list[str] = []
+    for event in store.all_events(cursor, limit=limit):
+        cursor = event["seq"]
+        frames.append(
+            f"id: {cursor}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        )
+    return cursor, frames
+
+
 def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     settings = settings or Settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -168,12 +241,52 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     agents = AgentService(settings.hermes_home, settings.profile)
     kanban = KanbanService(settings.kanban_db, settings.hermes_executable, agents)
     store = TaskStore(Database(settings.database_path))
-    engine = TaskEngine(store, runner or HermesRunner(settings.hermes_executable, settings.profile, settings.archon_root), settings.worker_poll_seconds)
+    # Archon Desktop is Prime-only. Hermes is not started, resumed, or used as
+    # a fallback; native Prime sessions remain isolated from any legacy Hermes
+    # state that may exist on the host.
+    selected_runner = runner or {
+        "default": PrimeRunner(
+            settings.prime_executable,
+            settings.data_dir / "prime-sessions",
+            settings.archon_root,
+            settings.prime_agent_session_dir,
+        ),
+        "pi": PiRunner(
+            Path.home() / ".local/bin/pi",
+            settings.data_dir / "prime-sessions",
+            settings.archon_root,
+        ),
+    }
+    engine = TaskEngine(store, selected_runner, settings.worker_poll_seconds, settings.quota_retry_seconds)
     files = FileService(settings.archon_root)
-    models = ModelService(settings.config_path, settings.profile_home / "provider_models_cache.json")
+    models = ModelService(
+        settings.config_path, settings.profile_home / "provider_models_cache.json", settings.prime_auth_path
+    )
     projects = ProjectService(settings.profile_home / "projects.db")
     sessions = SessionService(settings.profile_home / "state.db", projects, store.db)
-    skills = SkillService(settings.skills_dir, settings.config_path)
+    prime_sessions = PrimeSessionService(
+        store.db,
+        settings.data_dir / "prime-sessions",
+        settings.prime_agent_session_dir,
+        projects,
+        settings.prime_agent_artifact_dir,
+        settings.prime_executable,
+        pi_session_root=settings.pi_agent_session_dir,
+    )
+    skills = PrimeSkillService(settings.prime_bundled_skills_dir, settings.prime_user_skills_dir)
+    resource_home = settings.resource_home.expanduser()
+    resources = AgentResourceService({
+        runtime: {'agent_dir': str(agent_dir.expanduser()), 'runtime_dir': str(runtime_dir.expanduser()),
+                  'user_skills_dir': str((settings.prime_user_skills_dir if runtime == 'prime' else agent_dir / 'skills').expanduser()),
+                  'builtin_skills_dir': str(settings.prime_bundled_skills_dir.expanduser()),
+                  'home': str(resource_home), 'shared_dir': str(resource_home / '.agents' / 'skills'),
+                  'package_roots': [str(p.expanduser()) for p in settings.resource_package_roots],
+                  'mcp_config_paths': [str(p.expanduser()) for p in [settings.pi_resources_dir / 'mcp.json', settings.pi_resources_dir / 'mcp-servers.json', *settings.pi_mcp_config_paths]]}
+        for runtime, agent_dir, runtime_dir in [
+            ('prime', settings.prime_resources_dir, settings.prime_runtime_dir),
+            ('pi', settings.pi_resources_dir, settings.pi_runtime_dir),
+        ]
+    }, node=settings.resource_node_executable)
     backups = BackupService(settings.backup_dir, settings.backup_script, settings.restore_script, command_runner)
     backup_schedule = BackupScheduleService(command_runner)
     cron = CronService(settings.hermes_executable, settings.profile, settings.profile_home / "cron" / "jobs.json", command_runner)
@@ -183,28 +296,50 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     logs = LogService(settings.profile_home / "logs")
     voice = VoiceService(settings.hermes_home / "hermes-agent", settings.profile_home, command_runner)
     worker_tasks: list[asyncio.Task] = []
+    telegram_bridge: TelegramBridge | None = None
+    telegram_task: asyncio.Task | None = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal worker_tasks
+        nonlocal worker_tasks, telegram_bridge, telegram_task
         app.state.settings = settings
         app.state.store = store
         app.state.engine = engine
-        app.state.services = {"files": files, "models": models, "projects": projects, "sessions": sessions, "skills": skills, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
+        app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
         if settings.start_worker:
-            # Each worker claims its own row. claim_next() is an atomic
+            # Each worker shares the engine's one-time recovery guard and
+            # claims its own row atomically.
             # compare-and-swap (UPDATE ... WHERE id=? AND status='queued', then a
             # rowcount check), so two workers can never take the same task.
             worker_tasks = [
                 asyncio.create_task(engine.run_forever(), name=f"archon-task-worker-{index}")
                 for index in range(settings.worker_count)
             ]
+        if settings.telegram_enabled:
+            telegram_bridge = TelegramBridge(
+                store.db, store, TelegramBotClient(settings.telegram_bot_token),
+                settings.telegram_allowed_user_id,
+            )
+            telegram_task = asyncio.create_task(telegram_bridge.run_forever(), name="archon-telegram-bridge")
         yield
+        # Close Telegram intake first. If it already submitted a turn, keep the
+        # engine alive until that turn completes; otherwise a queued Telegram
+        # task could be stranded while the bridge waits for it forever.
+        if telegram_bridge is not None:
+            telegram_bridge.stop()
+        if telegram_task is not None:
+            try:
+                await telegram_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                # Cleanup must continue even if the optional Telegram transport
+                # failed before shutdown began.
+                logger.exception("Telegram bridge stopped unexpectedly")
+        # Stop claiming new work, but let every active Prime turn finish before
+        # Uvicorn exits. Cancelling workers here used to kill the child process
+        # mid-session and leave Prime's session lock behind after a restart.
         engine.stop()
-        # Signal them all first, then await — cancelling serially would let each
-        # worker start another task while the ones behind it are still running.
-        for worker in worker_tasks:
-            worker.cancel()
         for worker in worker_tasks:
             try:
                 await worker
@@ -221,7 +356,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
 
     def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
         supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
-        if not settings.auth_token or not hmac.compare_digest(supplied, settings.auth_token):
+        if settings.auth_token and not hmac.compare_digest(supplied, settings.auth_token):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     protected = [Depends(authorize)]
@@ -256,13 +391,29 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     def health():
         return {"ok": True, "service": "archon-desktop-server", "version": app.version}
 
+    @app.post("/api/echo", dependencies=protected)
+    def echo(payload: EchoRequest):
+        return {"message": payload.message}
+
     @app.get("/api/server", dependencies=protected)
     def server_info():
-        return {"profile": settings.profile, "archon_root": str(settings.archon_root), "hermes_home": str(settings.hermes_home)}
+        return {"profile": "prime", "archon_root": str(settings.archon_root), "prime_home": str(settings.data_dir / "prime-sessions")}
 
     @app.get("/api/agents", dependencies=protected)
     def list_agents():
-        return {"agents": agents.list()}
+        roster = agents.list()
+        if not any((item.get("name") == "pi" or item.get("id") == "pi") for item in roster):
+            roster.append({
+                "name": "pi",
+                "description": "Pi coding agent running on the Archon MiniPC. Select it from Archon Desktop Settings → Models.",
+                "model": "",
+                "provider": "pi",
+                "reasoning_effort": "",
+                "toolsets": ["file", "terminal", "code_execution", "skills"],
+                "mcps": [],
+                "orchestrator": False,
+            })
+        return {"agents": roster}
 
     @app.get("/api/kanban/tasks", dependencies=protected)
     def kanban_list(limit: int = Query(300, ge=1, le=1000), archived: bool = False):
@@ -298,13 +449,42 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
 
     @app.post("/api/tasks", status_code=202, dependencies=protected)
     def create_task(payload: TaskCreate):
+        if payload.session_id and payload.session_id.startswith("pi-native-"):
+            raise HTTPException(status_code=409, detail="Native Pi history is read-only here. Start a new Pi conversation to work.")
+        if payload.project_id and (not projects.contains(payload.project_id)):
+            raise HTTPException(status_code=404, detail="Project was not found")
+        task_cwd = payload.cwd
+        try:
+            task_profile = "pi" if payload.profile == "pi" else agents.resolve(payload.profile)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if payload.session_id:
-            sessions.messages(payload.session_id, limit=1)
-        return {"task": store.submit(
-            payload.prompt, payload.cwd, payload.model, payload.provider, payload.skills,
-            payload.session_id, payload.approval_mode, payload.chat_only,
-            agents.resolve(payload.profile),
-        )}
+            # A session belongs to its original runtime, regardless of the new-session picker.
+            with store.db.connect() as conn:
+                owner = conn.execute(
+                    "SELECT profile,cwd FROM tasks WHERE session_id=? ORDER BY created_at ASC LIMIT 1",
+                    (payload.session_id,),
+                ).fetchone()
+            if not owner and not prime_sessions.contains(payload.session_id):
+                raise HTTPException(status_code=404, detail="Session not found")
+            prime_sessions.messages(payload.session_id, limit=1)
+            task_cwd = prime_sessions.cwd_for(payload.session_id) or (owner["cwd"] if owner else None) or task_cwd
+            task_profile = (owner["profile"] if owner else None) or agents.resolve(None)
+        try:
+            task = store.submit(
+                payload.prompt, task_cwd, payload.model, payload.provider, payload.skills,
+                payload.session_id, payload.approval_mode, payload.chat_only,
+                task_profile,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if payload.project_id:
+            # PrimeRunner deterministically uses prime-{task_id} for a new
+            # session. Persist the relationship before the first response so
+            # a project view cannot miss the session during its first turn.
+            session_id = payload.session_id or f"prime-{task['id']}"
+            prime_sessions.assign_project_pending(session_id, payload.project_id)
+        return {"task": task}
 
     @app.get("/api/tasks/{task_id}", dependencies=protected)
     def get_task(task_id: str):
@@ -330,6 +510,13 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 await asyncio.sleep(0.4)
         return StreamingResponse(generate(), media_type="text/event-stream")
 
+    @app.get("/api/events/cursor", dependencies=protected)
+    def event_cursor():
+        # Cold-start state is hydrated through the authoritative list routes.
+        # This cursor lets Desktop subscribe only to events created afterwards
+        # instead of replaying the entire durable ledger on every launch.
+        return {"cursor": store.latest_event_seq()}
+
     @app.get("/api/events", dependencies=protected)
     async def event_stream(
         after: int = Query(0, ge=0),
@@ -337,14 +524,20 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     ):
         async def generate():
             cursor = _event_cursor(after, last_event_id)
+            loop = asyncio.get_running_loop()
+            next_keepalive = loop.time() + 15
             while True:
-                events = store.all_events(cursor)
-                for event in events:
-                    cursor = event["seq"]
-                    yield f"id: {cursor}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
-                if not events:
+                cursor, frames = _sse_event_batch(store, cursor)
+                if frames:
+                    # Prime can emit dozens of token events in one model burst.
+                    # Flush the whole available burst instead of pacing it at the
+                    # database polling interval.
+                    yield "".join(frames)
+                    continue
+                if loop.time() >= next_keepalive:
                     yield ": keepalive\n\n"
-                await asyncio.sleep(0.4)
+                    next_keepalive = loop.time() + 15
+                await asyncio.sleep(0.1)
         return StreamingResponse(
             generate(), media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -362,8 +555,21 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
 
     @app.get("/api/logs", dependencies=protected)
     def get_logs(limit: int = Query(500, ge=1, le=5000), sources: str = "", level: str = ""):
-        selected = [item.strip() for item in sources.split(",") if item.strip()] or None
-        return {"logs": logs.list(limit=limit, sources=selected, minimum_level=level or None)}
+        # Prime activity is represented by the durable task-event ledger, not Hermes logs.
+        selected = {item.strip().lower() for item in sources.split(",") if item.strip()}
+        levels = {"DEBUG": 0, "INFO": 1, "WARNING": 2, "ERROR": 3, "CRITICAL": 4}
+        floor = levels.get(level.upper(), 0) if level else 0
+        if selected and "prime" not in selected:
+            return {"logs": []}
+        events = store.event_summaries(0, limit)
+        rows = []
+        for event in reversed(events):
+            event_level = "ERROR" if "failed" in event["type"] else "INFO"
+            if levels[event_level] < floor:
+                continue
+            rows.append({"id": str(event["seq"]), "timestamp": event["created_at"],
+              "level": event_level, "source": "prime", "component": "task", "message": event["type"]})
+        return {"logs": rows}
 
     @app.get("/api/audio/status", dependencies=protected)
     def audio_status():
@@ -381,42 +587,122 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     def get_projects():
         return {"projects": projects.list()}
 
+    @app.post("/api/projects", dependencies=protected)
+    def create_project(payload: ProjectCreate):
+        root = settings.archon_root.expanduser().resolve()
+        if payload.path:
+            requested = Path(payload.path).expanduser()
+            target = (root / requested).resolve() if not requested.is_absolute() else requested.resolve()
+        else:
+            slug = re.sub(r"[^a-z0-9]+", "-", payload.name.lower()).strip("-") or "project"
+            target = (root / slug).resolve()
+        # The default stays in the configured projects root, while an explicit
+        # folder may point elsewhere inside the server account's home (matching
+        # existing projects such as daily-projects and sandbox workspaces).
+        allowed_root = root.parent
+        try:
+            target.relative_to(allowed_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Project folder must be inside {allowed_root}") from exc
+        try:
+            return {"project": projects.create(payload.name, target, payload.description)}
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Could not create project folder: {exc}") from exc
+
+    @app.delete("/api/projects/{project_id}", dependencies=protected)
+    def delete_project(project_id: str):
+        if not projects.contains(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        assigned = prime_sessions.clear_project(project_id)
+        try:
+            if not projects.delete(project_id):
+                prime_sessions.restore_project(project_id, assigned)
+                raise HTTPException(status_code=404, detail="Project not found")
+        except Exception:
+            if projects.contains(project_id):
+                prime_sessions.restore_project(project_id, assigned)
+            raise
+        return {"ok": True, "files_preserved": True}
+
     @app.get("/api/sessions", dependencies=protected)
     def get_sessions(limit: int = Query(120, ge=1, le=500), project_id: str | None = None):
-        return {"sessions": sessions.list(limit=limit, project_id=project_id)}
+        rows = prime_sessions.list(limit=limit, project_id=project_id)
+        with store.db.connect() as conn:
+            for row in rows:
+                owner = conn.execute(
+                    "SELECT profile FROM tasks WHERE session_id=? ORDER BY created_at ASC LIMIT 1",
+                    (row["id"],),
+                ).fetchone()
+                native_pi = row["source"] == "pi-cli"
+                row["runtime"] = "pi" if native_pi or (owner and owner["profile"] == "pi") else "prime"
+                row["read_only"] = native_pi
+                row["can_delete"] = True
+                if row["runtime"] == "pi" and not native_pi:
+                    row["source"] = "pi"
+        return {"sessions": rows}
+
+    @app.put("/api/sessions/{session_id}/project", dependencies=protected)
+    def assign_session_project(session_id: str, payload: SessionProjectUpdate):
+        try:
+            if not prime_sessions.assign_project(session_id, payload.project_id):
+                raise HTTPException(status_code=404, detail="Prime session not found")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Project not found") from exc
+        return {"ok": True, "session_id": session_id, "project_id": payload.project_id}
 
     @app.get("/api/sessions/{session_id}/messages", dependencies=protected)
     def get_session_messages(session_id: str, limit: int = Query(500, ge=1, le=2000)):
-        return {"messages": sessions.messages(session_id, limit=limit)}
+        return {"messages": prime_sessions.messages(session_id, limit=limit)}
 
     @app.delete("/api/sessions", dependencies=protected)
-    def delete_sessions(payload: SessionsDelete):
+    def delete_sessions(payload: SessionDeleteBatch):
         session_ids = list(dict.fromkeys(payload.session_ids))
-        running = store.running_sessions(session_ids)
-        if running:
-            raise HTTPException(status_code=409, detail="Cancel the running task before deleting its session")
-        try:
-            deleted = sessions.delete_many(session_ids)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not deleted:
-            raise HTTPException(status_code=404, detail="One or more sessions were not found")
-        store.purge_sessions(deleted)
-        return {"ok": True, "deleted": deleted}
+        missing = [session_id for session_id in session_ids if not (
+            prime_sessions.contains(session_id) or sessions.contains(session_id)
+        )]
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Session not found: {missing[0]}")
+        if store.running_sessions(session_ids):
+            raise HTTPException(status_code=409, detail="Cancel queued or running tasks before deleting these sessions")
+        for session_id in session_ids:
+            if session_id.startswith("pi-native-"):
+                try:
+                    if not prime_sessions.delete(session_id):
+                        raise HTTPException(status_code=404, detail="Session not found")
+                except OSError as exc:
+                    raise HTTPException(status_code=503, detail="Could not save the native Pi recovery copy; try again") from exc
+        if store.prepare_session_deletion(session_ids):
+            raise HTTPException(status_code=409, detail="Cancel queued or running tasks before deleting these sessions")
+        for session_id in session_ids:
+            if prime_sessions.contains(session_id):
+                prime_sessions.delete(session_id)
+            if sessions.contains(session_id):
+                sessions.delete(session_id)
+        return {"ok": True, "deleted": session_ids}
 
     @app.delete("/api/sessions/{session_id}", dependencies=protected)
     def delete_session(session_id: str):
-        if store.has_running_session(session_id):
-            raise HTTPException(status_code=409, detail="Cancel the running task before deleting its session")
-        try:
-            deleted = sessions.delete(session_id)
-        except ValueError as exc:
-            # A malformed id is the caller's mistake, not a server fault — the
-            # service raises, and an uncaught raise here would surface as a 500.
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not deleted:
+        native_pi = session_id.startswith("pi-native-")
+        is_prime = prime_sessions.contains(session_id)
+        is_legacy = sessions.contains(session_id)
+        if not is_prime and not is_legacy:
             raise HTTPException(status_code=404, detail="Session not found")
-        store.purge_session(session_id)
+        if native_pi:
+            if store.has_running_session(session_id):
+                raise HTTPException(status_code=409, detail="Cancel queued or running tasks before deleting this session")
+            try:
+                if not prime_sessions.delete(session_id):
+                    raise HTTPException(status_code=404, detail="Session not found")
+            except OSError as exc:
+                raise HTTPException(status_code=503, detail="Could not save the native Pi recovery copy; try again") from exc
+        if store.prepare_session_deletion([session_id]):
+            raise HTTPException(status_code=409, detail="Cancel queued or running tasks before deleting this session")
+        if is_prime and not native_pi:
+            prime_sessions.delete(session_id)
+        if is_legacy:
+            sessions.delete(session_id)
         return {"ok": True}
 
     @app.get("/api/models", dependencies=protected)
@@ -427,25 +713,48 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     def set_model(payload: ModelUpdate):
         return models.set_default(payload.provider, payload.model)
 
+    @app.get("/api/agent-resources", dependencies=protected)
+    def get_agent_resources():
+        return resources.inventory()
+
+    @app.get("/api/agent-resources/{runtime}/skills/{skill_id}", dependencies=protected)
+    def inspect_agent_resource(runtime: str, skill_id: str):
+        if runtime not in ('prime', 'pi'):
+            raise HTTPException(status_code=400, detail="Unknown runtime")
+        try:
+            return resources.inspect(runtime, skill_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Skill not found in this runtime") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Skill document cannot be previewed") from exc
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=503, detail="Could not read this skill") from exc
+
     @app.get("/api/skills", dependencies=protected)
     def get_skills():
         return {"skills": skills.list()}
 
     @app.put("/api/skills/toggle", dependencies=protected)
     def toggle_skill(payload: SkillToggle):
-        return skills.set_enabled(payload.name, payload.enabled)
+        if not payload.enabled:
+            raise HTTPException(status_code=400, detail="Prime bundled skills cannot be disabled from Archon")
+        return next((item for item in skills.list() if item["name"] == payload.name), None) or (_ for _ in ()).throw(KeyError(payload.name))
 
     @app.get("/api/skills/{name}", dependencies=protected)
     def inspect_skill(name: str):
         return skills.inspect(name)
 
     @app.get("/api/files", dependencies=protected)
-    def list_files(path: str = Query(".")):
-        return {"root": str(settings.archon_root), "path": path, "items": files.list_dir(path)}
+    def list_files(path: str = Query(".", max_length=1000)):
+        try:
+            items = files.list_dir(path)
+        except NotADirectoryError as exc:
+            raise HTTPException(status_code=400, detail=f"Not a directory: {path}") from exc
+        return {"root": str(settings.archon_root), "path": path, "items": items}
 
     @app.get("/api/files/read", dependencies=protected)
     def read_file(
-        path: str,
+        path: str = Query(..., max_length=1000),
         max_bytes: int = Query(DEFAULT_READ_BYTES, ge=1, le=MAX_READ_BYTES),
         allow_binary: bool = Query(False),
     ):
@@ -459,23 +768,34 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         return files.write_text(payload.path, payload.content)
 
     @app.post("/api/files/upload", dependencies=protected)
-    async def upload_file(path: str, upload: UploadFile = File(...)):
-        destination = files.resolve(path)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temp = destination.with_name(f".{destination.name}.upload")
+    async def upload_file(path: str = Query(..., max_length=1000), upload: UploadFile = File(...)):
+        try:
+            destination = files.resolve(path)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # A per-request temporary name prevents concurrent uploads to the same
+        # destination from truncating or replacing one another's partial data.
+        temp = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.upload")
         total = 0
-        with temp.open("wb") as handle:
-            while chunk := await upload.read(1024 * 1024):
-                total += len(chunk)
-                if total > 100 * 1024 * 1024:
-                    temp.unlink(missing_ok=True)
-                    raise ValueError("Upload exceeds 100 MiB")
-                handle.write(chunk)
-        os.replace(temp, destination)
+        try:
+            with temp.open("wb") as handle:
+                while chunk := await upload.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > 100 * 1024 * 1024:
+                        raise HTTPException(status_code=413, detail="Upload exceeds 100 MiB")
+                    handle.write(chunk)
+            os.replace(temp, destination)
+        except HTTPException:
+            temp.unlink(missing_ok=True)
+            raise
+        except (OSError, ValueError) as exc:
+            temp.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(destination.relative_to(settings.archon_root)), "size": total}
 
     @app.get("/api/files/download", dependencies=protected)
-    def download_file(path: str):
+    def download_file(path: str = Query(..., max_length=1000)):
         resolved = files.resolve(path)
         return FileResponse(resolved, filename=resolved.name)
 
@@ -501,6 +821,18 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         if artifact is None or not artifact.is_file():
             raise HTTPException(status_code=404, detail="No desktop release is available")
         return artifact
+
+    @app.get("/api/desktop/check", dependencies=protected)
+    def desktop_check():
+        artifact = settings.desktop_artifact
+        available = artifact is not None and artifact.is_file()
+        return {
+            "available": available,
+            "version": settings.desktop_version if available else "",
+            "size": str(artifact.stat().st_size) if available else "",
+            "channel": "prime",
+            "notes": [],
+        }
 
     @app.get("/api/desktop/release", dependencies=protected)
     def desktop_release():
@@ -542,6 +874,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
 
     @app.get("/api/cron", dependencies=protected)
     def list_cron():
+        # Surface the active Hermes profile's cron registry in Archon Desktop.
         return {"jobs": cron.list()}
 
     @app.post("/api/cron", dependencies=protected)
@@ -579,7 +912,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         try:
             first = await asyncio.wait_for(websocket.receive_json(), timeout=10)
             token = str(first.get("token", ""))
-            if not settings.auth_token or not hmac.compare_digest(token, settings.auth_token):
+            if settings.auth_token and not hmac.compare_digest(token, settings.auth_token):
                 await websocket.close(code=4401)
                 return
             await terminals.bridge(websocket, name)

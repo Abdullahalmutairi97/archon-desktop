@@ -1,0 +1,26 @@
+[
+  [
+    "r.jsx(ot,{icon:\"ph-arrows-clockwise\",title:\"Refresh\",size:26,fontSize:13,onClick:()=>void ze(f)})",
+    "r.jsx(ARRefresh,{title:\"Refresh files\",busy:m,onClick:()=>ze(f)})"
+  ],
+  [
+    "ASn('button',{type:'button',className:'btn',disabled:loading,onClick:load,'aria-label':'Refresh resource inventory'},ASn('i',{className:'ph ph-arrow-clockwise','aria-hidden':true}),loading?'Refreshing…':'Refresh')",
+    "ASn(ARRefresh,{busy:loading,onClick:load,'aria-label':'Refresh resource inventory',title:kind==='skills'?'Refresh skills':'Refresh MCPs'})"
+  ],
+  [
+    "r.jsxs(\"button\",{type:\"button\",onClick:()=>void I(!0),className:\"btn btn-secondary\",style:{height:29,fontSize:11.5},disabled:m,children:[r.jsx(\"i\",{className:\"ph ph-arrows-clockwise\",style:{fontSize:12,animation:m?\"ar-spin calc(1.1s / var(--ar-motion,1)) linear infinite\":\"none\"}}),\"Refresh\"]})",
+    "r.jsx(ARRefresh,{title:\"Refresh logs\",busy:m,onClick:()=>I(!0)})"
+  ],
+  [
+    "r.jsxs(\"button\",{type:\"button\",className:\"btn\",disabled:se,onClick:()=>void le(),title:\"Refresh sessions\",style:{height:30,fontSize:11.5,padding:\"0 10px\"},children:[r.jsx(\"i\",{className:`ph ${se?\"ph-circle-notch\":\"ph-arrows-clockwise\"}`,style:{fontSize:13}}),se?\"Refreshing…\":\"Refresh\"]})",
+    "r.jsx(ARRefresh,{title:\"Refresh sessions\",busy:se,onClick:le})"
+  ],
+  [
+    "r.jsxs(\"button\",{type:\"button\",className:\"btn btn-secondary\",style:{height:29,fontSize:11.5},onClick:()=>void d(),children:[r.jsx(\"i\",{className:\"ph ph-arrows-clockwise\",style:{fontSize:12}}),\"Refresh\"]})",
+    "r.jsx(ARRefresh,{title:\"Refresh tasks\",onClick:()=>d()})"
+  ],
+  [
+    "r.jsx(dt,{on:!1,onClick:()=>void l(),children:\"Refresh\"})",
+    "r.jsx(ARRefresh,{title:\"Refresh board\",onClick:()=>l()})"
+  ]
+]

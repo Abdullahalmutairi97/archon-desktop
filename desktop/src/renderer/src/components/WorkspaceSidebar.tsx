@@ -3,7 +3,7 @@ import {
   GraduationCap, MagnifyingGlass, Plus, Pulse, Scroll, SlidersHorizontal,
 } from '@phosphor-icons/react'
 import { useMemo, useState } from 'react'
-import type { HermesSession, Project, Task } from '../lib/types'
+import type { PrimeSession, Project, Task } from '../lib/types'
 import {
   readExpandedProjectIds, readPinnedProjectIds, relativeWorkspaceTime, SIDEBAR_NAV_TOP,
   SIDEBAR_NAV_UNDER, sortSessions, writeExpandedProjectIds,
@@ -21,9 +21,9 @@ const navIcons = {
   backups: Archive,
 }
 
-export function WorkspaceSidebar({ projects, sessions, tasks, counts, page, activeSessionId, activeProjectId, settingsOpen, version = '0.6.1', onPage, onNewSession, onOpenSession, onOpenProject, onOpenActivity, onOpenSettings, onOpenUpdate }: {
+export function WorkspaceSidebar({ projects, sessions, tasks, counts, page, activeSessionId, activeProjectId, settingsOpen, version = '1.0.0', onPage, onNewSession, onOpenSession, onOpenProject, onOpenActivity, onOpenSettings, onOpenUpdate }: {
   projects: Project[]
-  sessions: HermesSession[]
+  sessions: PrimeSession[]
   tasks: Task[]
   counts?: { skills: number; cron: number; backups: number; logs: number }
   page: PageId

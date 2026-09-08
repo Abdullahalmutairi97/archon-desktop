@@ -20,17 +20,30 @@ class CronService:
     def list(self) -> list[dict]:
         if not self.jobs_path.exists():
             return []
-        raw = json.loads(self.jobs_path.read_text())
+        try:
+            raw = json.loads(self.jobs_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return []
+        if not isinstance(raw, dict):
+            return []
         result = []
-        for job in raw.get("jobs", []):
+        jobs = raw.get("jobs", [])
+        if not isinstance(jobs, list):
+            return []
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            schedule = job.get("schedule")
+            schedule_display = schedule.get("display") if isinstance(schedule, dict) else None
             result.append({
                 "id": job.get("id"), "name": job.get("name") or "Untitled",
                 "enabled": bool(job.get("enabled")), "state": job.get("state"),
-                "schedule": job.get("schedule_display") or (job.get("schedule") or {}).get("display"),
+                "schedule": job.get("schedule_display") or schedule_display,
                 "next_run_at": job.get("next_run_at"), "last_run_at": job.get("last_run_at"),
                 "last_status": job.get("last_status"), "last_error": job.get("last_error"),
                 "deliver": job.get("deliver"), "prompt": job.get("prompt") or "",
-                "skills": job.get("skills") or [], "model": job.get("model"),
+                "skills": job.get("skills") if isinstance(job.get("skills"), list) else [],
+                "model": job.get("model"),
                 "provider": job.get("provider"), "script": job.get("script"),
                 "no_agent": bool(job.get("no_agent")),
             })
@@ -59,6 +72,10 @@ class CronService:
             raise PermissionError("Explicit confirmation is required")
         if not schedule or len(schedule) > 120 or "\n" in schedule:
             raise ValueError("Invalid schedule")
+        if not prompt or len(prompt) > 100_000:
+            raise ValueError("Invalid prompt")
+        if len(name) > 300 or len(deliver) > 64:
+            raise ValueError("Cron field is too long")
         argv = self._base() + ["create", schedule, prompt, "--deliver", deliver]
         if name:
             argv += ["--name", name]
@@ -70,10 +87,19 @@ class CronService:
         if not _JOB_ID_RE.fullmatch(job_id):
             raise ValueError("Invalid cron job id")
         allowed = {"schedule": "--schedule", "prompt": "--prompt", "name": "--name", "deliver": "--deliver"}
+        limits = {"schedule": 120, "prompt": 100_000, "name": 300, "deliver": 64}
+        for key, value in fields.items():
+            if key not in allowed or value is None:
+                continue
+            text = str(value)
+            if len(text) > limits[key] or (key == "schedule" and (not text or "\n" in text)):
+                raise ValueError(f"Invalid cron {key}")
         argv = self._base() + ["edit", job_id]
+        changed = False
         for key, flag in allowed.items():
             if key in fields and fields[key] is not None:
                 argv += [flag, str(fields[key])]
-        if len(argv) == 5:
+                changed = True
+        if not changed:
             raise ValueError("No editable fields supplied")
         return await self._execute(argv)

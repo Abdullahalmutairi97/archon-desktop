@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 
 import yaml
@@ -14,11 +15,17 @@ class SkillService:
     def _config(self) -> dict:
         if not self.config_path.exists():
             return {}
-        return yaml.safe_load(self.config_path.read_text()) or {}
+        try:
+            parsed = yaml.safe_load(self.config_path.read_text())
+        except (OSError, yaml.YAMLError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
 
     def list(self) -> list[dict]:
         config = self._config()
-        disabled = set((config.get("skills") or {}).get("disabled") or [])
+        skill_config = config.get("skills")
+        disabled_values = skill_config.get("disabled") if isinstance(skill_config, dict) else []
+        disabled = {str(name) for name in disabled_values} if isinstance(disabled_values, list) else set()
         result = []
         if not self.skills_dir.exists():
             return result
@@ -28,7 +35,8 @@ class SkillService:
                 frontmatter = {}
                 if text.startswith("---"):
                     _, raw, _ = text.split("---", 2)
-                    frontmatter = yaml.safe_load(raw) or {}
+                    parsed = yaml.safe_load(raw)
+                    frontmatter = parsed if isinstance(parsed, dict) else {}
                 name = str(frontmatter.get("name") or path.parent.name)
                 result.append({
                     "name": name,
@@ -44,7 +52,11 @@ class SkillService:
     def inspect(self, name: str) -> dict:
         for skill in self.list():
             if skill["name"] == name:
-                return {**skill, "content": Path(skill["path"]).read_text(errors="replace")}
+                try:
+                    content = Path(skill["path"]).read_text(errors="replace")
+                except OSError:
+                    continue
+                return {**skill, "content": content}
         raise KeyError(name)
 
     def set_enabled(self, name: str, enabled: bool) -> dict:
@@ -60,7 +72,10 @@ class SkillService:
             disabled.add(name)
         skills["disabled"] = sorted(disabled)
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.config_path.with_suffix(".yaml.archon-tmp")
-        temp.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True))
-        os.replace(temp, self.config_path)
+        temp = self.config_path.with_name(f".{self.config_path.name}.{uuid.uuid4().hex}.archon-tmp")
+        try:
+            temp.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True))
+            os.replace(temp, self.config_path)
+        finally:
+            temp.unlink(missing_ok=True)
         return self.inspect(name)

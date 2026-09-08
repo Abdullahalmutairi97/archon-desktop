@@ -22,7 +22,7 @@ export function LogsPage({ api }: { api: ArchonApi }) {
 
   return <section className="reference-page logs-page exact-logs">
     <header className="reference-page-header"><div><h1>Logs</h1><p>Backend, runner, cron and auth — merged, newest last. {visible.length} of {logs.length} lines</p></div><div className="log-actions"><button onClick={() => void copy()}>{copied ? <Check/> : <Copy/>}{copied ? 'Copied' : 'Copy all'}</button><button onClick={download}><DownloadSimple/>Download</button></div></header>
-    <div className="log-filter-bar">{filters.map((item) => <button className={filter === item.id ? 'active' : ''} key={item.id} onClick={() => setFilter(item.id)}>{item.label}</button>)}<code>journalctl --user -u hermes-backend -f</code></div>
+    <div className="log-filter-bar">{filters.map((item) => <button className={filter === item.id ? 'active' : ''} key={item.id} onClick={() => setFilter(item.id)}>{item.label}</button>)}<code>journalctl --user -u archon-desktop-server -f</code></div>
     <ErrorNotice error={error}/>
     <div className="reference-log-stream" role="log">{visible.map((entry) => <div className={`log-line level-${entry.level.toLowerCase()}`} key={entry.id}><time>{clock(entry.timestamp)}</time><span>{entry.level}</span><code>{entry.component || entry.source}</code><p>{entry.message}</p></div>)}{!visible.length && <div className="reference-empty">No matching log records.</div>}</div>
   </section>

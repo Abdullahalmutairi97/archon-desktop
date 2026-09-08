@@ -25,14 +25,31 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default_factory=lambda: _account_home() / ".local" / "share" / "archon-desktop")
     profile: str = "archon"
     hermes_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "hermes")
+    prime_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "prime-agent")
+    prime_agent_session_dir: Path = Field(default_factory=lambda: _account_home() / ".prime" / "agent" / "sessions")
+    pi_agent_session_dir: Path = Field(default_factory=lambda: _account_home() / ".pi" / "agent" / "sessions")
+    resource_node_executable: str = "node"
+    resource_home: Path = Field(default_factory=_account_home)
+    prime_resources_dir: Path = Field(default_factory=lambda: _account_home() / ".prime" / "agent")
+    pi_resources_dir: Path = Field(default_factory=lambda: _account_home() / ".pi" / "agent")
+    prime_runtime_dir: Path = Field(default_factory=lambda: _account_home() / ".local" / "lib" / "node_modules" / "prime-agent" / "dist")
+    pi_runtime_dir: Path = Field(default_factory=lambda: _account_home() / ".local" / "lib" / "node_modules" / "@earendil-works" / "pi-coding-agent" / "dist")
+    resource_package_roots: list[Path] = Field(default_factory=lambda: [_account_home() / ".local" / "lib" / "node_modules", Path("/usr/local/lib/node_modules"), Path("/usr/lib/node_modules")])
+    pi_mcp_config_paths: list[Path] = Field(default_factory=list)
+    prime_auth_path: Path = Field(default_factory=lambda: _account_home() / ".prime" / "agent" / "auth.json")
+    prime_bundled_skills_dir: Path = Field(default_factory=lambda: _account_home() / ".local" / "lib" / "node_modules" / "prime-agent" / "dist" / "skills")
+    prime_user_skills_dir: Path = Field(default_factory=lambda: _account_home() / ".prime" / "agent" / "skills")
+    prime_agent_artifact_dir: Path = Field(default_factory=lambda: _account_home() / ".prime" / "agent" / "session-artifacts")
     auth_token: str = ""
+    telegram_bot_token: str = ""
+    telegram_allowed_user_id: int | None = None
     bind_host: str = "127.0.0.1"
     bind_port: int = 8787
     backup_dir: Path = Field(default_factory=lambda: _account_home() / "backups")
     backup_script: Path = Field(default_factory=lambda: _account_home() / ".hermes" / "scripts" / "archon-backup.sh")
     restore_script: Path = Field(default_factory=lambda: _account_home() / ".hermes" / "scripts" / "archon-restore.sh")
     desktop_artifact: Path | None = None
-    desktop_version: str = "0.6.1"
+    desktop_version: str = "0.3.0"
     start_worker: bool = True
     # How many tasks run at once. Each worker claims one task and awaits it to
     # completion, so this is literally the number of concurrent agent process
@@ -42,6 +59,13 @@ class Settings(BaseSettings):
     # than a graceful slowdown.
     worker_count: int = Field(default=2, ge=1)
     worker_poll_seconds: float = 0.5
+    # Provider subscription windows are commonly five hours; tasks remain queued
+    # server-side and are retried after this delay without user intervention.
+    quota_retry_seconds: float = Field(default=18000, ge=1)
+
+    @property
+    def telegram_enabled(self) -> bool:
+        return bool(self.telegram_bot_token and self.telegram_allowed_user_id is not None)
 
     @property
     def profile_home(self) -> Path:

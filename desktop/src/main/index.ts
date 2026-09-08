@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, protocol, safeStorage, shell } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'archon-asset', privileges: { secure: true, standard: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true, stream: true } }])
 import { fileURLToPath } from 'node:url'
+import { isTrustedNavigation } from './navigation'
 
 const here = dirname(fileURLToPath(import.meta.url))
 if (process.platform === 'linux' && process.env.ARCHON_E2E_ALLOW_PLAINTEXT_SAFE_STORAGE === '1') {
@@ -91,16 +92,18 @@ function readConnection(): Connection {
 function saveConnection(value: { serverUrl: string; token: string }): Connection {
   const parsed = new URL(value.serverUrl)
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Server URL must use HTTP or HTTPS')
-  if (value.token.length < 16 || value.token.length > 1024) throw new Error('Connection token is invalid')
-  const secure = safeStorage.isEncryptionAvailable()
+  if (value.token && (value.token.length < 16 || value.token.length > 1024)) throw new Error('Connection token is invalid')
+  const secure = !value.token || safeStorage.isEncryptionAvailable()
   const stored: Stored = { serverUrl: parsed.toString().replace(/\/$/, '') }
-  if (secure && value.token) stored.token = safeStorage.encryptString(value.token).toString('base64')
+  if (value.token && safeStorage.isEncryptionAvailable()) stored.token = safeStorage.encryptString(value.token).toString('base64')
   const target = connectionPath()
   mkdirSync(dirname(target), { recursive: true })
   const temporary = `${target}.tmp`
   writeFileSync(temporary, JSON.stringify(stored, null, 2), { mode: 0o600 })
   renameSync(temporary, target)
-  return { serverUrl: stored.serverUrl || '', token: secure ? value.token : '', secureStorage: secure }
+  // When OS keyring-backed safeStorage is unavailable, keep the token only in
+  // the returned in-memory connection. It is never written to disk.
+  return { serverUrl: stored.serverUrl || '', token: value.token, secureStorage: secure }
 }
 
 type DesktopRelease = { version: string; size: number; sha256: string }
@@ -139,9 +142,7 @@ function createWindow() {
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, url) => {
-    const allowed = process.env.ELECTRON_RENDERER_URL
-      ? new URL(url).origin === new URL(process.env.ELECTRON_RENDERER_URL).origin
-      : url.startsWith('file:')
+    const allowed = isTrustedNavigation(url, join(here, '../renderer/index.html'), process.env.ELECTRON_RENDERER_URL)
     if (!allowed) event.preventDefault()
   })
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -166,6 +167,11 @@ app.whenReady().then(() => {
   app.on('web-contents-created', (_event, contents) => {
     contents.session.setPermissionCheckHandler((_webContents, permission, _origin, details) => permission === 'media' && details.mediaType === 'audio')
     contents.session.setPermissionRequestHandler((_webContents, permission, callback, details) => callback(permission === 'media' && 'mediaTypes' in details && Boolean(details.mediaTypes?.includes('audio'))))
+  })
+  ipcMain.handle('clipboard:read-image', () => {
+    const image = clipboard.readImage()
+    if (image.isEmpty()) return null
+    return image.toPNG().toString('base64')
   })
   ipcMain.handle('connection:get', () => readConnection())
   ipcMain.handle('connection:set', (_event, value) => saveConnection(value))

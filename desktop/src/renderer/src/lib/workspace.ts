@@ -1,4 +1,4 @@
-import type { HermesSession, Project } from './types'
+import type { PrimeSession, Project } from './types'
 
 export type SidebarDestination = 'chat' | 'sessions' | 'tasks' | 'logs' | 'skills' | 'cron' | 'backups'
 export type BenchDestination = 'tasks' | 'files' | 'terminal'
@@ -34,9 +34,9 @@ export function sortProjectsByName<T extends Pick<Project, 'name'>>(projects: T[
   return [...projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
 }
 
-export function sortSessions(sessions: HermesSession[], sort: SessionSort = 'recent', direction: SortDirection = 'desc'): HermesSession[] {
+export function sortSessions(sessions: PrimeSession[], sort: SessionSort = 'recent', direction: SortDirection = 'desc'): PrimeSession[] {
   const text = (value?: string) => (value || '').trim()
-  const compare = (a: HermesSession, b: HermesSession) => {
+  const compare = (a: PrimeSession, b: PrimeSession) => {
     if (sort === 'recent') return timestamp(a.last_active || a.started_at) - timestamp(b.last_active || b.started_at)
     if (sort === 'messages') return (a.message_count || 0) - (b.message_count || 0)
     if (sort === 'status') return Number(a.active) - Number(b.active)
@@ -65,10 +65,10 @@ export function relativeWorkspaceTime(value?: string | number, now = Date.now())
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(time))
 }
 
-export function groupSessionsForSidebar(sessions: HermesSession[], now = new Date()) {
+export function groupSessionsForSidebar(sessions: PrimeSession[], now = new Date()) {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const yesterday = start - 86_400_000
-  const groups = [{ label: 'Today', sessions: [] as HermesSession[] }, { label: 'Yesterday', sessions: [] as HermesSession[] }, { label: 'Earlier', sessions: [] as HermesSession[] }]
+  const groups = [{ label: 'Today', sessions: [] as PrimeSession[] }, { label: 'Yesterday', sessions: [] as PrimeSession[] }, { label: 'Earlier', sessions: [] as PrimeSession[] }]
   for (const session of sortSessions(sessions, 'recent', 'desc')) {
     const time = timestamp(session.last_active || session.started_at)
     if (time >= start) groups[0].sessions.push(session)
@@ -106,7 +106,7 @@ export function readPinnedProjectIds(projects: Project[]): string[] {
   const ids = new Set(projects.map((project) => project.id))
   const valid = stored.filter((id) => ids.has(id)).slice(0, 12)
   if (valid.length) return valid
-  const preferred = ['hermes-skills', 'archon-desktop', 'archon-core']
+  const preferred = ['prime-agent', 'archon-desktop', 'archon-core']
   const selected = preferred.map((slug) => projects.find((project) => project.slug === slug)?.id).filter((id): id is string => Boolean(id))
   for (const project of sortProjectsByName(projects)) if (selected.length < 3 && !selected.includes(project.id)) selected.push(project.id)
   return selected

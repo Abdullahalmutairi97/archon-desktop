@@ -1,80 +1,86 @@
 # Archon Desktop
 
-Archon Desktop is Abdullah's private Linux control center for Archon. It replaces the Hermes dashboard transport with an independent Electron client and a durable FastAPI/SQLite service while keeping Hermes Agent as the execution engine.
+A private Linux desktop for durable agent work. **The server owns the work:** accepted tasks, sessions, and ordered event history survive closing the desktop window.
 
-## Ready endpoint
+Electron + React + TypeScript provide the desktop; FastAPI + SQLite provide the backend. Runtime selection and native-history support are server-owned. Current backend sources include Prime and Pi integration alongside legacy Hermes compatibility; capabilities differ between client generations.
 
-The production service binds directly to the VPS Tailscale address and is reachable only inside Abdullah's tailnet:
+## Official version: v0.3.0
 
-- Current backend listener and desktop endpoint: `http://100.94.49.55:9700` (configured by `ARCHON_DESKTOP_BIND_HOST` and `ARCHON_DESKTOP_BIND_PORT`)
-- Authentication: bearer token stored only in `backend/.env`
-- Database: `~/.local/share/archon-desktop/archon-desktop.db`
+**The current build on AbdullahPC is the source of truth and is designated v0.3.0.** All other Desktop builds are **legacy**, even if their old labels say 0.4.x, 0.6.1, or 1.0.0. Those numbers are historical identifiers, not newer releases.
 
-The desktop never receives provider keys, model credentials, or the server `.env` file. It stores only the Archon Desktop connection token via Electron `safeStorage` when the Linux keyring supports it.
+Read-only inspection confirmed that AbdullahPC already runs **0.3.0**. Its entire archive matches the saved **unified-refresh** build, and the new [`current/` reconstruction kit](current/README.md) reproduces it byte-for-byte. See the [verified baseline record](docs/releases/v0.3.0.md).
 
-## Features
+**Source scope:** this is the verified final-stage patch/recipe, requiring a frozen parent archive—not yet a full original TypeScript-source rebuild. The legacy `desktop/` tree is not the current app's source.
 
-- Durable Archon chat and server-owned task execution
-- Ordered, replayable task events after disconnects
-- Task Center and task cancellation
-- Model and skill controls
-- Safe VPS file browser/editor/upload/download
-- Server-owned tmux terminals that survive client restarts
-- Backup history, inspection, manual backup, safeguarded restore, and schedule controls
-- Hermes cron management with a second confirmation for every mutation
-- VPS health, resources, services, themes, and English/Arabic/RTL presentation
-- Portable migration manifest for a future MiniPC move
-- Faithful Archon v2 workspace from Abdullah's supplied themes-and-icons package: custom titlebar, project/session sidebar, centered task composer, activity/files/terminal bench, and the supplied A-arch identity
-- Five complete visual systems (Carbon, Ivory, Blueprint, Moss, and Ember) plus device-local custom themes and density/layout controls
+| Component | Status | Location |
+| --- | --- | --- |
+| AbdullahPC installed Desktop | **Verified v0.3.0 unified-refresh baseline** | AbdullahPC |
+| Current reconstruction kit | **0.3.0**, byte-identical ASAR reconstruction | [`current/`](current/README.md) |
+| Local main desktop | **Legacy**, original package label 1.0.0 | [`desktop/`](desktop/README.md) |
+| Separate Prime desktop | **Legacy**, original package label 0.4.2 | Sibling `archon-desktop-prime-latest/app/` |
+| Python backend package | Independent package version 0.2.0; not part of the Desktop reset | [`backend/`](backend/README.md) |
 
-## Linux client
+The MiniPC's installed archives labeled 1.0.0 are legacy and do not identify the current release. GitHub access is now configured for the owner-authorized source sync; see the [branch map and pre-push checks](docs/publication.md). No release tag or binary publication is implied.
 
-Use an artifact from `desktop/release/`:
+Start with the [version inventory](docs/versions.md), [changelog](CHANGELOG.md), [work history](docs/work-history.md), and [current verification report](docs/repository-status.md). Older deployment reports describe their own point in time, not today's installed state.
 
-```bash
-chmod +x Archon-Desktop-0.5.0-arm64.AppImage
-./Archon-Desktop-0.5.0-arm64.AppImage
-```
+## Capabilities
 
-Choose the `x86_64` artifact on normal Intel/AMD Linux desktops. Enter the server URL above and copy the token locally from the VPS over SSH; never paste it into chat:
+- Server-owned task queue, cancellation, quota retry, and ordered SSE replay.
+- Sessions, transcripts, projects, and explicit session-to-project assignments.
+- Native agent history and runtime-specific resume/deletion behavior.
+- Agent/model selection and per-agent Skills/MCP resource inventory.
+- Files, persistent terminal sessions, logs, backups, cron, and system status.
+- Optional Telegram integration and voice services, subject to server configuration.
+- Device-local appearance settings, themes, and English/Arabic presentation.
 
-```bash
-ssh archonvm "sed -n 's/^ARCHON_DESKTOP_AUTH_TOKEN=//p' /home/archon/projects/archon-desktop/backend/.env"
-```
+The separate Prime client also contains design, diagram, and office editing workspaces. Do not assume every feature exists in both desktop implementations. Runtime ownership, confirmations, and supported operations must be respected by each client.
 
-## Development and verification
+## Development and reconstruction
+
+Requirements: Linux, **Node.js 22.12+** (22 LTS recommended), npm, and **Python 3.12+** for the backend. Live agent work additionally requires the selected runtime to be configured privately.
 
 ```bash
-cd backend
-.venv/bin/pytest -q
+# Current v0.3.0 kit and offline checks
+npm run setup
+npm test
 
-cd ../desktop
-npm ci
-npm run test
-npm run typecheck
-npm run build
-npm run dist:linux
-npm run e2e
+# Reconstruct the exact current archive; requires the verified frozen parent
+npm run build -- /path/to/app-v0.3.0-resources.asar /new/output/app.asar
+
+# Backend development environment
+python3 -m venv backend/.venv
+backend/.venv/bin/python -m pip install -e './backend[dev]'
+npm run test:backend
 ```
 
-## Service lifecycle
+The [current kit guide](current/README.md) explains the required input and source limitations. No install/start command is provided for the baseline kit: it reconstructs an ASAR, not a complete Electron distribution. For backend setup see [backend/README.md](backend/README.md); for the older source's development commands see [legacy desktop](desktop/README.md). Do not reuse production profiles for tests.
 
-The installed system service is `archon-desktop-server.service`.
+## Connection and safety
 
-```bash
-sudo systemctl status archon-desktop-server.service
-sudo systemctl restart archon-desktop-server.service
-journalctl -u archon-desktop-server.service -n 100 --no-pager
+- Default source configuration binds to `127.0.0.1:8787`. Deployed hosts and ports are configurable; there is no universal production endpoint.
+- Set a non-empty `ARCHON_DESKTOP_AUTH_TOKEN` privately before exposing a backend to another device. An empty token disables API authentication in the current implementation.
+- Use loopback, a private tailnet, or appropriately secured HTTPS; never expose the service on a public interface by default.
+- Provider credentials stay with the agent runtime. Never commit `.env` files, connection tokens, session transcripts, databases, recovery archives, or private screenshots.
+- Backups/restores, session deletion, cron changes, deployment, and service restarts require explicit operator approval. Tests must use fixtures, not production data.
+- Do not start a second app against the same preferences/profile merely to test it.
+
+See [security](docs/security.md), [architecture](docs/architecture.md), and [migration](docs/migration.md). Existing architecture/design documents include historical Hermes-era details; current code and the component guides explain the current entrypoints.
+
+## Repository map
+
+```text
+current/       Verified v0.3.0 final-stage source/recipe, manifest, and tests
+backend/       FastAPI service, runners, SQLite storage, fixture tests
+desktop/       Legacy Electron/React desktop and regression tests
+deploy/        Operator-reviewed deployment templates and scripts
+docs/          Architecture, version inventory, work history, validation records
+scripts/       Local verification and maintenance helpers
+reference/     Design reference material; not a release payload
 ```
 
-The service is independent of the old Hermes dashboard on port 9119 and the Telegram gateway. Closing the desktop client does not stop accepted tasks.
+## Packaging and contributions
 
-## Safety
+`npm run build -- <parent.asar> <new-output.asar>` reconstructs the verified current application payload. The old `desktop` packaging commands build **legacy** AppImage/deb packages, not official v0.3.0. See the [release checklist](docs/releases.md) before packaging a full distribution, tagging, deploying, or publishing.
 
-- The configured backend binds only to the VPS Tailscale address; it must never bind to `0.0.0.0` or a public interface.
-- Secrets are excluded from Git and live only in `backend/.env` or existing Hermes provider storage.
-- Restore, schedule, cron, model, skill, and service-changing actions require explicit confirmation.
-- File access is constrained to `/home/archon`, and secret-like files are blocked.
-- Existing cron jobs are not modified by installation.
-
-See `docs/architecture.md`, `docs/security.md`, and `docs/migration.md`.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) before changing code. Preserve existing UI and runtime ownership. Report unit tests, builds, fixture smoke tests, and live checks separately; never reuse historical results as current verification.

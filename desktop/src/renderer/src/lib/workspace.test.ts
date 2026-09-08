@@ -3,9 +3,9 @@ import {
   groupSessionsForSidebar, readExpandedProjectIds, readSidebarCollapsed, SIDEBAR_NAV,
   sortProjectsByName, sortSessions, TITLEBAR_BENCH, writeExpandedProjectIds, writeSidebarCollapsed,
 } from './workspace'
-import type { HermesSession, Project } from './types'
+import type { PrimeSession, Project } from './types'
 
-function session(id: string, lastActive: string): HermesSession {
+function session(id: string, lastActive: string): PrimeSession {
   return { id, source: 'desktop', title: id, model: 'test', cwd: '/tmp', started_at: lastActive, last_active: lastActive, message_count: 1, active: false, preview: id }
 }
 

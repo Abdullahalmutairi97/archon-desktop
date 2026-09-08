@@ -5,6 +5,10 @@ backend/.venv/
 *.pyc
 *.egg-info/
 # Node
+node_modules/
+current/node_modules/
+current/artifacts/
+*.asar
 desktop/node_modules/
 desktop/out/
 desktop/dist/
@@ -20,3 +24,26 @@ coverage/
 test-results/
 desktop/artifacts/
 .hermes/
+
+# Private configuration, including timestamped and runtime-specific copies
+.env.*
+.*.env
+*.env
+!.env.example
+!*.env.example
+*.bak
+*.bak-*
+*.pre-*
+*.pem
+*.key
+
+# Operator data and recovery material (not source code)
+/attachments/
+/resource-backups/
+/session-history-backups/
+/docs/deleted-sessions-*.json
+**/.serena/
+
+# Local inspection output
+.audit-*.txt
+.repo-checks/

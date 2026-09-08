@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TitleBar } from './components/TitleBar'
 import { CommandPalette } from './components/CommandPalette'
 import { ConnectionSetup } from './components/ConnectionSetup'
@@ -6,8 +6,9 @@ import { ErrorNotice } from './components'
 import { ArchonApi } from './lib/api'
 import { applyAppearance, readAppearance, saveAppearance } from './lib/appearance'
 import { applyTheme, readTheme, type ThemeId } from './lib/theme'
-import type { ConnectionConfig, HermesSession, ModelCatalog, Project, Task, TaskEvent } from './lib/types'
-import { mergeActivityEvents } from './lib/activity'
+import type { ConnectionConfig, PrimeSession, ModelCatalog, Project, Task, TaskEvent } from './lib/types'
+import { isTaskEvent, mergeActivityEvents, readEventCursor } from './lib/activity'
+import { waitForReconnect } from './lib/reconnect'
 
 import type { PageId } from './navigation'
 import { WorkspaceSidebar } from './components/WorkspaceSidebar'
@@ -29,6 +30,7 @@ import { StatusPage } from './pages/StatusPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { UpdateDialog } from './components/UpdateDialog'
 import { readSidebarCollapsed, writeSidebarCollapsed, type BenchDestination } from './lib/workspace'
+import { normalizeConnection } from './lib/connection'
 
 export function App() {
   const [connection, setConnection] = useState<ConnectionConfig | null | undefined>(undefined)
@@ -38,17 +40,18 @@ export function App() {
   const [page, setPage] = useState<PageId>('home')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [updateOpen, setUpdateOpen] = useState(false)
-  const [appVersion, setAppVersion] = useState('0.6.1')
+  const [appVersion, setAppVersion] = useState('1.0.0')
   const [previousPage, setPreviousPage] = useState<PageId>('home')
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [paletteSeed, setPaletteSeed] = useState('')
   const [bench, setBench] = useState<BenchDestination>()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed)
   const [projects, setProjects] = useState<Project[]>([])
-  const [sessions, setSessions] = useState<HermesSession[]>([])
+  const [sessions, setSessions] = useState<PrimeSession[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [activityEvents, setActivityEvents] = useState<TaskEvent[]>([])
   const [workspaceReady, setWorkspaceReady] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [catalog, setCatalog] = useState<ModelCatalog>()
   const [counts, setCounts] = useState({ skills: 0, cron: 0, backups: 0, logs: 0 })
   const [chatIntent, setChatIntent] = useState<{ projectId?: string; sessionId?: string; nonce: number }>({ nonce: 0 })
@@ -71,19 +74,31 @@ export function App() {
       if (Array.isArray(value.customAppearances)) localStorage.setItem('archon.custom-appearances.v1', JSON.stringify(value.customAppearances))
     }).catch(() => undefined)
     void window.archon?.getConnection().then((value) => {
-      const next = value.serverUrl && value.token && value.secureStorage ? value : null
+      const next = value.serverUrl && (!value.token || value.secureStorage) ? value : null
       setConnection(next); setApi(next ? new ArchonApi(next) : null)
     }).catch(() => setConnection(null))
     void window.archon?.getVersion().then(setAppVersion).catch(() => undefined)
   }, [])
 
+  const refreshGeneration = useRef(0)
   const refreshWorkspace = useCallback(async () => {
     if (!api) return
-    const results = await Promise.allSettled([api.projects(), api.sessions(), api.listTasks(), api.models()])
-    if (results[0].status === 'fulfilled') setProjects(results[0].value)
-    if (results[1].status === 'fulfilled') setSessions(results[1].value)
-    if (results[2].status === 'fulfilled') setTasks(results[2].value)
-    if (results[3].status === 'fulfilled') setCatalog(results[3].value)
+    const generation = ++refreshGeneration.current
+    setRefreshing(true)
+    try {
+      const results = await Promise.allSettled([api.projects(), api.sessions(), api.listTasks(), api.models()])
+      // Manual refreshes and event-driven refreshes can overlap. Do not let an
+      // older, slower response overwrite the newer workspace snapshot.
+      if (generation !== refreshGeneration.current) return
+      if (results[0].status === 'fulfilled') setProjects(results[0].value)
+      if (results[1].status === 'fulfilled') setSessions(results[1].value)
+      if (results[2].status === 'fulfilled') setTasks(results[2].value)
+      if (results[3].status === 'fulfilled') setCatalog(results[3].value)
+    } finally {
+      // Promise.allSettled normally resolves, but preserve the loading-state
+      // invariant if this refresh is interrupted or its implementation changes.
+      if (generation === refreshGeneration.current) setRefreshing(false)
+    }
   }, [api])
 
   const refreshCounts = useCallback(async () => {
@@ -110,9 +125,11 @@ export function App() {
     if (!api) return
     const controller = new AbortController()
     let closed = false
-    let cursor = Number(localStorage.getItem('archon.event-cursor') || 0)
+    let cursor = readEventCursor(localStorage.getItem('archon.event-cursor'))
     let refreshTimer: number | undefined
     const onEvent = (event: TaskEvent) => {
+      // Treat stream payloads as untrusted until shape and cursor fields are validated.
+      if (!isTaskEvent(event)) return
       cursor = event.seq
       localStorage.setItem('archon.event-cursor', String(cursor))
       setActivityEvents((current) => mergeActivityEvents(current, [event]))
@@ -122,11 +139,16 @@ export function App() {
     }
     const connect = async () => {
       while (!closed) {
-        try { cursor = await api.streamEvents(cursor, onEvent, controller.signal); setServerError('') }
-        catch (reason) {
+        try {
+          cursor = await api.streamEvents(cursor, onEvent, controller.signal)
+          setServerError('')
+          // A clean EOF is still a disconnect. Back off before reconnecting so
+          // a proxy that closes normally cannot create a tight request loop.
+          await waitForReconnect(controller.signal)
+        } catch (reason) {
           if (controller.signal.aborted) return
           setServerError(reason instanceof Error ? reason.message : String(reason))
-          await new Promise((resolve) => window.setTimeout(resolve, 1000))
+          await waitForReconnect(controller.signal)
         }
       }
     }
@@ -166,9 +188,10 @@ export function App() {
   }, [openSession, page, settingsOpen, toggleSidebar, updateOpen])
 
   const saveConnection = async (next: ConnectionConfig) => {
-    const stored = await window.archon?.setConnection(next)
-    if (!stored?.secureStorage || !stored.token) throw new Error('Secure device storage is unavailable. Archon will not store a plaintext token.')
-    const secureNext = { ...next, secureStorage: true }
+    const normalized = normalizeConnection(next)
+    const stored = await window.archon?.setConnection(normalized)
+    if (!stored || (normalized.token && !stored.token)) throw new Error('Connection token was not accepted by Electron storage.')
+    const secureNext = { ...normalized, secureStorage: Boolean(stored.secureStorage) }
     const nextApi = new ArchonApi(secureNext)
     await nextApi.server()
     setConnection(secureNext); setApi(nextApi); setServerError('')
@@ -204,7 +227,7 @@ export function App() {
   })()
 
   return <div className={`desktop-v2 ${bench ? 'bench-open' : ''} ${sidebarCollapsed ? 'sidebar-hidden' : ''}`}>
-    <TitleBar title={title} crumb={crumb} bench={bench} unseen={{ tasks: tasks.some((task) => task.status === 'queued' || task.status === 'running') }} onSidebar={toggleSidebar} onBench={(id) => setBench((current) => current === id ? undefined : id)}/>
+    <TitleBar title={title} crumb={crumb} bench={bench} unseen={{ tasks: tasks.some((task) => task.status === 'queued' || task.status === 'running') }} onSidebar={toggleSidebar} onRefresh={() => void refreshWorkspace()} refreshing={refreshing} onBench={(id) => setBench((current) => current === id ? undefined : id)}/>
     <div className="workspace-shell">
       <WorkspaceSidebar projects={projects} sessions={sessions} tasks={tasks} counts={counts} page={page} activeSessionId={chatIntent.sessionId} activeProjectId={activeProjectId} settingsOpen={settingsOpen} version={appVersion} onPage={navigate} onNewSession={newSession} onOpenSession={openSession} onOpenProject={openProject} onOpenActivity={() => navigate('tasks')} onOpenSettings={() => { setPreviousPage(page); setSettingsOpen(true) }} onOpenUpdate={() => setUpdateOpen(true)}/>
       <main className="workspace-main"><ErrorNotice error={serverError}/>{content}</main>

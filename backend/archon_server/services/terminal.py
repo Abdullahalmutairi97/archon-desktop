@@ -72,7 +72,15 @@ class TmuxService:
             parts = line.split("|")
             if len(parts) != 3 or not parts[0].startswith(self.prefix):
                 continue
-            sessions.append({"name": parts[0], "windows": int(parts[1]), "created_at_epoch": int(parts[2]), "persistent": True})
+            # tmux output is external process data. A manually-created or
+            # concurrently-removed session can leave malformed metadata; one
+            # bad row must not turn the whole terminal list endpoint into 500.
+            try:
+                windows = int(parts[1])
+                created_at_epoch = int(parts[2])
+            except (TypeError, ValueError):
+                continue
+            sessions.append({"name": parts[0], "windows": windows, "created_at_epoch": created_at_epoch, "persistent": True})
         return sessions
 
     async def kill(self, name: str, *, confirm: bool) -> None:
@@ -116,9 +124,15 @@ class TmuxService:
                     continue
                 if text.startswith('{"resize":'):
                     import json
-                    size = json.loads(text)["resize"]
-                    rows = max(5, min(int(size.get("rows", 24)), 300))
-                    cols = max(20, min(int(size.get("cols", 80)), 500))
+                    try:
+                        payload = json.loads(text)
+                        size = payload.get("resize") if isinstance(payload, dict) else None
+                        if not isinstance(size, dict):
+                            continue
+                        rows = max(5, min(int(size.get("rows", 24)), 300))
+                        cols = max(20, min(int(size.get("cols", 80)), 500))
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
                     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
                 else:
                     os.write(master, text.encode())

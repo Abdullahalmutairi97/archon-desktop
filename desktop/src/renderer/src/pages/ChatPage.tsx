@@ -6,7 +6,7 @@ import { Button, ErrorNotice, formatDate } from '../components'
 import { BrandGlyph } from '../components/BrandGlyph'
 import { ModelPicker } from '../components/ModelPicker'
 import type { ArchonApi } from '../lib/api'
-import type { ChatMessage, HermesSession, ModelCatalog, Project, Task } from '../lib/types'
+import type { ChatMessage, PrimeSession, ModelCatalog, Project, Task } from '../lib/types'
 import { useMicRecorder } from '../lib/useMicRecorder'
 import { QuillGlyph, RoseGlyph, WaveGlyph } from '../components/ComposerGlyphs'
 import { cycleApprovalMode, readApprovalMode, readComposerVisibility, writeApprovalMode, type ApprovalMode } from '../lib/composerPreferences'
@@ -17,7 +17,7 @@ type ChatPageProps = {
   api: ArchonApi
   intent?: ChatIntent
   projects: Project[]
-  sessions: HermesSession[]
+  sessions: PrimeSession[]
   tasks: Task[]
   catalog?: ModelCatalog
   refreshSessions(): Promise<void>
@@ -25,18 +25,37 @@ type ChatPageProps = {
   onOpenChat(projectId?: string, sessionId?: string): void
 }
 
-function Message({ message }: { message: ChatMessage }) {
+function SessionImage({ api, src, alt }: { api: ArchonApi; src?: string; alt?: string }) {
+  const [url, setUrl] = useState<string>()
+  useEffect(() => {
+    if (!src || !src.startsWith('/api/files/download')) return
+    const path = new URL(src, api.serverUrl).searchParams.get('path')
+    if (!path) return
+    let active = true
+    void api.downloadFile(path).then((blob) => { if (active) setUrl(URL.createObjectURL(blob)) }).catch(() => {})
+    return () => { active = false; if (url) URL.revokeObjectURL(url) }
+  }, [api, src])
+  return url ? <img className="session-image" src={url} alt={alt || 'Attached image'} /> : <span className="session-image-loading">Loading image…</span>
+}
+
+function Message({ api, message }: { api: ArchonApi; message: ChatMessage }) {
   const assistant = message.role === 'assistant'
   return <article className={`message ${assistant ? 'assistant' : 'user'}`}>
     <div className="message-identity">{assistant ? <><BrandGlyph/><span className="assistant-name">Archon</span></> : <span>YOU</span>}</div>
-    <div className="message-body"><div className="message-copy"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div><time>{formatDate(message.timestamp)}</time></div>
+    <div className="message-body"><div className="message-copy"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ src, alt }) => <SessionImage api={api} src={src} alt={alt} /> }}>{message.content}</ReactMarkdown></div><time>{formatDate(message.timestamp)}</time></div>
   </article>
 }
 
-function TaskExchange({ task, onCancel }: { task: Task; onCancel(): void }) {
+type ComposerAttachment = { name: string; path: string; previewUrl?: string }
+
+function AttachmentPreview({ file }: { file: ComposerAttachment }) {
+  return file.previewUrl ? <img className="image-attachment-preview" src={file.previewUrl} alt={file.name} /> : <span className="file-attachment-label">{file.name}</span>
+}
+
+function TaskExchange({ task, attachments, onCancel }: { task: Task; attachments?: ComposerAttachment[]; onCancel(): void }) {
   const active = task.status === 'queued' || task.status === 'running'
   return <div className="task-exchange">
-    <article className="message user"><div className="message-identity"><span>YOU</span></div><div className="message-body"><div className="message-copy">{task.prompt}</div></div></article>
+    <article className="message user"><div className="message-identity"><span>YOU</span></div><div className="message-body"><div className="message-copy">{task.prompt}</div>{attachments?.length ? <div className="message-attachments">{attachments.map((file) => <AttachmentPreview key={file.path} file={file} />)}</div> : null}</div></article>
     <article className="message assistant"><div className="message-identity"><BrandGlyph/><span className="assistant-name">Archon</span></div><div className="message-body">
       {active && <div className="run-state"><CircleNotch className="spin"/><span>{task.status === 'queued' ? 'queued' : 'working'}</span><code>{task.id.slice(0, 8)}</code><Button tone="ghost" onClick={onCancel}><Stop/> Stop</Button></div>}
       {task.result?.text && <div className="message-copy"><ReactMarkdown remarkPlugins={[remarkGfm]}>{task.result.text}</ReactMarkdown></div>}
@@ -56,7 +75,8 @@ export function ChatPage({ api, intent, projects, sessions, tasks, catalog, refr
   const [messageError, setMessageError] = useState('')
   const [voiceError, setVoiceError] = useState('')
   const [voiceMode, setVoiceMode] = useState(false)
-  const [attachments, setAttachments] = useState<Array<{ name: string; path: string }>>([])
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
+  const [taskAttachments, setTaskAttachments] = useState<Record<string, ComposerAttachment[]>>({})
   const [uploading, setUploading] = useState(false)
   const [approval, setApproval] = useState<ApprovalMode>(() => readApprovalMode(intent?.sessionId || 'new'))
   const [composerVisibility, setComposerVisibility] = useState(readComposerVisibility)
@@ -128,15 +148,15 @@ export function ChatPage({ api, intent, projects, sessions, tasks, catalog, refr
 
   const submit = async (override?: string) => {
     const text = (override ?? prompt).trim()
-    if (!text || sending) return
+    if ((!text && !attachments.length) || sending) return
     setSending(true); setMessageError('')
     try {
       const separator = modelChoice.indexOf('\u0000')
       const provider = separator >= 0 ? modelChoice.slice(0, separator) : undefined
       const model = separator >= 0 ? modelChoice.slice(separator + 1) : undefined
-      const submitted = attachments.length ? `${text}\n\nAttached files on the VPS:\n${attachments.map((file) => `- /home/archon/${file.path}`).join('\n')}` : text
-      const task = await api.createTask({ prompt: submitted, cwd: activeProject?.primary_path || undefined, provider, model, session_id: sessionId || undefined, approval_mode: approval, skills: [] })
-      setLocalTaskIds((ids) => [...ids, task.id]); setPrompt(''); setAttachments([])
+      const submitted = attachments.length ? `${text}\n\nAttached images:\n${attachments.map((file) => `![${file.name}](/api/files/download?path=${encodeURIComponent(file.path)})\n- server path: ${file.path}`).join('\n')}` : text
+      const task = await api.createTask({ prompt: submitted, cwd: activeProject?.primary_path || undefined, project_id: activeProject?.id || undefined, provider, model, session_id: sessionId || undefined, approval_mode: approval, skills: [] })
+      setLocalTaskIds((ids) => [...ids, task.id]); setTaskAttachments((items) => ({ ...items, [task.id]: attachments })); setPrompt(''); setAttachments([])
       await Promise.all([refreshTasks(), refreshSessions()])
     } catch (error) { setMessageError(error instanceof Error ? error.message : String(error)) }
     finally { setSending(false) }
@@ -177,22 +197,23 @@ export function ChatPage({ api, intent, projects, sessions, tasks, catalog, refr
   const cycleApproval = () => setApproval((value) => { const next = cycleApprovalMode(value); writeApprovalMode(sessionId || 'new', next); return next })
   const attach = async (file?: File) => {
     if (!file) return
+    const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined
     setUploading(true); setMessageError('')
     try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(-120) || 'attachment'
+      const safeName = (file.name || (file.type.startsWith('image/') ? 'clipboard-image.png' : 'attachment')).replace(/[^a-zA-Z0-9._-]+/g, '-').slice(-120) || 'attachment'
       const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
       const uploaded = await api.uploadFile(`.local/share/archon-desktop/attachments/${id}-${safeName}`, file)
-      setAttachments((items) => [...items, { name: file.name, path: uploaded.path }])
+      setAttachments((items) => [...items, { name: file.name || 'clipboard-image.png', path: uploaded.path, previewUrl }])
     } catch (error) { setMessageError(error instanceof Error ? error.message : String(error)) }
     finally { setUploading(false); if (attachmentInput.current) attachmentInput.current.value = '' }
   }
   const composer = (home = false) => {
     const ApprovalIcon = approvalModes[approval].icon
-    const inputProps = { 'aria-label': 'Message Archon', value: prompt, onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setPrompt(event.target.value), onKeyDown: (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() } }, placeholder: home ? 'Ask Archon anything, or give it a job to run on the server…' : 'Reply to Archon…' }
+    const inputProps = { 'aria-label': 'Message Archon', value: prompt, onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setPrompt(event.target.value), onPaste: (event: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => { const isImage = (file: File) => file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name); const imageFile = Array.from(event.clipboardData.files).find(isImage) || Array.from(event.clipboardData.items).find((item) => item.type.startsWith('image/'))?.getAsFile(); if (imageFile) { event.preventDefault(); void attach(imageFile); return } if (window.archon?.readClipboardImage) { event.preventDefault(); void window.archon.readClipboardImage().then((base64) => { if (!base64) return; const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)); void attach(new File([bytes], 'clipboard-image.png', { type: 'image/png' })) }).catch(() => undefined) } }, onKeyDown: (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() } }, placeholder: home ? 'Ask Archon anything, or give it a job to run on the server…' : 'Reply to Archon…' }
     return <div className={`v2-composer reference-composer ${home ? 'home' : ''}`}>
-      {attachments.length > 0 && <div className="composer-attachments">{attachments.map((file) => <span key={file.path}>{file.name}<button aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((item) => item.path !== file.path))}><X/></button></span>)}</div>}
+      {attachments.length > 0 && <div className="composer-attachments">{attachments.map((file) => <span className="composer-attachment" key={file.path}>{file.previewUrl ? <img src={file.previewUrl} alt={file.name} /> : null}<b>{file.name}</b><button aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((item) => item.path !== file.path))}><X/></button></span>)}</div>}
       {home ? <input {...inputProps}/> : <textarea ref={promptArea} {...inputProps} rows={2}/>}
-      <div className="v2-composer-tools reference-composer-tools"><input ref={attachmentInput} hidden type="file" onChange={(event) => void attach(event.target.files?.[0])}/><button type="button" className="glyph-button" title="Attach file" aria-label="Attach file" disabled={uploading} onClick={() => attachmentInput.current?.click()}>{uploading ? <CircleNotch className="spin"/> : <RoseGlyph size={home ? 19 : 17}/>}</button><label className="project-button"><Folder/><select aria-label="Project" value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Workspace</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><ModelPicker catalog={catalog} value={modelChoice} onChange={setModelChoice} globalShortcut={home}/>{composerVisibility.approval && <button type="button" className="approval-button" onClick={cycleApproval}><ApprovalIcon/>{approvalModes[approval].label}</button>}{composerVisibility.voice && <><button type="button" className={`composer-voice voice-button ${voiceMode ? 'active' : ''}`} role="switch" aria-checked={voiceMode} aria-label="Voice conversation" disabled={voiceAvailable === false} onClick={() => { const next = !voiceModeRef.current; voiceModeRef.current = next; setVoiceMode(next); if (next) void mic.start(); else if (mic.recording) mic.stop() }}><WaveGlyph live={voiceMode}/>{voiceMode && <small>Live</small>}</button><button type="button" className={`composer-mic mic-button ${mic.recording ? 'recording active' : ''}`} aria-label={mic.recording ? 'Stop microphone recording' : 'Start microphone recording'} disabled={voiceAvailable === false || transcribing} onClick={() => mic.recording ? mic.stop() : void mic.start()} style={{ '--mic-level': String(mic.level) } as React.CSSProperties}>{transcribing ? <CircleNotch className="spin"/> : <Microphone/>}</button></>}{!home && displayedTasks.some((task) => ['queued', 'running'].includes(task.status)) && <button className="composer-stop" onClick={stopActive}><Stop/> Stop</button>}<button className={home ? 'round-send' : 'send-button'} aria-label="Send message" disabled={!prompt.trim() || sending || !modelChoice} onClick={() => void submit()}>{sending ? <CircleNotch className="spin"/> : <QuillGlyph size={home ? 16 : 15}/>}</button></div>
+      <div className="v2-composer-tools reference-composer-tools"><input ref={attachmentInput} hidden type="file" onChange={(event) => void attach(event.target.files?.[0])}/><button type="button" className="glyph-button" title="Attach file" aria-label="Attach file" disabled={uploading} onClick={() => attachmentInput.current?.click()}>{uploading ? <CircleNotch className="spin"/> : <RoseGlyph size={home ? 19 : 17}/>}</button><label className="project-button"><Folder/><select aria-label="Project" value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Workspace</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><ModelPicker catalog={catalog} value={modelChoice} onChange={setModelChoice} globalShortcut={home}/>{composerVisibility.approval && <button type="button" className="approval-button" onClick={cycleApproval}><ApprovalIcon/>{approvalModes[approval].label}</button>}{composerVisibility.voice && <><button type="button" className={`composer-voice voice-button ${voiceMode ? 'active' : ''}`} role="switch" aria-checked={voiceMode} aria-label="Voice conversation" disabled={voiceAvailable === false} onClick={() => { const next = !voiceModeRef.current; voiceModeRef.current = next; setVoiceMode(next); if (next) void mic.start(); else if (mic.recording) mic.stop() }}><WaveGlyph live={voiceMode}/>{voiceMode && <small>Live</small>}</button><button type="button" className={`composer-mic mic-button ${mic.recording ? 'recording active' : ''}`} aria-label={mic.recording ? 'Stop microphone recording' : 'Start microphone recording'} disabled={voiceAvailable === false || transcribing} onClick={() => mic.recording ? mic.stop() : void mic.start()} style={{ '--mic-level': String(mic.level) } as React.CSSProperties}>{transcribing ? <CircleNotch className="spin"/> : <Microphone/>}</button></>}{!home && displayedTasks.some((task) => ['queued', 'running'].includes(task.status)) && <button className="composer-stop" onClick={stopActive}><Stop/> Stop</button>}<button className={home ? 'round-send' : 'send-button'} aria-label="Send message" disabled={(!prompt.trim() && !attachments.length) || sending || uploading || !modelChoice} onClick={() => void submit()}>{sending ? <CircleNotch className="spin"/> : <QuillGlyph size={home ? 16 : 15}/>}</button></div>
     </div>
   }
 
@@ -212,7 +233,7 @@ export function ChatPage({ api, intent, projects, sessions, tasks, catalog, refr
   return <section className="v2-thread">
     <header className="v2-thread-header"><div><h1>{selectedSession?.title || 'New task'}</h1><span><code>{activeProject?.primary_path || '~/archon'}</code>{messages.length ? ` · ${messages.length} messages` : ''}</span></div><ModelPicker catalog={catalog} value={modelChoice} onChange={setModelChoice}/></header>
     <ErrorNotice error={messageError || voiceError}/>
-    <div className="message-scroll" ref={messageScroll}>{messages.map((message) => <Message key={message.id} message={message}/>)}{displayedTasks.map((task) => <TaskExchange key={task.id} task={task} onCancel={() => void api.cancelTask(task.id).then(refreshTasks)}/>)}</div>
+    <div className="message-scroll" ref={messageScroll}>{messages.map((message) => <Message key={message.id} api={api} message={message}/>)}{displayedTasks.map((task) => <TaskExchange key={task.id} task={task} attachments={taskAttachments[task.id]} onCancel={() => void api.cancelTask(task.id).then(refreshTasks)}/>)}</div>
     <div className="v2-thread-composer">{composer(false)}<small>Enter to send · Shift Enter newline · work continues if this window closes</small></div>
   </section>
 }

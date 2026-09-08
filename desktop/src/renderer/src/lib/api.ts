@@ -1,4 +1,5 @@
-import type { Backup, ChatMessage, ConnectionConfig, CronJob, FileItem, HermesSession, LogEntry, ModelCatalog, Project, Skill, SpeechResult, Task, TaskEvent, TerminalSession, TranscriptionResult, VoiceStatus } from './types'
+import { isTaskEvent, readEventCursor } from './activity'
+import type { Backup, ChatMessage, ConnectionConfig, CronJob, FileItem, PrimeSession, LogEntry, ModelCatalog, Project, Skill, SpeechResult, Task, TaskEvent, TerminalSession, TranscriptionResult, VoiceStatus } from './types'
 
 export class ArchonApi {
   readonly serverUrl: string
@@ -23,36 +24,47 @@ export class ArchonApi {
   }
 
   health() { return fetch(`${this.serverUrl}/api/health`).then(async (r) => { if (!r.ok) throw new Error('Server unavailable'); return r.json() }) }
-  server() { return this.request<{ profile: string; archon_root: string; hermes_home: string }>('/api/server') }
+  server() { return this.request<{ profile: string; archon_root: string; prime_home: string }>('/api/server') }
   async listTasks() { return (await this.request<{ tasks: Task[] }>('/api/tasks')).tasks }
-  async createTask(payload: { prompt: string; cwd?: string; model?: string; provider?: string; session_id?: string; approval_mode?: 'auto' | 'approve' | 'plan'; chat_only?: boolean; skills: string[] }) { return (await this.request<{ task: Task }>('/api/tasks', { method: 'POST', body: JSON.stringify(payload) })).task }
-  async taskEvents(id: string, after = 0) { return (await this.request<{ events: TaskEvent[] }>(`/api/tasks/${id}/events?after=${after}`)).events }
+  async createTask(payload: { prompt: string; cwd?: string; project_id?: string; model?: string; provider?: string; session_id?: string; approval_mode?: 'auto' | 'approve' | 'plan'; chat_only?: boolean; skills: string[] }) { return (await this.request<{ task: Task }>('/api/tasks', { method: 'POST', body: JSON.stringify(payload) })).task }
+  async taskEvents(id: string, after = 0) { const cursor = readEventCursor(String(after)); return (await this.request<{ events: TaskEvent[] }>(`/api/tasks/${encodeURIComponent(id)}/events?after=${cursor}`)).events }
   async streamEvents(after: number, onEvent: (event: TaskEvent) => void, signal?: AbortSignal): Promise<number> {
-    const response = await fetch(`${this.serverUrl}/api/events?after=${after}`, {
+    const startCursor = readEventCursor(String(after))
+    const response = await fetch(`${this.serverUrl}/api/events?after=${startCursor}`, {
       headers: { Authorization: `Bearer ${this.token}`, Accept: 'text/event-stream' }, signal,
     })
     if (!response.ok || !response.body) throw new Error(`Event stream failed (${response.status})`)
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    let cursor = after
+    let cursor = startCursor
     while (true) {
       const { value, done } = await reader.read()
       buffer += decoder.decode(value, { stream: !done })
-      const frames = buffer.split(/\r?\n\r?\n/)
+      const frames = buffer.split(/(?:\r\n|\r|\n){2}/)
       buffer = frames.pop() || ''
-      for (const frame of frames) {
-        const data = frame.split(/\r?\n/).find((line) => line.startsWith('data:'))?.slice(5).trim()
-        if (!data) continue
-        const event = JSON.parse(data) as TaskEvent
-        cursor = Math.max(cursor, event.seq)
-        onEvent(event)
+      const parseFrame = (frame: string) => {
+        const data = frame.split(/\r\n|\r|\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n')
+        if (!data) return
+        try {
+          const event = JSON.parse(data) as TaskEvent
+          if (!isTaskEvent(event) || event.seq <= cursor) return
+          cursor = event.seq
+          onEvent(event)
+        } catch { /* ignore malformed frames */ }
       }
-      if (done) break
+      for (const frame of frames) parseFrame(frame)
+      if (done) {
+        // A compliant SSE stream usually ends frames with a blank line, but
+        // some proxies close immediately after the final data line. Parse that
+        // buffered frame instead of silently dropping the last event.
+        parseFrame(buffer)
+        break
+      }
     }
     return cursor
   }
-  cancelTask(id: string) { return this.request(`/api/tasks/${id}/cancel`, { method: 'POST' }) }
+  cancelTask(id: string) { return this.request(`/api/tasks/${encodeURIComponent(id)}/cancel`, { method: 'POST' }) }
   status() { return this.request<Record<string, any>>('/api/status') }
   async logs(sources: string[] = [], level = '', limit = 1000) { const query = new URLSearchParams({ limit: String(limit) }); if (sources.length) query.set('sources', sources.join(',')); if (level) query.set('level', level); return (await this.request<{ logs: LogEntry[] }>(`/api/logs?${query}`)).logs }
   audioStatus() { return this.request<VoiceStatus>('/api/audio/status') }
@@ -60,13 +72,13 @@ export class ArchonApi {
   speakText(text: string) { return this.request<SpeechResult>('/api/audio/speak', { method: 'POST', body: JSON.stringify({ text }) }) }
   models() { return this.request<ModelCatalog>('/api/models') }
   async projects() { return (await this.request<{ projects: Project[] }>('/api/projects')).projects }
-  async sessions(projectId?: string) { const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''; return (await this.request<{ sessions: HermesSession[] }>(`/api/sessions${query}`)).sessions }
+  async sessions(projectId?: string) { const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''; const sessions = (await this.request<{ sessions: PrimeSession[] }>(`/api/sessions${query}`)).sessions; return sessions.filter((session) => session.source === 'prime' || session.source === 'prime-agent' || session.source === 'prime-cli') }
   async sessionMessages(id: string) { return (await this.request<{ messages: ChatMessage[] }>(`/api/sessions/${encodeURIComponent(id)}/messages`)).messages }
   async deleteSessions(sessionIds: string[]) {
     try {
       return await this.request<{ ok: boolean; deleted: string[] }>('/api/sessions', { method: 'DELETE', body: JSON.stringify({ session_ids: sessionIds }) })
     } catch (cause) {
-      if (!(cause instanceof Error) || cause.message !== 'Method Not Allowed') throw cause
+      if (!(cause instanceof Error) || !(cause.message === 'Method Not Allowed' || /^405(?:\s|$)/.test(cause.message))) throw cause
       const running = (await this.listTasks()).some((task) => task.status === 'running' && sessionIds.includes(task.session_id || ''))
       if (running) throw new Error('Cancel the running task before deleting its session')
       await Promise.all(sessionIds.map((sessionId) => this.request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })))
@@ -91,8 +103,8 @@ export class ArchonApi {
   setBackupSchedule(calendar: string, confirm: boolean) { return this.request('/api/backups/schedule', { method: 'PUT', body: JSON.stringify({ calendar, confirm }) }) }
   async cronJobs() { return (await this.request<{ jobs: CronJob[] }>('/api/cron')).jobs }
   createCron(payload: Record<string, unknown>) { return this.request('/api/cron', { method: 'POST', body: JSON.stringify(payload) }) }
-  editCron(id: string, fields: Record<string, unknown>, confirm: boolean) { return this.request(`/api/cron/${id}`, { method: 'PUT', body: JSON.stringify({ fields, confirm }) }) }
-  cronAction(id: string, action: string, confirm: boolean) { return this.request(`/api/cron/${id}/action`, { method: 'POST', body: JSON.stringify({ action, confirm }) }) }
+  editCron(id: string, fields: Record<string, unknown>, confirm: boolean) { return this.request(`/api/cron/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ fields, confirm }) }) }
+  cronAction(id: string, action: string, confirm: boolean) { return this.request(`/api/cron/${encodeURIComponent(id)}/action`, { method: 'POST', body: JSON.stringify({ action, confirm }) }) }
   migrationManifest() { return this.request<Record<string, unknown>>('/api/migration/manifest') }
   async terminals() { return (await this.request<{ terminals: TerminalSession[] }>('/api/terminals')).terminals }
   createTerminal(label: string, cwd = '.') { return this.request<TerminalSession>('/api/terminals', { method: 'POST', body: JSON.stringify({ label, cwd }) }) }

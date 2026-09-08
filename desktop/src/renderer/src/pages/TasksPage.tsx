@@ -36,7 +36,7 @@ export function TasksPage({ api, onOpenSession }: { api: ArchonApi; onOpenSessio
       const state = visibleState[task.status]
       return <article key={task.id}>
         <span className={`task-state ${state}`}>{state}</span>
-        <div className="task-summary"><b>{task.prompt.slice(0, 140)}</b><small>{task.session_id ? `Session ${task.session_id.slice(0, 12)}` : 'Session is assigned when Hermes starts'}</small>{task.error && <em>{task.error}</em>}</div>
+        <div className="task-summary"><b>{task.prompt.slice(0, 140)}</b><small>{task.session_id ? `Session ${task.session_id.slice(0, 12)}` : 'Session is assigned when Prime Agent starts'}</small>{task.error && <em>{task.error}</em>}</div>
         <code>{elapsed(task)}</code>
         <button disabled={!task.session_id} onClick={() => task.session_id && onOpenSession(task.session_id)}><ArrowSquareOut/>{task.session_id ? 'Open session' : 'Session pending'}</button>
         {['running','queued','blocked'].includes(task.status) && <button className="task-cancel" aria-label={`Cancel ${task.prompt.slice(0, 40)}`} disabled={cancelling === task.id} onClick={() => void cancel(task)}><X/></button>}

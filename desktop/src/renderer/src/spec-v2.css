@@ -247,3 +247,13 @@
   .message-scroll{padding-inline:18px!important}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
+
+.message-attachments{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.image-attachment-preview{display:block;width:120px;height:90px;object-fit:cover;border-radius:8px;border:1px solid var(--ar-edge);background:var(--ar-panel)}.composer-attachment{display:flex!important;height:34px!important;max-width:260px!important;align-items:center;gap:6px;padding-inline-start:3px!important}.composer-attachment img{width:28px;height:28px;object-fit:cover;border-radius:5px}.composer-attachment b{max-width:190px;overflow:hidden;text-overflow:ellipsis;font-weight:500}.file-attachment-label{padding:8px;border:1px solid var(--ar-edge);border-radius:6px;font-size:11px}
+
+.session-image{display:block;max-width:min(560px,100%);max-height:420px;object-fit:contain;border-radius:10px;border:1px solid var(--ar-edge);margin-top:8px}.session-image-loading{display:inline-block;color:var(--ar-muted);font-size:11px;padding:8px 0}
+
+.titlebar-refresh.spinning svg{animation:archon-spin .8s linear infinite}
+@keyframes archon-spin{to{transform:rotate(360deg)}}
+
+.titlebar-refresh{width:auto!important;min-width:72px!important;display:flex!important;gap:5px;align-items:center;padding-inline:7px!important;font-size:11px!important}
+.titlebar-refresh svg{width:14px!important;height:14px!important}

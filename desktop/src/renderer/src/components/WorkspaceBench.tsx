@@ -1,13 +1,13 @@
 import { ArrowsClockwise, CircleNotch, FolderOpen, Plus, Pulse, Trash, X } from '@phosphor-icons/react'
 import { useEffect, useState } from 'react'
 import type { ArchonApi } from '../lib/api'
-import type { Task, HermesSession, FileItem, TaskEvent } from '../lib/types'
+import type { Task, PrimeSession, FileItem, TaskEvent } from '../lib/types'
 import type { BenchDestination } from '../lib/workspace'
 import { ErrorNotice, formatDate, StatusPill } from '../components'
 import { TerminalDock } from './TerminalDock'
 
 const tabs: Array<{ id: BenchDestination; label: string }> = [{ id:'tasks',label:'Activity' },{ id:'files',label:'Files' },{ id:'terminal',label:'Terminal' }]
-export function WorkspaceBench({ api, panel, onPanel, tasks, sessions, events, ready, onClose, onRefresh }: { api: ArchonApi; panel: BenchDestination; onPanel(value: BenchDestination): void; tasks: Task[]; sessions: HermesSession[]; events: TaskEvent[]; ready: boolean; onClose(): void; onRefresh(): Promise<void> }) {
+export function WorkspaceBench({ api, panel, onPanel, tasks, sessions, events, ready, onClose, onRefresh }: { api: ArchonApi; panel: BenchDestination; onPanel(value: BenchDestination): void; tasks: Task[]; sessions: PrimeSession[]; events: TaskEvent[]; ready: boolean; onClose(): void; onRefresh(): Promise<void> }) {
   const [files, setFiles] = useState<FileItem[]>([])
   const [path, setPath] = useState('/home/archon')
   const [fileError, setFileError] = useState('')

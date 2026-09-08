@@ -2,12 +2,12 @@ import { ArrowRight, Folder, PushPin } from '@phosphor-icons/react'
 import { useMemo, useState } from 'react'
 import { ErrorNotice, usePolling } from '../components'
 import type { ArchonApi } from '../lib/api'
-import type { HermesSession, Project, Task } from '../lib/types'
+import type { PrimeSession, Project, Task } from '../lib/types'
 import { readPinnedProjectIds, relativeWorkspaceTime, sortProjectsByName, sortSessions, writePinnedProjectIds } from '../lib/workspace'
 
 export function ProjectsPage({ api, tasks, onOpen }: { api: ArchonApi; tasks: Task[]; onOpen(projectId: string): void }) {
   const { data: projects = [], error } = usePolling<Project[]>(() => api.projects(), 15000, [api])
-  const { data: sessions = [] } = usePolling<HermesSession[]>(() => api.sessions(), 5000, [api])
+  const { data: sessions = [] } = usePolling<PrimeSession[]>(() => api.sessions(), 5000, [api])
   const [pinVersion, setPinVersion] = useState(0)
   const pinned = useMemo(() => new Set(readPinnedProjectIds(projects)), [pinVersion, projects])
   const togglePin = (id: string) => {

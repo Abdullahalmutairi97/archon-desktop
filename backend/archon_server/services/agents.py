@@ -24,11 +24,19 @@ class AgentService:
     def names(self) -> list[str]:
         if not self.profiles_dir.is_dir():
             return [self.default_profile]
-        found = sorted(
-            p.name for p in self.profiles_dir.iterdir()
-            if p.is_dir() and (p / "config.yaml").is_file()
-        )
-        return found or [self.default_profile]
+        try:
+            entries = list(self.profiles_dir.iterdir())
+        except OSError:
+            return [self.default_profile]
+        found = []
+        for profile in entries:
+            try:
+                if profile.is_dir() and (profile / "config.yaml").is_file():
+                    found.append(profile.name)
+            except OSError:
+                # A profile may disappear while the roster is being read.
+                continue
+        return sorted(found) or [self.default_profile]
 
     def resolve(self, profile: str | None) -> str:
         """Return a profile name safe to pass to `hermes --profile`."""
@@ -41,16 +49,19 @@ class AgentService:
 
     def _orchestrator(self) -> str:
         try:
-            root = yaml.safe_load((self.hermes_home / "config.yaml").read_text()) or {}
-            return (root.get("kanban") or {}).get("orchestrator_profile") or self.default_profile
-        except OSError:
+            parsed = yaml.safe_load((self.hermes_home / "config.yaml").read_text())
+            root = parsed if isinstance(parsed, dict) else {}
+            kanban = root.get("kanban")
+            return (kanban.get("orchestrator_profile") if isinstance(kanban, dict) else None) or self.default_profile
+        except (OSError, yaml.YAMLError):
             return self.default_profile
 
     def _describe(self, name: str) -> str:
         try:
-            data = yaml.safe_load((self.profiles_dir / name / "profile.yaml").read_text()) or {}
-            return (data.get("description") or "").strip()
-        except OSError:
+            parsed = yaml.safe_load((self.profiles_dir / name / "profile.yaml").read_text())
+            data = parsed if isinstance(parsed, dict) else {}
+            return str(data.get("description") or "").strip()
+        except (OSError, yaml.YAMLError):
             return ""
 
     def list(self) -> list[dict[str, Any]]:
@@ -59,9 +70,10 @@ class AgentService:
         for name in self.names():
             cfg: dict[str, Any] = {}
             try:
-                cfg = yaml.safe_load((self.profiles_dir / name / "config.yaml").read_text()) or {}
-            except OSError:
-                pass
+                parsed = yaml.safe_load((self.profiles_dir / name / "config.yaml").read_text())
+                cfg = parsed if isinstance(parsed, dict) else {}
+            except (OSError, yaml.YAMLError):
+                cfg = {}
             model = (cfg.get("model") or {})
             mcps = (cfg.get("mcp_servers") or {})
             agents.append({

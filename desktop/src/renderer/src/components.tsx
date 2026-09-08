@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import type { TaskStatus } from './lib/types'
 
 export function Button({ children, tone = 'default', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { tone?: 'default' | 'primary' | 'danger' | 'ghost' }) {
@@ -18,13 +18,21 @@ export function formatBytes(value?: number) { if (value == null) return '—'; c
 export function formatDate(value?: string | number) { if (!value) return '—'; const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value); return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString() }
 export function usePolling<T>(load: () => Promise<T>, _interval: number, deps: unknown[] = []) {
   const [data, setData] = useState<T>(); const [error, setError] = useState(''); const [loading, setLoading] = useState(true)
+  const refreshRef = useRef<() => Promise<void>>(() => Promise.resolve())
   useEffect(() => {
     let active = true
-    const run = async () => { try { const value = await load(); if (active) { setData(value); setError('') } } catch (e) { if (active) setError(e instanceof Error ? e.message : String(e)) } finally { if (active) setLoading(false) } }
+    let inFlight = false
+    const run = async () => {
+      if (inFlight) return
+      inFlight = true
+      try { const value = await load(); if (active) { setData(value); setError('') } } catch (e) { if (active) setError(e instanceof Error ? e.message : String(e)) } finally { inFlight = false; if (active) setLoading(false) }
+    }
     const onData = () => void run()
+    refreshRef.current = run
     void run()
     window.addEventListener('archon:data-changed', onData)
-    return () => { active = false; window.removeEventListener('archon:data-changed', onData) }
+    const timer = _interval > 0 ? window.setInterval(onData, _interval) : undefined
+    return () => { active = false; refreshRef.current = () => Promise.resolve(); window.removeEventListener('archon:data-changed', onData); if (timer !== undefined) window.clearInterval(timer) }
   }, deps)
-  return { data, error, loading, refresh: async () => { setData(await load()) } }
+  return { data, error, loading, refresh: () => refreshRef.current() }
 }

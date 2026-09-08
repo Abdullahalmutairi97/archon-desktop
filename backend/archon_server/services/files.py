@@ -3,6 +3,7 @@ from __future__ import annotations
 import mimetypes
 import os
 import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,6 +33,12 @@ class FileService:
 
     def resolve(self, relative: str | Path, *, permit_secret: bool = False) -> Path:
         raw = Path(relative).expanduser()
+        # Older desktop builds use /home/archon as a virtual workspace root.
+        # Resolve that stable client-side prefix inside the configured server root
+        # instead of rejecting otherwise safe clipboard/file uploads as outside it.
+        virtual_root = Path("/home/archon")
+        if raw == virtual_root or raw.is_relative_to(virtual_root):
+            raw = Path(*raw.relative_to(virtual_root).parts)
         candidate = raw.resolve() if raw.is_absolute() else (self.root / raw).resolve()
         try:
             candidate.relative_to(self.root)
@@ -108,9 +115,14 @@ class FileService:
     def write_text(self, relative: str, content: str) -> dict:
         path = self.resolve(relative)
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_name(f".{path.name}.archon-tmp")
-        temp.write_text(content)
-        os.replace(temp, path)
+        # Keep temporary files unique so simultaneous saves cannot overwrite one
+        # another's staging file.
+        temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.archon-tmp")
+        try:
+            temp.write_text(content)
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
         return self.read_text(relative)
 
     def mkdir(self, relative: str) -> dict:

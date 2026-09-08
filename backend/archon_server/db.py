@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     started_at TEXT,
-    completed_at TEXT
+    completed_at TEXT,
+    retry_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at);
 CREATE TABLE IF NOT EXISTS events (
@@ -49,6 +50,16 @@ CREATE TABLE IF NOT EXISTS session_locations (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_session_locations_updated ON session_locations(updated_at DESC);
+CREATE TABLE IF NOT EXISTS session_projects (
+    session_id TEXT PRIMARY KEY,
+    project_id TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_projects_project ON session_projects(project_id);
+CREATE TABLE IF NOT EXISTS deleted_sessions (
+    session_id TEXT PRIMARY KEY,
+    deleted_at TEXT NOT NULL
+);
 """
 
 
@@ -67,6 +78,10 @@ class Database:
                 conn.execute("ALTER TABLE tasks ADD COLUMN chat_only INTEGER NOT NULL DEFAULT 0")
             if "profile" not in columns:
                 conn.execute("ALTER TABLE tasks ADD COLUMN profile TEXT")
+            if "retry_at" not in columns:
+                conn.execute("ALTER TABLE tasks ADD COLUMN retry_at TEXT")
+            # Create this only after legacy tasks tables have gained session_id.
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_session_updated ON tasks(session_id, updated_at DESC, id DESC)")
             location_columns = {row[1] for row in conn.execute("PRAGMA table_info(session_locations)")}
             if "source" not in location_columns:
                 conn.execute("ALTER TABLE session_locations ADD COLUMN source TEXT NOT NULL DEFAULT 'hermes'")

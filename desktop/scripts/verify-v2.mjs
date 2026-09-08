@@ -74,7 +74,7 @@ check('window controls present', shell.titlebarButtons === 3, String(shell.title
 check('shell body cannot scroll', shell.bodyOverflow === 'hidden', shell.bodyOverflow)
 check('only sidebar middle scrolls', shell.middleOverflow === 'auto', shell.middleOverflow)
 check('sidebar order', JSON.stringify(shell.nav) === JSON.stringify(['Chat','Sessions','Tasks','Projects','Skills','Automations','Backups','Logs']), JSON.stringify(shell.nav))
-check('product version badge is not the Electron runtime version', await page.locator('.sidebar-brand > button').innerText() === 'v0.6.1', await page.locator('.sidebar-brand > button').innerText())
+check('product version badge is not the Electron runtime version', await page.locator('.sidebar-brand > button').innerText() === 'v1.0.0', await page.locator('.sidebar-brand > button').innerText())
 const homeFlow = await page.evaluate(() => {
   const hero = document.querySelector('.v2-start-heading')?.getBoundingClientRect()
   const composer = document.querySelector('.v2-start-composer')?.getBoundingClientRect()

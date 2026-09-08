@@ -1,0 +1,17 @@
+{
+  "version": "0.3.0",
+  "authoritativeMachine": "AbdullahPC",
+  "verifiedOn": "2026-09-08",
+  "verification": "Installed package version and whole-archive SHA-256 match the saved unified-refresh release",
+  "archiveSha256": "36d3ae03bd6b20c4e9ea5fc690461ef972b16eb0c9433bfb1305daeb068e549b",
+  "parentArchiveSha256": "0e4564634d15e8b22de2bd41b517d0778535fa4ccdb1277de5e140e6954e3711",
+  "rendererPath": "dist/renderer/assets/index-DN77foUV.js",
+  "files": {
+    "package.json": "37f453dd9ea2650ae9bffdf3a99148baeabc2db2f5d71357fe26efea46f22fe5",
+    "dist/main/main.cjs": "68bc2d7860bc9365920c5f03c6161ca0a63ab6b24b6167208251f0174b0c8219",
+    "dist/main/preload.cjs": "318c3bf65186e28a017196dd047a4b57db07459d5a977380b8d1e66282d3cdc4",
+    "dist/renderer/assets/index-DN77foUV.js": "6074b70c6d7ec00845e2c7f0ad947d731d2ebf3f3d6cf77322b954767d3bf5a5"
+  },
+  "sourceProvenance": "archon-desktop-v0.3.0/unified-refresh/build.py and refresh.js",
+  "sourceScope": "Final-stage editable patch and reconstruction recipe; requires the verified frozen agent-resources parent archive, not a complete TypeScript rebuild"
+}

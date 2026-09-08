@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import signal
 from pathlib import Path
 
 import pytest
@@ -290,3 +291,91 @@ print("@@archon " + json.dumps({"event": "message.done"}), file=sys.stderr)
 
 async def _record(events, kind, data):
     events.append((kind, data))
+
+
+@pytest.mark.asyncio
+async def test_runner_terminates_process_tree_when_emit_fails(tmp_path):
+    executable = tmp_path / "fake-hermes"
+    parent_file = tmp_path / "parent.pid"
+    child_file = tmp_path / "child.pid"
+    executable.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s' \"$$\" > {parent_file}\n"
+        f"sleep 60 &\nchild=$!\nprintf '%s' \"$child\" > {child_file}\n"
+        "printf 'output\n'\nwait \"$child\"\n"
+    )
+    executable.chmod(0o755)
+
+    async def broken_emit(_kind, _data):
+        raise RuntimeError("event store unavailable")
+
+    try:
+        runner = HermesRunner(executable, profile="archon")
+        with pytest.raises(RuntimeError, match="event store unavailable"):
+            await runner.run(
+                {"id": "emit-failure", "prompt": "hello", "cwd": str(tmp_path), "skills": []},
+                broken_emit,
+            )
+
+        for pid_file in (parent_file, child_file):
+            with pytest.raises(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), 0)
+    finally:
+        if parent_file.exists():
+            try:
+                os.killpg(int(parent_file.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.asyncio
+async def test_prime_cancel_records_intent_before_process_registration():
+    from archon_server.prime_runner import PrimeRunner
+
+    runner = PrimeRunner(Path("/nonexistent-prime"))
+
+    assert await runner.cancel("early-cancel") is False
+    assert "early-cancel" in runner._cancelled
+
+
+
+@pytest.mark.asyncio
+async def test_prime_early_cancel_aborts_before_session_event(tmp_path, monkeypatch):
+    from archon_server import prime_runner as module
+    from archon_server.prime_runner import PrimeRunner
+
+    executable = tmp_path / "fake-prime"
+    executable.write_text("#!/bin/sh\nprintf '%s\n' '{\"type\":\"agent_end\",\"messages\":[]}'\n")
+    executable.chmod(0o755)
+    release_started = asyncio.Event()
+    release_gate = asyncio.Event()
+
+    async def delayed_release(_process):
+        release_started.set()
+        await release_gate.wait()
+
+    monkeypatch.setattr(module, "release_supervised_target", delayed_release)
+    runner = PrimeRunner(executable, session_root=tmp_path / "sessions")
+    events = []
+    async def record(kind, data):
+        events.append((kind, data))
+    running = asyncio.create_task(runner.run({"id": "early", "prompt": "hello", "cwd": str(tmp_path)}, record))
+    await asyncio.wait_for(release_started.wait(), timeout=2)
+    assert await runner.cancel("early") is False
+    release_gate.set()
+
+    with pytest.raises(Exception) as result:
+        await asyncio.wait_for(running, timeout=2)
+    assert result.value.__class__.__name__ == "RunnerCancelled"
+    assert not any(kind == "session" for kind, _ in events)
+
+
+
+@pytest.mark.asyncio
+async def test_prime_rejects_unsafe_session_id_before_filesystem_access(tmp_path):
+    from archon_server.prime_runner import PrimeRunner
+
+    runner = PrimeRunner(tmp_path / "missing-prime", session_root=tmp_path / "sessions")
+    async def emit(_kind, _data):
+        pass
+    with pytest.raises(ValueError, match="Invalid session id"):
+        await runner.run({"id": "unsafe", "prompt": "hello", "cwd": str(tmp_path), "session_id": "../../outside"}, emit)

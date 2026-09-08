@@ -22,6 +22,8 @@ from tools.tts_tool import text_to_speech_tool
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
 output = sys.argv[2]
 result = json.loads(text_to_speech_tool(text, output))
+if not isinstance(result, dict):
+    result = {"success": False, "error": "Invalid speech-tool response"}
 if result.get("success"):
     path = Path(result["file_path"])
     mime = mimetypes.guess_type(path.name)[0] or "audio/mpeg"
@@ -67,6 +69,8 @@ class VoiceService:
             payload = json.loads(lines[-1])
         except json.JSONDecodeError as exc:
             raise RuntimeError("Hermes voice command returned an invalid result") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("Hermes voice command returned an invalid result")
         if not payload.get("success"):
             raise RuntimeError(str(payload.get("error") or "Hermes voice command failed"))
         return payload

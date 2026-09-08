@@ -185,6 +185,13 @@ def test_global_events_replay_in_one_ordered_cursor(tmp_path):
 
     assert [event["task_id"] for event in events] == [first["id"], second["id"], first["id"]]
     assert replay == events[1:]
+    assert store.latest_event_seq() == events[-1]["seq"]
+
+
+def test_latest_event_seq_is_zero_for_an_empty_ledger(tmp_path):
+    store = TaskStore(Database(tmp_path / "state.db"))
+
+    assert store.latest_event_seq() == 0
 
 
 @pytest.mark.asyncio
@@ -225,3 +232,186 @@ async def test_failed_task_keeps_error_and_events(tmp_path):
     assert saved["status"] == "failed"
     assert saved["error"] == "runner stopped"
     assert store.events(task["id"])[-1]["type"] == "task.failed"
+
+
+@pytest.mark.asyncio
+async def test_engine_retries_transient_prime_daemon_disconnect_once(tmp_path):
+    class DisconnectOnceRunner:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, task, emit):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("Daemon worker client closed")
+            return {"text": "answer after reconnect", "session_id": task["session_id"]}
+
+    store = TaskStore(Database(tmp_path / "state.db"))
+    runner = DisconnectOnceRunner()
+    engine = TaskEngine(store, runner)
+    task = store.submit("do not make me type twice", session_id="prime-retry")
+    await engine.run_once()
+
+    saved = store.get(task["id"])
+    assert runner.calls == 2
+    assert saved["status"] == "completed"
+    assert saved["result"]["text"] == "answer after reconnect"
+    assert any("retrying this turn once" in str(event["data"].get("text", "")) for event in store.events(task["id"]))
+
+
+
+def test_submit_request_id_is_idempotent(tmp_path):
+    store = TaskStore(Database(tmp_path / "state.db"))
+
+    first = store.submit("side effect", request_id="telegram-17")
+    replay = store.submit("side effect", request_id="telegram-17")
+
+    assert replay["id"] == first["id"]
+    assert len(store.list()) == 1
+    assert [event["type"] for event in store.events(first["id"])] == ["task.queued"]
+
+
+def test_quota_error_is_detected_but_ordinary_errors_are_not():
+    from archon_server.tasks import is_quota_error
+    assert is_quota_error("429 Too Many Requests")
+    assert is_quota_error("subscription usage limit reached")
+    assert not is_quota_error("tool failed: file not found")
+
+
+@pytest.mark.asyncio
+async def test_quota_failure_waits_and_is_claimed_after_retry_window(tmp_path):
+    class QuotaRunner:
+        async def run(self, task, emit):
+            raise RuntimeError("provider usage limit reached")
+
+    store = TaskStore(Database(tmp_path / "state.db"))
+    engine = TaskEngine(store, QuotaRunner(), quota_retry_seconds=60)
+    task = store.submit("continue the work", session_id="same-session")
+
+    await engine.run_once()
+
+    saved = store.get(task["id"])
+    assert saved["status"] == "queued"
+    assert saved["retry_at"]
+    assert saved["error"] == "Provider limit reached; waiting to retry automatically"
+    assert store.events(task["id"])[-1]["type"] == "task.quota_waiting"
+    assert store.claim_next() is None
+    with store.db.transaction() as conn:
+        conn.execute("UPDATE tasks SET retry_at=? WHERE id=?", ("2000-01-01T00:00:00+00:00", task["id"]))
+    assert store.claim_next()["id"] == task["id"]
+
+
+def test_decode_tolerates_corrupt_json_fields():
+    from archon_server.tasks import _decode
+
+    item = _decode({"id": "t1", "skills_json": "not-json", "result_json": "{bad"})
+
+    assert item["skills"] == []
+    assert item["result"] is None
+
+
+def test_event_queries_tolerate_corrupt_payload():
+    from archon_server.tasks import _decode_event
+
+    item = _decode_event({"seq": 1, "task_id": "t1", "type": "progress", "data_json": "{bad", "created_at": "now"})
+
+    assert item["data"] == {}
+
+
+def test_quota_defer_does_not_append_after_cancellation(tmp_path):
+    store = TaskStore(Database(tmp_path / "state.db"))
+    task = store.submit("quota race")
+    store.mark_running(task["id"])
+    assert store.cancel(task["id"])
+
+    store.defer_for_quota(task["id"], 60)
+
+    assert store.get(task["id"])["status"] == "cancelled"
+    assert [event["type"] for event in store.events(task["id"])] == [
+        "task.queued", "task.running", "task.cancelled"
+    ]
+
+
+def test_terminal_write_cannot_resurrect_cancelled_task(tmp_path):
+    store = TaskStore(Database(tmp_path / "state.db"))
+    task = store.submit("cancel race")
+    store.mark_running(task["id"])
+    assert store.cancel(task["id"])
+
+    store.complete(task["id"], {"text": "late answer"})
+    store.fail(task["id"], "late failure")
+
+    assert store.get(task["id"])["status"] == "cancelled"
+    assert [event["type"] for event in store.events(task["id"])] == [
+        "task.queued", "task.running", "task.cancelled"
+    ]
+
+
+def test_cancel_queued_reports_transaction_result(tmp_path):
+    store = TaskStore(Database(tmp_path / "state.db"))
+    task = store.submit("cancel me")
+
+    assert store.cancel(task["id"]) is True
+    assert store.cancel(task["id"]) is False
+    assert store.get(task["id"])["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_engine_does_not_retry_disconnect_after_streamed_output(tmp_path):
+    class PartialDisconnectRunner:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, task, emit):
+            self.calls += 1
+            await emit("output", {"text": "partial code"})
+            raise RuntimeError("Daemon worker client closed")
+
+    store = TaskStore(Database(tmp_path / "state.db"))
+    runner = PartialDisconnectRunner()
+    engine = TaskEngine(store, runner)
+    task = store.submit("run once")
+    await engine.run_once()
+
+    saved = store.get(task["id"])
+    assert runner.calls == 1
+    assert saved["status"] == "failed"
+    assert "Daemon worker client closed" in saved["error"]
+    assert not any("retrying this turn once" in str(event["data"].get("text", ""))
+                   for event in store.events(task["id"]))
+
+
+@pytest.mark.asyncio
+async def test_engine_does_not_retry_disconnect_after_thinking_or_code(tmp_path):
+    class PartialDisconnectRunner:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, task, emit):
+            self.calls += 1
+            await emit("thinking", {"text": "checking"})
+            await emit("code", {"text": "print(1)"})
+            raise RuntimeError("Daemon worker client closed")
+
+    store = TaskStore(Database(tmp_path / "state.db"))
+    runner = PartialDisconnectRunner()
+    engine = TaskEngine(store, runner)
+    task = store.submit("do not duplicate side effects")
+    await engine.run_once()
+
+    assert runner.calls == 1
+    assert store.get(task["id"])["status"] == "failed"
+
+
+def test_global_event_cursor_preserves_order_across_many_sessions(tmp_path):
+    store = TaskStore(Database(tmp_path / "state.db"))
+    tasks = [store.submit(f"session-{index}") for index in range(4)]
+    for index in range(80):
+        store.append_event(tasks[index % 4]["id"], "message.delta", {"index": index})
+
+    events = store.all_events(after=0, limit=500)
+    replay = store.all_events(after=events[37]["seq"], limit=500)
+
+    assert len(events) == 84
+    assert [event["seq"] for event in events] == sorted(event["seq"] for event in events)
+    assert [event["seq"] for event in replay] == [event["seq"] for event in events[38:]]

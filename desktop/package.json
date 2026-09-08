@@ -1,6 +1,6 @@
 {
   "name": "archon-desktop",
-  "version": "0.6.1",
+  "version": "1.0.0",
   "author": {
     "name": "Abdullah al-Mutairi",
     "email": "177597842+Abdullahalmutairi97@users.noreply.github.com"
@@ -16,7 +16,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build": "electron-vite build",
-    "e2e": "node scripts/capture-electron.mjs",
+    "e2e": "npm run build && node scripts/capture-electron.mjs",
     "dist:linux": "npm run build && electron-builder --linux AppImage deb --arm64 --x64"
   },
   "dependencies": {

@@ -1,10 +1,10 @@
 import { ChatTeardropText, Folder, MagnifyingGlass, Plus, X } from '@phosphor-icons/react'
 import { useEffect, useMemo, useState } from 'react'
-import type { HermesSession, Project } from '../lib/types'
+import type { PrimeSession, Project } from '../lib/types'
 import type { PageId } from '../navigation'
 import type { BenchDestination } from '../lib/workspace'
 
-export function CommandPalette({ open, seed, onClose, onPage, onBench, onNewSession, projects, sessions, onOpenSession }: { open: boolean; seed: string; onClose(): void; onPage(value: PageId): void; onBench(value: BenchDestination): void; onNewSession(): void; onSearchSessions(query: string): void; projects: Project[]; sessions: HermesSession[]; onOpenSession(projectId: string | undefined, sessionId: string): void }) {
+export function CommandPalette({ open, seed, onClose, onPage, onBench, onNewSession, projects, sessions, onOpenSession }: { open: boolean; seed: string; onClose(): void; onPage(value: PageId): void; onBench(value: BenchDestination): void; onNewSession(): void; onSearchSessions(query: string): void; projects: Project[]; sessions: PrimeSession[]; onOpenSession(projectId: string | undefined, sessionId: string): void }) {
   const [query, setQuery] = useState(seed)
   useEffect(() => { if (open) setQuery(seed) }, [open, seed])
   useEffect(() => {

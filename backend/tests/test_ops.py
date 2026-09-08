@@ -8,7 +8,7 @@ from archon_server.services.backups import BackupScheduleService, BackupService
 from archon_server.services.cron import CronService
 from archon_server.services.files import FileService, RestrictedPath
 from archon_server.services.migration import MigrationService
-from archon_server.services.models import ModelService
+from archon_server.services.models import ModelService, OPENAI_CODEX_MODELS
 from archon_server.services.skills import SkillService
 
 
@@ -46,6 +46,18 @@ def test_file_service_blocks_escape_and_secret_reads(tmp_path):
         service.read_text("../outside")
     with pytest.raises(RestrictedPath):
         service.read_text(".env")
+
+
+def test_file_service_blocks_symlink_escape(tmp_path):
+    root = tmp_path / "host"
+    root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    (root / "link.txt").symlink_to(outside)
+    service = FileService(root)
+
+    with pytest.raises(RestrictedPath):
+        service.read_text("link.txt")
 
 
 def test_backup_service_groups_plain_and_encrypted_artifacts(tmp_path):
@@ -123,14 +135,16 @@ def test_model_service_updates_only_model_fields_atomically(tmp_path):
     cache_path = tmp_path / "provider_models_cache.json"
     cache_path.write_text(json.dumps({"openai-codex": {"models": ["gpt-5.6-sol", "gpt-5.4"]}}))
     config_path.write_text(yaml.safe_dump({"model": {"provider": "old", "default": "old/model"}, "memory": {"enabled": True}}))
-    service = ModelService(config_path, cache_path)
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text(json.dumps({"openai-codex": {"access": "test-token"}}))
+    service = ModelService(config_path, cache_path, auth_path)
 
     service.set_default("openai-codex", "gpt-5.6-sol")
     saved = yaml.safe_load(config_path.read_text())
 
     assert saved["model"] == {"provider": "openai-codex", "default": "gpt-5.6-sol"}
     assert saved["memory"] == {"enabled": True}
-    assert service.get()["providers"] == [{"id": "openai-codex", "models": ["gpt-5.6-sol", "gpt-5.4"]}]
+    assert service.get()["providers"] == [{"id": "openai-codex", "models": OPENAI_CODEX_MODELS}]
 
     with pytest.raises(ValueError):
         service.set_default("openai-codex", "typed-by-hand")

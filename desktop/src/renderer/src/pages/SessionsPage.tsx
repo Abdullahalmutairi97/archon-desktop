@@ -2,7 +2,7 @@ import { ArrowsDownUp, MagnifyingGlass } from '@phosphor-icons/react'
 import { useEffect, useMemo, useState } from 'react'
 import { ConfirmDialog, ErrorNotice, usePolling } from '../components'
 import type { ArchonApi } from '../lib/api'
-import type { HermesSession, Project } from '../lib/types'
+import type { PrimeSession, Project } from '../lib/types'
 import { relativeWorkspaceTime, sortSessions, type SessionSort, type SortDirection } from '../lib/workspace'
 
 const sortOptions: Array<{ id: SessionSort; label: string }> = [
@@ -11,7 +11,7 @@ const sortOptions: Array<{ id: SessionSort; label: string }> = [
 ]
 
 export function SessionsPage({ api, onOpen }: { api: ArchonApi; onOpen(projectId: string | undefined, sessionId: string): void }) {
-  const { data: sessions = [], error, refresh } = usePolling<HermesSession[]>(() => api.sessions(), 4000, [api])
+  const { data: sessions = [], error, refresh } = usePolling<PrimeSession[]>(() => api.sessions(), 4000, [api])
   const { data: projects = [] } = usePolling<Project[]>(() => api.projects(), 15000, [api])
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SessionSort>('recent')

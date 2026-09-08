@@ -11,14 +11,14 @@ const profile = await mkdtemp(join(tmpdir(), 'archon-desktop-e2e-'))
 const packagedExecutable = process.env.ARCHON_E2E_EXECUTABLE
 const serverUrl = process.env.ARCHON_E2E_SERVER_URL || 'http://127.0.0.1:8787'
 const token = process.env.ARCHON_E2E_TOKEN || 'smoke-token-for-archon-desktop'
-const app = await electron.launch({
-  executablePath: packagedExecutable || electronPath,
-  args: [...(packagedExecutable ? [] : ['.']), `--user-data-dir=${profile}`],
-  cwd: root,
-  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
-})
-
+let app
 try {
+  app = await electron.launch({
+    executablePath: packagedExecutable || electronPath,
+    args: [...(packagedExecutable ? [] : ['.']), `--user-data-dir=${profile}`],
+    cwd: root,
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  })
   const page = await app.firstWindow()
   await page.setViewportSize({ width: 1440, height: 920 })
   await page.waitForLoadState('domcontentloaded')
@@ -160,6 +160,9 @@ try {
   if (errors.length) throw new Error(`Renderer errors:\n${errors.join('\n')}`)
   console.log(JSON.stringify({ ok: true, reference: 'Archon Desktop v2.dc.html from exact user ZIP 1478577c…', shell_verified: true, supplied_background_verified: true, backdrop_toggle_verified: true, supplied_marks_verified: 22, custom_frame_verified: true, pages_checked: 12, benches_checked: 3, themes_checked: 7, screenshots: 20, project_expansion_verified: true, terminal_dock_verified: true, voice_controls_verified: true, logs_verified: true, appearance_studio_verified: true }))
 } finally {
-  await app.close()
-  await rm(profile, { recursive: true, force: true })
+  try {
+    if (app) await app.close()
+  } finally {
+    await rm(profile, { recursive: true, force: true })
+  }
 }

@@ -1,11 +1,11 @@
 import { ArrowsDownUp, FolderOpen, Plus } from '@phosphor-icons/react'
 import { useMemo, useState } from 'react'
-import type { HermesSession, Project, Task } from '../lib/types'
+import type { PrimeSession, Project, Task } from '../lib/types'
 import { relativeWorkspaceTime, sortSessions, type SessionSort, type SortDirection } from '../lib/workspace'
 
 const sorts: Array<{ id: SessionSort; label: string }> = [{ id: 'recent', label: 'Recent' }, { id: 'title', label: 'Title' }, { id: 'messages', label: 'Msgs' }]
 
-export function ProjectPage({ project, sessions, tasks, onNew, onOpen }: { project?: Project; sessions: HermesSession[]; tasks: Task[]; onNew(projectId: string): void; onOpen(projectId: string, sessionId: string): void }) {
+export function ProjectPage({ project, sessions, tasks, onNew, onOpen }: { project?: Project; sessions: PrimeSession[]; tasks: Task[]; onNew(projectId: string): void; onOpen(projectId: string, sessionId: string): void }) {
   const [sort, setSort] = useState<SessionSort>('recent')
   const [direction, setDirection] = useState<SortDirection>('desc')
   const related = useMemo(() => sortSessions(sessions.filter((session) => session.project_id === project?.id), sort, direction), [direction, project?.id, sessions, sort])
