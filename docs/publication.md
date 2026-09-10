@@ -2,7 +2,7 @@
 
 ## 2026-09-10 candidate follow-up
 
-The owner requested publishing all Browser/IDE/collaboration changes and documentation. The complete commit history is carried on `codex/browser-side-panel`, based on `main` at `fc0a0f3`. This is a source branch/PR update, not a release, deployment, or installed-app update. The [candidate ledger](releases/v0.3.0-candidate.md) lists each implementation commit and the commands to reproduce the candidate. GitHub refs and the pull request remain the authority for publication/merge status.
+Abdullah Almutairi's Browser/IDE/collaboration changes and documentation are merged into `main` through pull request #1, followed by the simplified README in pull request #2. The implementation history starts at `fc0a0f3`. These source updates are not a release, deployment, or installed-app update. The [candidate ledger](releases/v0.3.0-candidate.md) lists each implementation commit and the commands to reproduce the candidate.
 
 Generated ASARs, dependency directories, private profiles, credentials, real transcripts, and live screenshots are excluded. Historical prototypes remain traceable through Git; the candidate guide describes the final behavior rather than treating early prototypes as complete collaboration.
 
