@@ -18,6 +18,11 @@ test('candidate adds IDE, result links, and six workbench shortcuts', { skip: !r
   assert.match(patched, /id:"ide",icon:"ph-code",title:"IDE"/);
   assert.match(patched, /function ArchonIde\(\)/);
   assert.match(patched, /'Explorer'/);
+  assert.match(patched, /agentSnippets/);
+  assert.match(patched, /new RegExp\(fence/);
+  assert.match(patched, /openAgent=snippet/);
+  assert.match(patched, /Agent output/);
+  assert.match(patched, /readOnly:agentDocument/);
   assert.match(patched, /maxBytes:500000/);
   assert.match(patched, /Open a file from Explorer/);
   assert.match(patched, /Ln /);

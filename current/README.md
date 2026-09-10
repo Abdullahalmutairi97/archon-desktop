@@ -52,7 +52,7 @@ A fresh reconstruction on 2026-09-08 produced the **exact same archive hash** as
 
 ## v0.3.0 browser and IDE candidate
 
-The verified renderer already contains the Browser workbench, Files editor and persistent Terminal. `candidate.cjs` builds a separate review artifact that keeps those surfaces and adds two small integrations: links found in the visible agent result appear as one-click Browser shortcuts, and an **IDE** workbench tab provides a compact VS Code-style explorer, file tabs, line-numbered editor, save state/Ctrl+S, status bar, and terminal switcher. The frozen release recipe and its hashes are unchanged.
+The verified renderer already contains the Browser workbench, Files editor and persistent Terminal. `candidate.cjs` builds a separate review artifact that keeps those surfaces and adds two small integrations: links found in the visible agent result appear as one-click Browser shortcuts, and an **IDE** workbench tab provides a compact VS Code-style explorer, file tabs, line-numbered editor, save state/Ctrl+S, status bar, and terminal switcher. Fenced code blocks in agent results are collected under **Agent code**; selecting one opens a read-only editor tab with its language, filename and line count. The frozen release recipe and its hashes are unchanged.
 
 Build it from the saved verified release input:
 
