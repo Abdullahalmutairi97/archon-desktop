@@ -1,5 +1,11 @@
 # Source synchronization — 2026-09-08
 
+## 2026-09-10 candidate follow-up
+
+The owner requested publishing all Browser/IDE/collaboration changes and documentation. The complete commit history is carried on `codex/browser-side-panel`, based on `main` at `fc0a0f3`. This is a source branch/PR update, not a release, deployment, or installed-app update. The [candidate ledger](releases/v0.3.0-candidate.md) lists each implementation commit and the commands to reproduce the candidate. GitHub refs and the pull request remain the authority for publication/merge status.
+
+Generated ASARs, dependency directories, private profiles, credentials, real transcripts, and live screenshots are excluded. Historical prototypes remain traceable through Git; the candidate guide describes the final behavior rather than treating early prototypes as complete collaboration.
+
 The owner authorized committing and pushing the Archon updates. GitHub authentication is now configured through GitHub CLI's credential-store-backed login; both repositories were confirmed private with owner access. No credentials were copied into source or passed in remote URLs.
 
 ## Branch map

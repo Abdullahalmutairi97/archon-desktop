@@ -16,8 +16,19 @@ See the [baseline record](docs/releases/v0.3.0.md), [legacy inventory](docs/vers
 
 ## Unreleased — repository maintenance (2026-09-10)
 
-- Added an interactive Browser bench panel that surfaces HTTP(S) links from agent task output, supports URL navigation/history, and can hand pages to the system browser.
-- Added a compact IDE bench panel for browsing task working directories, editing text files, and confirming VPS saves.
+### v0.3.0 candidate: Browser, IDE, sharing, and readiness
+
+- Added session-scoped agent-code presentation and file/browser links in the verified v0.3.0 renderer.
+- Added IDE explorer, tabs, line numbers, copy/reload/save, Ctrl+S, resizing/expansion, terminal access, draft preservation, dirty-close confirmation, read-only safeguards, and optimistic conflict detection.
+- Reworked initial collaboration prototype into reviewed, read-only session/project snapshots. Bundled PeerJS 1.5.4 locally, allowed its specific signaling socket, added portable codes, validation, timeouts, cleanup, and Stop sharing. Removed automatic snapshot export on service failures.
+- Restored device-token entry in Connection settings and made Test connection verify authenticated status.
+- Added reproducible preview fixtures, model/patch/CSP regression tests, and a candid readiness report. Root `build:candidate` now invokes the current builder.
+- Verified 20 current-kit tests and real PeerJS transfer between two fixture clients through computer control. No backend modification, installed-app update, or live-agent certification is implied.
+- See the [commit-by-commit ledger](docs/releases/v0.3.0-candidate.md) for all nine implementation commits, including superseded prototypes and legacy work.
+
+### Earlier maintenance and legacy work
+
+- Added the original Browser and compact IDE prototypes in the legacy `desktop/` source before targeting the verified v0.3.0 candidate.
 - Replaced stale main/Prime/client landing documentation with component-specific setup and status.
 - Added backend/desktop guides, version and installed-copy inventory, work-history index, contribution guidance, release checklist, and verification report.
 - Added an isolated backend test entrypoint and offline CI checks for the main repository.

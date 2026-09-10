@@ -1,5 +1,7 @@
 # Work history and evidence index
 
+**2026-09-10 follow-up:** the [v0.3.0 candidate ledger](releases/v0.3.0-candidate.md) records all Browser/IDE/collaboration commits, the switch from legacy source to the verified renderer, readiness fixes, build commands, and release limitations. The [readiness audit](../current/testing/readiness-audit.md) contains the current verification evidence; earlier records below remain historical.
+
 Reconstructed from available code, Git metadata, release folders, and handoff notes on 2026-09-08. This covers the discoverable Archon Desktop work; it is not a claim to recover every past conversation. Source trees differ, so a recorded feature is not automatically present in every client.
 
 **Version policy:** the current AbdullahPC build is official **v0.3.0**. Its archive is now verified as the saved **unified-refresh** release, and the repository's `current/` kit reconstructs it byte-for-byte. All nonmatching Desktop snapshots/source labels below are legacy, not releases above it. See the [baseline record](releases/v0.3.0.md). Historical feature records remain separate from fresh runtime/UI verification.

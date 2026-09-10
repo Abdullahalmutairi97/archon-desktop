@@ -1,5 +1,7 @@
 # Repository verification — 2026-09-08
 
+**2026-09-10 candidate update:** see the [candidate ledger](releases/v0.3.0-candidate.md) and [readiness audit](../current/testing/readiness-audit.md). The newer candidate has 20 passing current-kit tests with the actual archive and a successful two-client PeerJS UI transfer. This supersedes older test counts for the candidate only; the installed baseline is unchanged. Historical results below are not fresh checks.
+
 **Publication follow-up:** GitHub sign-in is now configured and the owner authorized source synchronization. See [publication.md](publication.md) for branch targets, fresh pre-push checks, and exclusions. The blocked/not-pushed statements below record earlier maintenance stages.
 
 ## Scope and provenance

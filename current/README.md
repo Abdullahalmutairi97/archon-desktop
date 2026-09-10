@@ -1,5 +1,7 @@
 # Current Archon Desktop — v0.3.0
 
+For the complete Browser/IDE/collaboration commit history, final behavior, and step-by-step setup/build/preview workflow, see the [candidate change ledger](../docs/releases/v0.3.0-candidate.md). The reconstruction baseline below and the newer candidate are distinct build targets.
+
 The authoritative build is the installed **AbdullahPC** application. Read-only inspection on 2026-09-08 confirmed its package already says **0.3.0**, and its entire ASAR matches the saved unified-refresh release:
 
 ```text
