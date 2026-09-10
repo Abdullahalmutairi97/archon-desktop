@@ -52,7 +52,13 @@ A fresh reconstruction on 2026-09-08 produced the **exact same archive hash** as
 
 ## v0.3.0 browser and IDE candidate
 
-The verified renderer already contains the Browser workbench, Files editor and persistent Terminal. `candidate.cjs` builds a separate review artifact that keeps those surfaces and adds two small integrations: links found in the visible agent result appear as one-click Browser shortcuts, and an **IDE** workbench tab provides a compact VS Code-style explorer, file tabs, line-numbered editor, save state/Ctrl+S, status bar, and terminal switcher. Fenced code blocks in agent results are collected under **Agent code**; selecting one opens a read-only editor tab with its language, filename and line count. The frozen release recipe and its hashes are unchanged.
+The candidate keeps the existing v0.3.0 layout and Browser/Terminal bridge, and adds a resizable IDE with an expandable view, collapsible explorer, file filtering, editor tabs, synchronized line numbers, Copy, Reload, Save, and Ctrl/⌘+S.
+
+The **Agent code** list comes from the selected session's rendered transcript, including fetched history and streamed messages. It includes fenced snippets, linked/inline file paths, structured write/edit tool targets, and apply-patch file targets. Reply file links open in the IDE; web links open in Browser. Snippets are read-only and update while streaming. No demo transcript is used when disconnected or outside a session.
+
+Editor tabs and drafts survive panel changes and session navigation for the lifetime of the app window. Closing a dirty tab or reloading it requires a discard confirmation. Failed, loading, binary and truncated reads cannot be saved. Saving checks for changes on disk first, preserves edits made while the save is running, and reports errors inline. This is an optimistic check using the existing read/write API; it is not an atomic server-side compare-and-swap. Drafts are not persisted across app restarts.
+
+Implementation lives in `ide-model.cjs` (parsing/document behavior) and `ide-renderer.js` (UI integration), injected by the guarded `candidate.cjs` builder. The frozen release recipe and hashes remain unchanged.
 
 Build it from the saved verified release input:
 
@@ -70,3 +76,12 @@ The candidate builder checks the input archive and v0.3.0 package version, valid
 The current recipe intentionally fails if edits change the frozen baseline. To develop a new release, preserve this record, use a separately reviewed candidate recipe/manifest, and run isolated UI checks before approving new hashes. Never change expected checksums simply to silence a mismatch.
 
 See the [baseline record](../docs/releases/v0.3.0.md), [legacy inventory](../docs/versions.md), and [release checklist](../docs/releases.md). GitHub publication, full source recovery, full Electron distribution packaging, and new visual/live checks are separate work.
+
+## Reproduce the candidate verification
+
+```bash
+ARCHON_V030_ASAR=/path/to/app-v0.3.0-unified-refresh.asar npm test
+node current/testing/preview.cjs /path/to/app-v0.3.0-unified-refresh.asar
+```
+
+Run these commands from the repository root. The optional archive environment variable makes the integration tests read the actual packaged renderer instead of relying on a local inspection extraction. The preview serves the same patched renderer at `http://127.0.0.1:4318`, with an explicitly disposable bridge and test workspace. It never connects to production. Browser compositing is represented by a local iframe and terminal transport by a test echo; testing them here does not certify native Electron compositing or live tmux transport. See [hands-on verification](testing/verification.md).

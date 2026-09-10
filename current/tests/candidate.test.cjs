@@ -6,7 +6,8 @@ const { patchRenderer, verifyOfficial } = require('../candidate.cjs');
 const baseline = require('../baseline.json');
 
 const rendererPath = path.join('/tmp', 'archon-v030-inspect-cyCnXr', 'dist/renderer/assets/index-DN77foUV.js');
-const renderer = fs.existsSync(rendererPath) ? fs.readFileSync(rendererPath, 'utf8') : '';
+const archivePath = process.env.ARCHON_V030_ASAR;
+const renderer = archivePath ? require('@electron/asar').extractFile(archivePath, baseline.rendererPath).toString() : fs.existsSync(rendererPath) ? fs.readFileSync(rendererPath, 'utf8') : '';
 
 test('candidate patch requires the official v0.3.0 archive', () => {
   assert.throws(() => verifyOfficial(Buffer.from('wrong archive')), /v0\.3\.0 archive/);
@@ -16,19 +17,10 @@ test('candidate patch requires the official v0.3.0 archive', () => {
 test('candidate adds IDE, result links, and six workbench shortcuts', { skip: !renderer }, () => {
   const patched = patchRenderer(renderer);
   assert.match(patched, /id:"ide",icon:"ph-code",title:"IDE"/);
-  assert.match(patched, /function ArchonIde\(\)/);
-  assert.match(patched, /'Explorer'/);
-  assert.match(patched, /agentSnippets/);
-  assert.match(patched, /new RegExp\(fence/);
-  assert.match(patched, /openAgent=snippet/);
-  assert.match(patched, /Agent output/);
-  assert.match(patched, /readOnly:agentDocument/);
-  assert.match(patched, /maxBytes:500000/);
-  assert.match(patched, /Open a file from Explorer/);
-  assert.match(patched, /Ln /);
-  assert.match(patched, /function ArchonResultLinks\(\{onOpen\}\)/);
-  assert.match(patched, /\["1","2","3","4","5","6"\]/);
-  assert.match(patched, /ui\.bench==='ide'&&ASn\(ArchonIde\)/);
+  for (const marker of ['function ArchonIde(', 'function ArchonWorkbench(', 'function ArchonResultLinks(', 'sessionId:E.id,cwd:E.cwd,messages:ke', 'ArchonCodeActions', '["1","2","3","4","5","6"]']) {
+    assert.ok(patched.includes(marker), `Missing integration: ${marker}`);
+  }
+  assert.ok(patched.includes(fs.readFileSync(path.join(__dirname, '../ide-renderer.js'), 'utf8')), 'Helper injection preserves literal replacement characters');
   const check = require('node:child_process').spawnSync(process.execPath, ['--input-type=module', '--check'], { input: patched, encoding: 'utf8' });
   assert.equal(check.status, 0, check.stderr);
 });
