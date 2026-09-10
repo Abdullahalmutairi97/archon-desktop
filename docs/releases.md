@@ -42,4 +42,6 @@ A build, an installed application, a Git commit, and a published release are dif
 
 ## Current blockers
 
+For the September 10 candidate, see the [change ledger](releases/v0.3.0-candidate.md) and [readiness audit](../current/testing/readiness-audit.md). Source-branch publication is owner-requested; this does not authorize installation or a release. Real PeerJS transfer has been verified between local fixture clients, but native packaging, two-PC connectivity, live agent work, and updater behavior still need verification.
+
 GitHub authentication/history, full original-source consolidation, distribution of approved frozen release inputs, review of pre-existing source/private documents, graphical/full-Electron-package checks, updater-reset behavior, and publication approval remain outstanding. AbdullahPC inspection and exact final-stage archive reconstruction are complete. The MiniPC's 1.0.0 labels are legacy evidence, not grounds to supersede official v0.3.0.

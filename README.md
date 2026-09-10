@@ -24,7 +24,39 @@ The MiniPC's installed archives labeled 1.0.0 are legacy and do not identify the
 
 Start with the [version inventory](docs/versions.md), [changelog](CHANGELOG.md), [work history](docs/work-history.md), and [current verification report](docs/repository-status.md). Older deployment reports describe their own point in time, not today's installed state.
 
-## Capabilities
+## Latest work: v0.3.0 candidate (2026-09-10)
+
+The Browser, IDE, collaboration, and connection fixes are available in the **candidate builder in `current/`**. They have not replaced the official installed archive. The layout remains based on v0.3.0; the first two experimental commits also preserve older `desktop/` implementations as legacy history.
+
+| Candidate feature | What works | Limits |
+| --- | --- | --- |
+| Browser panel | Open links from agent replies, URL navigation and existing browser controls | Native Electron compositing still needs release testing |
+| IDE panel | Session code, referenced files, explorer, tabs, resize/expand, copy, reload, save, Ctrl+S, terminal tab | Snippets are read-only; drafts last for the window lifetime; save conflict check is optimistic |
+| Collaboration | Select/review a session or project's listed sessions; share through bundled PeerJS; read received conversations/code; stop sharing | Read-only snapshots, not live editing, file sync, remote agent control, or team accounts |
+| Connection | Device-token entry through the existing write-only bridge; authenticated connection test | Actual agent credentials and live agent execution remain operator setup |
+
+Collaboration changes only the client. It uses third-party [PeerJS](https://peerjs.com/) signaling and WebRTC; a separate explicit snapshot-code export works without signaling. Paste sharing codes into the other client's **Share** dialog. Keep the host app open for peer transfers. Tailscale can provide private network reachability, but does not grant Archon application permissions or replace the device token.
+
+**Verification:** 20 current-kit tests passed with the actual baseline archive supplied. Computer-control testing transferred a two-session project between two clients using the real PeerJS service, displayed both conversations, and verified Stop sharing. IDE save, reply-to-browser navigation, and connection settings were also checked with fixture data. Two-PC routing, native Electron features, and real agent execution remain unverified. The local preview is disposable: do not enter real tokens or use it for actual work.
+
+See the [complete change/commit ledger and reproduction steps](docs/releases/v0.3.0-candidate.md), [readiness audit](current/testing/readiness-audit.md), and [candidate implementation guide](current/README.md).
+
+### Build and preview the candidate
+
+From the repository root, using Node.js 22.12+:
+
+```bash
+npm run setup
+# The official unified-refresh ASAR is a private release input, not in Git.
+export ARCHON_V030_ASAR=/absolute/path/to/app-v0.3.0-unified-refresh.asar
+npm test
+npm run build:candidate -- "$ARCHON_V030_ASAR" /new/output/candidate.asar
+node current/testing/preview.cjs "$ARCHON_V030_ASAR"
+```
+
+Open `http://127.0.0.1:4318` for the fixture preview. The builder refuses existing output files and a wrong baseline hash. An ASAR is an application payload, not an installer. Follow the [release checklist](docs/releases.md) for native packaging, installation, and rollback checks.
+
+## Existing app/backend capabilities
 
 - Server-owned task queue, cancellation, quota retry, and ordered SSE replay.
 - Sessions, transcripts, projects, and explicit session-to-project assignments.
