@@ -50,6 +50,21 @@ The recipe validates the parent before extraction, patches only the six exact ta
 
 A fresh reconstruction on 2026-09-08 produced the **exact same archive hash** as AbdullahPC. The output was kept outside Git at `/tmp/archon-v030-verified-20260908/app.asar`. No app installation or restart was performed.
 
+## v0.3.0 browser and IDE candidate
+
+The verified renderer already contains the Browser workbench, Files editor and persistent Terminal. `candidate.cjs` builds a separate review artifact that keeps those surfaces and adds two small integrations: links found in the visible agent result appear as one-click Browser shortcuts, and an **IDE** workbench tab groups the editor and terminal behind the existing compact panel. The frozen release recipe and its hashes are unchanged.
+
+Build it from the saved verified release input:
+
+```bash
+npm run setup
+npm run build:candidate -- \
+  /path/to/app-v0.3.0-unified-refresh.asar \
+  /new/output/archon-v0.3.0-ide-browser-candidate.asar
+```
+
+The candidate builder checks the input archive and v0.3.0 package version, validates the patched renderer syntax, refuses an existing output, and never installs or restarts the app. It is intentionally a candidate artifact because the official v0.3.0 archive remains the authoritative release.
+
 ## Editing and future releases
 
 The current recipe intentionally fails if edits change the frozen baseline. To develop a new release, preserve this record, use a separately reviewed candidate recipe/manifest, and run isolated UI checks before approving new hashes. Never change expected checksums simply to silence a mismatch.

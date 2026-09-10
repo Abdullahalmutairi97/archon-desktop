@@ -5,7 +5,8 @@
   "description": "Verified AbdullahPC v0.3.0 release reconstruction kit",
   "scripts": {
     "test": "node --test refresh.test.cjs tests/*.test.cjs",
-    "build": "node build.cjs"
+    "build": "node build.cjs",
+    "build:candidate": "node candidate.cjs"
   },
   "devDependencies": {
     "@electron/asar": "3.4.1"
