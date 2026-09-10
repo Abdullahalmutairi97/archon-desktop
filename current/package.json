@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "@electron/asar": "3.4.1"
+  },
+  "dependencies": {
+    "peerjs": "1.5.4"
   }
 }

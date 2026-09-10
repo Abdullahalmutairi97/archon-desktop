@@ -26,7 +26,17 @@ const shortcutAfter = 'x&&["1","2","3","4","5","6"].includes(y)';
 const shortcutTabsBefore = '["activity","files","browser","notes","terminal"]';
 const shortcutTabsAfter = '["activity","files","ide","browser","notes","terminal"]';
 
-const ideHelpers = fs.readFileSync(path.join(__dirname, 'ide-model.cjs'), 'utf8') + '\n' + fs.readFileSync(path.join(__dirname, 'ide-renderer.js'), 'utf8') + '\n' + fs.readFileSync(path.join(__dirname, 'collab-renderer.js'), 'utf8');
+const ideHelpers = ['ide-model.cjs','ide-renderer.js','collab-model.cjs','collab-renderer.js','connection-renderer.js'].map(file=>fs.readFileSync(path.join(__dirname,file),'utf8')).join('\n');
+
+function prepareCollaboration(app) {
+  const renderer=path.join(app,'dist/renderer');
+  fs.copyFileSync(path.join(__dirname,'node_modules/peerjs/dist/peerjs.min.js'),path.join(renderer,'peerjs.min.js'));
+  fs.copyFileSync(path.join(__dirname,'node_modules/peerjs/LICENSE'),path.join(renderer,'peerjs.LICENSE'));
+  const file=path.join(renderer,'index.html'), html=fs.readFileSync(file,'utf8');
+  const before="connect-src 'self' http: https:;";
+  if(html.split(before).length!==2)throw Error('Collaboration CSP anchor must occur exactly once');
+  fs.writeFileSync(file,html.replace(before,"connect-src 'self' http: https: wss://0.peerjs.com;"));
+}
 
 function patchRenderer(original) {
   let result = original;
@@ -39,6 +49,9 @@ function patchRenderer(original) {
   replaceOnce(titleTabsBefore, titleTabsAfter, 'titlebar tabs');
   replaceOnce(shortcutBefore, shortcutAfter, 'shortcut count');
   replaceOnce(shortcutTabsBefore, shortcutTabsAfter, 'shortcut tab order');
+  replaceOnce('ASn(ASConnection)', 'ASn(k.Fragment,null,ASn(ASConnection),ASn(ArchonDeviceToken))', 'connection credentials');
+  replaceOnce('const h=await K.health();setTestResult(`${h.service} responded · ${h.latencyMs} ms`)', 'const h=await K.health();await K.host();setTestResult(`Authenticated connection · ${h.latencyMs} ms`)', 'authenticated connection test');
+  replaceOnce('No response. Check the address and your network.', 'Connection failed. Check the server address, network and device token.', 'connection error');
   if (result.split(benchBefore).length !== 2) throw new Error('IDE render branch must occur exactly once');
   const start = result.indexOf('function ty(){');
   const end = result.indexOf('const Zl=', start);
@@ -76,6 +89,7 @@ async function build(args) {
   try {
     const app = path.join(temp, 'app');
     asar.extractAll(input, app);
+    prepareCollaboration(app);
     const renderer = path.join(app, baseline.rendererPath);
     const patched = patchRenderer(fs.readFileSync(renderer, 'utf8'));
     const syntax = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: patched, encoding: 'utf8' });
@@ -91,7 +105,7 @@ async function build(args) {
   }
 }
 
-module.exports = { patchRenderer, verifyOfficial };
+module.exports = { patchRenderer, verifyOfficial, prepareCollaboration };
 if (require.main === module) build(process.argv.slice(2)).catch(error => {
   console.error(error.message);
   process.exitCode = 1;

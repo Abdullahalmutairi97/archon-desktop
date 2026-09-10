@@ -7,6 +7,7 @@
     "setup": "npm --prefix current ci",
     "test": "npm --prefix current test",
     "build": "npm --prefix current run build --",
+    "build:candidate": "npm --prefix current run build:candidate --",
     "test:backend": "python3 scripts/test-backend.py",
     "test:legacy": "npm --prefix desktop test"
   }

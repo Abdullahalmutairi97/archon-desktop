@@ -73,6 +73,16 @@ The candidate builder checks the input archive and v0.3.0 package version, valid
 
 ## Editing and future releases
 
+### Readiness audit and collaboration
+
+The candidate now bundles PeerJS 1.5.4 locally and permits its specific signaling WebSocket. Sharing offers explicit session/project selection, a content review, peer invites, a separate snapshot-code option, a read-only conversation viewer, and Stop sharing. Project shares contain the sessions currently listed in the client and their fetched history (up to the existing API's 2,000-message limit per session). Files, live editing, continuing a friend's agent session, and durable team membership are not implemented. Large snapshots are rejected rather than silently truncated. Tool/thinking records and stored connection credentials are excluded. Text within ordinary messages is shared as reviewed.
+
+Peer codes are pasted into the other Archon client's Share dialog; they do not depend on a localhost or file URL. Keep the sending app open until the peer receives the snapshot. Stopping closes the peer connections and invalidates that live invite; already received snapshots and snapshot codes remain readable. Snapshot codes are explicit exports, never an automatic error fallback.
+
+Settings → Connection now includes device-token entry through the existing write-only Electron bridge. Test connection checks both public health and authenticated status. The candidate does not configure agent credentials or modify any backend. The local preview is disposable test data and must not be used for real work or real tokens.
+
+See [readiness audit](testing/readiness-audit.md) for the actual test coverage and remaining release checks.
+
 The current recipe intentionally fails if edits change the frozen baseline. To develop a new release, preserve this record, use a separately reviewed candidate recipe/manifest, and run isolated UI checks before approving new hashes. Never change expected checksums simply to silence a mismatch.
 
 See the [baseline record](../docs/releases/v0.3.0.md), [legacy inventory](../docs/versions.md), and [release checklist](../docs/releases.md). GitHub publication, full source recovery, full Electron distribution packaging, and new visual/live checks are separate work.
