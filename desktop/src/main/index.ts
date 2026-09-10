@@ -213,6 +213,12 @@ app.whenReady().then(() => {
     return win.isMaximized()
   })
   ipcMain.handle('window:close', (event) => BrowserWindow.fromWebContents(event.sender)?.close())
+  ipcMain.handle('shell:open-external', (_event, value: unknown) => {
+    if (typeof value !== 'string') throw new Error('Invalid browser URL')
+    const url = new URL(value)
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only HTTP and HTTPS URLs can be opened')
+    return shell.openExternal(url.toString())
+  })
   createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })

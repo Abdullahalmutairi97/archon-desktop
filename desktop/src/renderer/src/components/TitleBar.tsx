@@ -1,4 +1,4 @@
-import { ArrowClockwise, Files, Minus, Pulse, SidebarSimple, Square, TerminalWindow, X } from '@phosphor-icons/react'
+import { ArrowClockwise, Browser, Files, Minus, Pulse, SidebarSimple, Square, TerminalWindow, X } from '@phosphor-icons/react'
 import type { BenchDestination } from '../lib/workspace'
 import { BrandGlyph } from './BrandGlyph'
 
@@ -6,6 +6,7 @@ const tabs: Array<{ id: BenchDestination; label: string; icon: typeof Pulse }> =
   { id: 'tasks', label: 'Activity', icon: Pulse },
   { id: 'files', label: 'Files', icon: Files },
   { id: 'terminal', label: 'Terminal', icon: TerminalWindow },
+  { id: 'browser', label: 'Browser', icon: Browser },
 ]
 
 export function TitleBar({ title, crumb, bench, unseen = {}, onBench, onSidebar, onRefresh, refreshing = false }: {

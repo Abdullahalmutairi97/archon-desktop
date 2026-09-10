@@ -25,7 +25,7 @@ describe('Archon v2 workspace contract', () => {
 
   it('keeps the supplied v2 sidebar and titlebar destinations while exposing missing live surfaces', () => {
     expect(SIDEBAR_NAV.map((item) => item.id)).toEqual(['chat', 'sessions', 'tasks', 'skills', 'cron', 'backups', 'logs'])
-    expect(TITLEBAR_BENCH.map((item) => item.id)).toEqual(['tasks', 'files', 'terminal'])
+    expect(TITLEBAR_BENCH.map((item) => item.id)).toEqual(['tasks', 'files', 'terminal', 'browser'])
   })
 
   it('sorts projects A to Z and supports all supplied session columns in both directions', () => {

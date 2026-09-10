@@ -14,8 +14,9 @@
 
 See the [baseline record](docs/releases/v0.3.0.md), [legacy inventory](docs/versions.md), and [work history](docs/work-history.md). Older feature records describe their original scope and do not replace fresh verification.
 
-## Unreleased — repository maintenance (2026-09-08)
+## Unreleased — repository maintenance (2026-09-10)
 
+- Added an interactive Browser bench panel that surfaces HTTP(S) links from agent task output, supports URL navigation/history, and can hand pages to the system browser.
 - Replaced stale main/Prime/client landing documentation with component-specific setup and status.
 - Added backend/desktop guides, version and installed-copy inventory, work-history index, contribution guidance, release checklist, and verification report.
 - Added an isolated backend test entrypoint and offline CI checks for the main repository.

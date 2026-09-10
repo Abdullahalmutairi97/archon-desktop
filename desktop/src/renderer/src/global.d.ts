@@ -15,6 +15,7 @@ declare global {
       minimize(): Promise<void>
       maximize(): Promise<boolean>
       close(): Promise<void>
+      openExternal(url: string): Promise<void>
     }
   }
 }
