@@ -1,7 +1,7 @@
 import type { PrimeSession, Project } from './types'
 
 export type SidebarDestination = 'chat' | 'sessions' | 'tasks' | 'logs' | 'skills' | 'cron' | 'backups'
-export type BenchDestination = 'tasks' | 'files' | 'terminal' | 'browser'
+export type BenchDestination = 'tasks' | 'files' | 'terminal' | 'browser' | 'ide'
 export type SessionSort = 'recent' | 'title' | 'project' | 'model' | 'messages' | 'status'
 export type SortDirection = 'asc' | 'desc'
 
@@ -23,6 +23,7 @@ export const TITLEBAR_BENCH: ReadonlyArray<{ id: BenchDestination; label: string
   { id: 'files', label: 'Files' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'browser', label: 'Browser' },
+  { id: 'ide', label: 'IDE' },
 ]
 
 function timestamp(value: string | number | undefined) {

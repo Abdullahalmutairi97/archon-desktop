@@ -179,8 +179,8 @@ export function App() {
       if (event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 'n') { event.preventDefault(); openSession() }
       if (modifier && event.key === ',') { event.preventDefault(); setPreviousPage(page); setSettingsOpen(true) }
       if (modifier && event.key === '\\') { event.preventDefault(); toggleSidebar() }
-      const digit = /^Digit[1234]$/.test(event.code) ? event.code.slice(-1) : event.key
-      if (modifier && ['1','2','3','4'].includes(digit)) { event.preventDefault(); setBench(digit === '1' ? 'tasks' : digit === '2' ? 'files' : digit === '3' ? 'terminal' : 'browser') }
+      const digit = /^Digit[12345]$/.test(event.code) ? event.code.slice(-1) : event.key
+      if (modifier && ['1','2','3','4','5'].includes(digit)) { event.preventDefault(); setBench(digit === '1' ? 'tasks' : digit === '2' ? 'files' : digit === '3' ? 'terminal' : digit === '4' ? 'browser' : 'ide') }
       if (event.key === 'Escape') { if (updateOpen) setUpdateOpen(false); else if (settingsOpen) setSettingsOpen(false); else setBench(undefined) }
     }
     window.addEventListener('keydown', onKey)

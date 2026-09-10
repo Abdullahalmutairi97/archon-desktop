@@ -6,8 +6,9 @@ import type { BenchDestination } from '../lib/workspace'
 import { ErrorNotice, formatDate, StatusPill } from '../components'
 import { TerminalDock } from './TerminalDock'
 import { BrowserPanel } from './BrowserPanel'
+import { IdePanel } from './IdePanel'
 
-const tabs: Array<{ id: BenchDestination; label: string }> = [{ id:'tasks',label:'Activity' },{ id:'files',label:'Files' },{ id:'terminal',label:'Terminal' },{ id:'browser',label:'Browser' }]
+const tabs: Array<{ id: BenchDestination; label: string }> = [{ id:'tasks',label:'Activity' },{ id:'files',label:'Files' },{ id:'terminal',label:'Terminal' },{ id:'browser',label:'Browser' },{ id:'ide',label:'IDE' }]
 export function WorkspaceBench({ api, panel, onPanel, tasks, sessions, events, ready, onClose, onRefresh }: { api: ArchonApi; panel: BenchDestination; onPanel(value: BenchDestination): void; tasks: Task[]; sessions: PrimeSession[]; events: TaskEvent[]; ready: boolean; onClose(): void; onRefresh(): Promise<void> }) {
   const [files, setFiles] = useState<FileItem[]>([])
   const [path, setPath] = useState('/home/archon')
@@ -22,5 +23,6 @@ export function WorkspaceBench({ api, panel, onPanel, tasks, sessions, events, r
     {panel === 'files' && <div className="bench-panel files-panel"><div className="bench-panel-title"><div><b>VPS files</b><code>{path}</code></div><button onClick={() => void loadFiles()}><ArrowsClockwise/></button></div><ErrorNotice error={fileError}/><div className="bench-file-list"><button onClick={() => void loadFiles(path.split('/').slice(0,-1).join('/') || '/')}><FolderOpen/><span>..</span></button>{files.map((entry) => <button key={entry.path} onDoubleClick={() => entry.is_dir && void loadFiles(entry.path)}><FolderOpen/><span>{entry.name}</span><small>{entry.is_dir ? 'dir' : entry.size}</small></button>)}</div></div>}
     {panel === 'terminal' && <TerminalDock api={api}/>}
     {panel === 'browser' && <BrowserPanel tasks={tasks}/>}
+    {panel === 'ide' && <IdePanel api={api} tasks={tasks}/>}
   </aside>
 }
