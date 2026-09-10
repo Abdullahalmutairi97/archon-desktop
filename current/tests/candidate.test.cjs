@@ -17,6 +17,10 @@ test('candidate adds IDE, result links, and six workbench shortcuts', { skip: !r
   const patched = patchRenderer(renderer);
   assert.match(patched, /id:"ide",icon:"ph-code",title:"IDE"/);
   assert.match(patched, /function ArchonIde\(\)/);
+  assert.match(patched, /'Explorer'/);
+  assert.match(patched, /maxBytes:500000/);
+  assert.match(patched, /Open a file from Explorer/);
+  assert.match(patched, /Ln /);
   assert.match(patched, /function ArchonResultLinks\(\{onOpen\}\)/);
   assert.match(patched, /\["1","2","3","4","5","6"\]/);
   assert.match(patched, /ui\.bench==='ide'&&ASn\(ArchonIde\)/);
