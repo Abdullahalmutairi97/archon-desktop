@@ -26,7 +26,7 @@ const shortcutAfter = 'x&&["1","2","3","4","5","6"].includes(y)';
 const shortcutTabsBefore = '["activity","files","browser","notes","terminal"]';
 const shortcutTabsAfter = '["activity","files","ide","browser","notes","terminal"]';
 
-const ideHelpers = fs.readFileSync(path.join(__dirname, 'ide-model.cjs'), 'utf8') + '\n' + fs.readFileSync(path.join(__dirname, 'ide-renderer.js'), 'utf8');
+const ideHelpers = fs.readFileSync(path.join(__dirname, 'ide-model.cjs'), 'utf8') + '\n' + fs.readFileSync(path.join(__dirname, 'ide-renderer.js'), 'utf8') + '\n' + fs.readFileSync(path.join(__dirname, 'collab-renderer.js'), 'utf8');
 
 function patchRenderer(original) {
   let result = original;
@@ -43,7 +43,7 @@ function patchRenderer(original) {
   const start = result.indexOf('function ty(){');
   const end = result.indexOf('const Zl=', start);
   if (start < 0 || end < 0) throw new Error('Workbench component boundary missing');
-  result = result.slice(0,start) + 'function ty(){return ASn(ArchonWorkbench)}\n' + result.slice(end);
+  result = result.slice(0,start) + 'function ty(){return r.jsxs(r.Fragment,{children:[ASn(ArchonWorkbench),ASn(ArchonCollab)]})}\n' + result.slice(end);
 
   // Keep the helper in the renderer's module scope. Function declarations are
   // hoisted, so it can use the existing React and component aliases.
