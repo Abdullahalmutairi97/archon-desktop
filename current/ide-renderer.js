@@ -14,7 +14,7 @@ function arWorkspace(server){arCurrentServer=server;if(!arIdeSessions.has(server
 function ArchonMarkdown({text}){
  const {settings,setUi,connected,say}=Ne();const transcript=arUseTranscript();
  const navigate=e=>{const link=e.target.closest('a');if(!link)return;const href=link.getAttribute('href')||'';
-  if(/^https?:\/\//i.test(href)){e.preventDefault();e.stopPropagation();setUi({bench:'browser'});requestAnimationFrame(()=>Ui.navigate('browser',href));return}
+  if(/^https?:\/\//i.test(href)){e.preventDefault();e.stopPropagation();setUi({bench:'browser'});requestAnimationFrame(()=>window.archon?.web?.navigate?.('browser',href));return}
   const path=ArchonIdeModel.filePath(href,transcript.cwd);if(path){e.preventDefault();e.stopPropagation();if(!connected){say('Connect to read that file');return}void arWorkspace(settings.serverUrl).openFile(path);setUi({bench:'ide'})}
  };
  return ASn('div',{onClickCapture:navigate},ASn(jf,{text}));
