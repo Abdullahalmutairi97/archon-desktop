@@ -36,7 +36,15 @@ const ArchonIdeModel = (() => {
       for(const line of lines){if(!fence){const hit=line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);if(hit){fence={mark:hit[1],info:hit[2].trim()};}else prose.push(line);}else if(new RegExp('^ {0,3}'+fence.mark[0]+'{'+fence.mark.length+',}\\s*$').test(line)){finish();}else block.push(line);}
       if(fence&&m.streaming)finish();
       const outside=prose.join('\n');
-      for(const hit of outside.matchAll(/\[[^\]]+\]\((<[^>]+>|[^)]+)\)|`([^`\n]+)`/g))addFile(hit[1]||hit[2],source);
+      // Markdown links identify a file explicitly. Inline code is often a
+      // command (`python3 app.py`) or a directory (`.git`), so only accept
+      // path-shaped inline references. This keeps the agent-code list useful
+      // without hiding normal source paths such as `src/app.ts`.
+      for(const hit of outside.matchAll(/\[[^\]]+\]\((<[^>]+>|[^)]+)\)/g))addFile(hit[1],source);
+      for(const hit of outside.matchAll(/`([^`\n]+)`/g)){
+        const candidate=hit[1].trim();
+        if(candidate.includes('/')||candidate.startsWith('./')||candidate.startsWith('/'))addFile(candidate,source);
+      }
       for(const tool of m.tools||[])if(tool.kind==='diff')addFile(tool.target,source);
     }
     return items;

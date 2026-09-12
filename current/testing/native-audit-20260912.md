@@ -23,6 +23,7 @@ Native verification on the installed candidate:
 - Created `text_stats.py`, `test_text_stats.py`, and `README.md` in that project. Codex reported three passing unittest cases and a matching example; a separate shell check confirmed the three tests pass and Unicode output works.
 - Opened `text_stats.py` from the new IDE panel, edited it, saved it with Ctrl+S, and confirmed the exact edit on disk. The IDE displayed **This PC**, scoped the explorer to the Codex project, and disabled the server terminal for the local session.
 - Reopened the installed app with the same profile and confirmed both Codex sessions and the local project persisted. No renderer errors were reported.
+- Ran a second native smoke test in the local project. The agent created `hello.py` and `test_hello.py`; the IDE opened both files, kept a dirty tab intact while switching files, prompted before discarding an unsaved tab, saved with the toolbar and Ctrl+S, reloaded an external disk edit, filtered the explorer, and navigated into and back out of `__pycache__`. The focused agent-code list contained only the two generated files after the follow-up fix.
 
 Follow-up issues found and fixed during native testing:
 
@@ -31,5 +32,6 @@ Follow-up issues found and fixed during native testing:
 - The server model response uses a `choices` collection. The adapter now preserves the release's collection envelopes so Prime/Pi models remain available alongside Codex models.
 - Local project/session association now rejects cross-runtime IDs, and a projectless local session uses an explicit scratch folder instead of the app launch folder.
 - Task acknowledgements and early notifications wait for accepted turn mapping and synced local metadata. A failed metadata write interrupts the accepted turn.
+- Agent-code extraction no longer treats inline shell commands, `.git`, or other prose references as generated files; explicit Markdown links and path-shaped references remain available.
 
 The installed candidate is backed up at `/home/archonminipc/.local/state/archon-desktop-backups/20260912-native-audit/`. The Archon backend and worker service remain unchanged; the two remote Prime/Pi test requests are still queued because no execution worker is running.

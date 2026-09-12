@@ -15,6 +15,10 @@ test('extracts referenced files, native writes and patches; excludes reasoning a
  assert.deepEqual(items.filter(x=>x.kind==='file').map(x=>x.path),['/project/src/app.ts','/project/src/util.ts','/project/src/new.ts','/project/src/other.ts']);
  assert.ok(!items.some(x=>x.content==='secret'));assert.ok(!items.some(x=>x.path?.includes('https:')));
 });
+test('does not promote commands or control directories to agent code',()=>{
+ const items=collectArtifacts([message('Ran `python3 hello.py`, checked `.git`, and reviewed `AGENTS.md`; source is in `src/hello.py`.')],'one','/project');
+ assert.deepEqual(items.filter(x=>x.kind==='file').map(x=>x.path),['/project/src/hello.py']);
+});
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return{resolve,promise}};
 test('files stay read-only until successful complete read; errors retry; protected entries never read',async()=>{
  let calls=0;const w=new Workspace({readFileWindow:async()=>{calls++;if(calls===1)throw Error('no');return{content:'ok',truncated:true}},writeFile:async()=>assert.fail('write')});
