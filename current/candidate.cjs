@@ -28,6 +28,14 @@ const shortcutTabsAfter = '["activity","files","ide","browser","notes","terminal
 
 const ideHelpers = ['ide-model.cjs','ide-renderer.js','collab-model.cjs','collab-renderer.js','connection-renderer.js'].map(file=>fs.readFileSync(path.join(__dirname,file),'utf8')).join('\n');
 
+const connectionTestLifetime = [
+  ' const testScope=k.useRef(null);',
+  ' if(testScope.current?.server!==s.serverUrl)testScope.current={server:s.serverUrl,live:false,pending:false};',
+  ' const scope=testScope.current,current=()=>scope.live&&testScope.current===scope;',
+  ' k.useEffect(()=>{scope.live=true;setTesting(false);return()=>{scope.live=false}},[scope]);',
+  ' const test=async()=>{if(!current()||scope.pending)return;scope.pending=true;setTesting(true);setTestResult(\'\');try{const h=await K.health();if(!current())return;await K.host();if(!current())return;setTestResult(`Authenticated connection · ${h.latencyMs} ms`)}catch{if(current())setTestResult(\'Connection failed. Check the server address, network and device token.\')}finally{scope.pending=false;if(current())setTesting(false)}};'
+].join('\n');
+
 function prepareCollaboration(app) {
   const renderer=path.join(app,'dist/renderer');
   fs.copyFileSync(path.join(__dirname,'node_modules/peerjs/dist/peerjs.min.js'),path.join(renderer,'peerjs.min.js'));
@@ -49,9 +57,10 @@ function patchRenderer(original) {
   replaceOnce(titleTabsBefore, titleTabsAfter, 'titlebar tabs');
   replaceOnce(shortcutBefore, shortcutAfter, 'shortcut count');
   replaceOnce(shortcutTabsBefore, shortcutTabsAfter, 'shortcut tab order');
+  replaceOnce('p=!!(o.settingsTab||o.palette||o.dialog||o.update),h=!s&&!p;', 'p=!!(o.settingsTab||o.palette||o.dialog||o.update||o.collabOpen),h=!s&&!p;', 'collaboration surface visibility');
   replaceOnce('ASn(ASConnection)', 'ASn(k.Fragment,null,ASn(ASConnection),ASn(ArchonDeviceToken))', 'connection credentials');
-  replaceOnce('const h=await K.health();setTestResult(`${h.service} responded · ${h.latencyMs} ms`)', 'const h=await K.health();await K.host();setTestResult(`Authenticated connection · ${h.latencyMs} ms`)', 'authenticated connection test');
-  replaceOnce('No response. Check the address and your network.', 'Connection failed. Check the server address, network and device token.', 'connection error');
+  replaceOnce("const [testResult,setTestResult]=k.useState('');", "const [testResult,setTestResult]=k.useState('');\n"+connectionTestLifetime, 'connection test lifetime');
+  replaceOnce("onClick:async()=>{setTesting(true);try{const h=await K.health();setTestResult(`${h.service} responded · ${h.latencyMs} ms`)}catch{setTestResult('No response. Check the address and your network.')}finally{setTesting(false)}}", 'onClick:test', 'authenticated connection test');
   if (result.split(benchBefore).length !== 2) throw new Error('IDE render branch must occur exactly once');
   const start = result.indexOf('function ty(){');
   const end = result.indexOf('const Zl=', start);

@@ -52,19 +52,20 @@ const ArchonIdeModel = (() => {
     async openFile(path,entry={},reload=false){
       if(entry.prot)return;
       const old=this.state.docs[path];
+      if(old?.saving){this.select(path);return;}
       if(old&&!reload&&(!old.error||this.isDirty(path))){this.select(path);return;}
       const token={};this.requests.set(path,token);
-      this.publish({...this.state,active:path,tabs:this.state.tabs.includes(path)?this.state.tabs:[...this.state.tabs,path],docs:{...this.state.docs,[path]:{id:path,path,label:path.split('/').pop(),text:'',base:'',readOnly:true,loading:true,kind:'file'}}});
-      try{const r=await this.api.readFileWindow(path,{maxBytes:500000});if(this.requests.get(path)!==token)return;this.patch(path,{text:r.content,base:r.content,loading:false,readOnly:!!(r.binary||r.truncated),notice:r.binary?'Binary preview — read-only':r.truncated?'Partial preview — read-only':''});}
-      catch{if(this.requests.get(path)===token)this.patch(path,{loading:false,error:'Could not read this file. Retry when connected.',readOnly:true});}
+      this.publish({...this.state,active:path,tabs:this.state.tabs.includes(path)?this.state.tabs:[...this.state.tabs,path],docs:{...this.state.docs,[path]:{...old,id:path,path,label:path.split('/').pop(),text:old?.text??'',base:old?.base??'',error:'',readOnly:old?.readOnly??true,loading:true,kind:'file'}}});
+      try{const r=await this.api.readFileWindow(path,{maxBytes:500000});if(this.requests.get(path)!==token)return;if(!r||typeof r.content!=='string')throw Error('Invalid file response');this.patch(path,{text:r.content,base:r.content,loading:false,readOnly:!!(r.binary||r.truncated),notice:r.binary?'Binary preview — read-only':r.truncated?'Partial preview — read-only':''});}
+      catch{if(this.requests.get(path)===token)this.patch(path,{loading:false,error:'Could not read this file. Retry when connected.',readOnly:old?.readOnly??true});}
     }
     openSnippet(item){this.publish({...this.state,active:item.id,tabs:this.state.tabs.includes(item.id)?this.state.tabs:[...this.state.tabs,item.id],docs:{...this.state.docs,[item.id]:{...item,text:item.content,base:item.content,readOnly:true}}});}
     syncSnippets(items){let changed=false,docs={...this.state.docs};for(const item of items){const d=docs[item.id];if(item.kind==='snippet'&&d&&(d.text!==item.content||d.streaming!==item.streaming)){docs[item.id]={...d,...item,text:item.content,base:item.content};changed=true;}}if(changed)this.publish({...this.state,docs});}
     edit(id,text){const d=this.state.docs[id];if(d&&!d.readOnly&&!d.loading)this.patch(id,{text});}
-    close(id,discard=false){if(this.isDirty(id)&&!discard)return false;this.requests.delete(id);const tabs=this.state.tabs.filter(x=>x!==id),docs={...this.state.docs};delete docs[id];this.publish({...this.state,tabs,docs,active:this.state.active===id?(tabs[Math.max(0,this.state.tabs.indexOf(id)-1)]||tabs[0]||''):this.state.active});return true;}
-    async save(id){const d=this.state.docs[id];if(!d||!this.isDirty(id)||d.saving)return;const text=d.text,base=d.base;this.patch(id,{saving:true,error:''});
-      try{const remote=await this.api.readFileWindow(d.path,{maxBytes:500000});if(remote.binary||remote.truncated||remote.content!==base)throw Error('File changed on disk. Reload to review the agent’s changes before saving.');await this.api.writeFile(d.path,text);this.patch(id,{base:text,saving:false});}
-      catch(error){this.patch(id,{saving:false,error:String(error.message||'Save failed')});}
+    close(id,discard=false){if(this.state.docs[id]?.saving||(this.isDirty(id)&&!discard))return false;this.requests.delete(id);const tabs=this.state.tabs.filter(x=>x!==id),docs={...this.state.docs};delete docs[id];this.publish({...this.state,tabs,docs,active:this.state.active===id?(tabs[Math.max(0,this.state.tabs.indexOf(id)-1)]||tabs[0]||''):this.state.active});return true;}
+    async save(id){const d=this.state.docs[id];if(!d||!this.isDirty(id)||d.saving||d.loading)return;const text=d.text,base=d.base,token=this.requests.get(id);const current=()=>this.requests.get(id)===token&&this.state.docs[id]?.saving;this.patch(id,{saving:true,error:''});
+      try{const remote=await this.api.readFileWindow(d.path,{maxBytes:500000});if(!current())return;if(!remote||typeof remote.content!=='string')throw Error('Could not verify this file. Retry when connected.');if(remote.binary||remote.truncated||remote.content!==base)throw Error('File changed on disk. Reload to review the agent’s changes before saving.');await this.api.writeFile(d.path,text);if(current())this.patch(id,{base:text,saving:false});}
+      catch(error){if(current())this.patch(id,{saving:false,error:String(error?.message||'Save failed')});}
     }
   }
   return {filePath,collectArtifacts,Workspace};

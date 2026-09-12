@@ -2,7 +2,7 @@
 
 A Linux app for working with your Prime and Pi agents. Organize projects and conversations, inspect agent-written code, and open results in a browser panel.
 
-**Current version: v0.3.0.** The latest IDE, browser, sharing, and connection improvements are in the candidate build. They are merged into this repository but have not been installed or released as a new desktop package.
+**Current version: v0.3.0.** The latest IDE, browser, sharing, and connection fixes are in the candidate build. Use the instructions below to build and preview them.
 
 ## What you can do
 
@@ -45,7 +45,7 @@ node current/testing/preview.cjs "$ARCHON_V030_ASAR"
 
 Open **http://127.0.0.1:4318**. This preview uses test data—do not enter real tokens or use it for actual work. The generated ASAR is an app payload, not an installer.
 
-The candidate passed 20 tests and a two-client sharing test. Native desktop installation, live agents, and connections between separate PCs still need verification. See the [readiness report](current/testing/readiness-audit.md).
+See the [latest audit](current/testing/audit-20260912.md) for tested workflows, fixes, and remaining checks. The preview uses disposable data; it does not verify your live agents or connections between separate PCs.
 
 ## More details
 

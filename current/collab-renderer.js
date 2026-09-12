@@ -14,8 +14,13 @@ function ArchonCollab(){
  const {data,settings,say,connected,setUi}=Ne();
  const transcript=arUseTranscript();
  const [open,setOpen]=k.useState(false),[kind,setKind]=k.useState('session'),[selection,setSelection]=k.useState(''),[status,setStatus]=k.useState('Ready'),[error,setError]=k.useState(''),[invite,setInvite]=k.useState(''),[input,setInput]=k.useState(''),[shared,setShared]=k.useState(null),[review,setReview]=k.useState(null),[sessionIndex,setSessionIndex]=k.useState(0),[busy,setBusy]=k.useState(false);
+ // Native web surfaces sit above renderer dialogs; update their covered state
+ // in the same event that opens or closes this dialog.
+ const show=value=>{setOpen(value);setUi(value?{bench:null,collabOpen:true}:{collabOpen:false})};
+ k.useEffect(()=>()=>setUi({collabOpen:false}),[setUi]);
  const lifetime=k.useRef({generation:0,peer:null,timer:null,connections:[]});
  const stop=()=>{const life=lifetime.current;life.generation++;clearTimeout(life.timer);life.connections.forEach(c=>c.close());life.connections=[];life.peer?.destroy();life.peer=null;setBusy(false);setInvite('');setStatus('Stopped')};
+ const changeSelection=(value,isKind=false)=>{stop();setReview(null);setError('');setSessionIndex(0);if(isKind)setKind(value);else setSelection(value)};
  k.useEffect(()=>()=>{const l=lifetime.current;l.generation++;clearTimeout(l.timer);l.peer?.destroy()},[]);
  k.useEffect(()=>{stop();setReview(null);setShared(null);setSelection('');setError('')},[settings.serverUrl]);
  const choices=kind==='session'?data.sessions:data.projects;
@@ -30,7 +35,9 @@ function ArchonCollab(){
    if(sessions.length>100)throw Error('Share individual sessions from this large project.');
    const collected=[];
    for(const session of sessions){
+    if(generation!==lifetime.current.generation)return;
     const messages=session.id===transcript.sessionId?transcript.messages:await K.messages(session.id);
+    if(generation!==lifetime.current.generation)return;
     collected.push({id:session.id,title:session.title,messages});
    }
    if(generation!==lifetime.current.generation)return;
@@ -76,10 +83,10 @@ function ArchonCollab(){
    peer.on('error',failed);
    peer.on('open',()=>{
     if(generation!==life.generation)return;
-    const conn=peer.connect(match[1],{reliable:true,metadata:{secret:match[2]}});life.connections.push(conn);
+    const conn=peer.connect(match[1],{reliable:true,metadata:{secret:match[2]}});life.connections.push(conn);let received=false;
     conn.on('error',failed);
-    conn.on('data',value=>{if(generation!==life.generation)return;try{const p=ArchonCollabModel.validate(value);clearTimeout(life.timer);setShared(p);setBusy(false);setStatus('Snapshot received')}catch(e){failed(e)}});
-    conn.on('close',()=>{if(generation===life.generation){clearTimeout(life.timer);setBusy(false);setStatus('Peer disconnected · received snapshot remains available')}});
+    conn.on('data',value=>{if(generation!==life.generation)return;try{const p=ArchonCollabModel.validate(value);received=true;clearTimeout(life.timer);setShared(p);setBusy(false);setStatus('Snapshot received')}catch(e){failed(e)}});
+    conn.on('close',()=>{if(generation!==life.generation)return;if(!received){failed(Error('Your friend disconnected before a snapshot was received. Ask for a fresh code.'));return}stop();setStatus('Peer disconnected · received snapshot remains available')});
    });
   }catch(e){if(generation===life.generation){stop();fail(e)}}
  };
@@ -90,13 +97,13 @@ function ArchonCollab(){
   p.sessions[Math.min(sessionIndex,p.sessions.length-1)].messages.map((m,i)=>ASn('article',{key:i},ASn('strong',null,m.role==='user'?'You':'Agent'),ASn('pre',null,m.content))));
  return ASn(k.Fragment,null,
   ASn('style',null,ARCHON_COLLAB_CSS),
-  ASn('button',{type:'button',className:'ar-collab-launch btn btn-secondary',onClick:()=>{setUi({bench:null});setOpen(true)},'aria-label':'Share sessions and projects'},'Share'),
-  open&&ASn('div',{className:'ar-collab-backdrop',onKeyDown:e=>{if(e.key==='Escape')setOpen(false)}},
+  ASn('button',{type:'button',className:'ar-collab-launch btn btn-secondary',onClick:()=>show(true),'aria-label':'Share sessions and projects'},'Share'),
+  open&&ASn('div',{className:'ar-collab-backdrop',onKeyDown:e=>{if(e.key==='Escape')show(false)}},
    ASn('section',{className:'ar-collab-card',role:'dialog','aria-modal':true,'aria-label':'Collaboration'},
-    ASn('header',null,ASn('strong',null,'Share with a friend'),button('Close',()=>setOpen(false))),
+    ASn('header',null,ASn('strong',null,'Share with a friend'),button('Close',()=>show(false))),
     ASn('p',null,'Share a read-only snapshot of conversations and agent code. Project sharing includes its listed sessions; files, live editing and agent control are not included.'),
-    ASn('div',{className:'ar-collab-row'},ASn('select',{'aria-label':'Share type',value:kind,onChange:e=>setKind(e.target.value)},ASn('option',{value:'session'},'Session'),ASn('option',{value:'project'},'Project')),
-     ASn('select',{'aria-label':'Select '+kind,value:selection,onChange:e=>{setSelection(e.target.value);setReview(null)}},ASn('option',{value:''},'Choose '+kind),choices.map(s=>ASn('option',{key:s.id,value:s.id},s.title||s.name))),
+    ASn('div',{className:'ar-collab-row'},ASn('select',{'aria-label':'Share type',value:kind,onChange:e=>changeSelection(e.target.value,true)},ASn('option',{value:'session'},'Session'),ASn('option',{value:'project'},'Project')),
+     ASn('select',{'aria-label':'Select '+kind,value:selection,onChange:e=>changeSelection(e.target.value)},ASn('option',{value:''},'Choose '+kind),choices.map(s=>ASn('option',{key:s.id,value:s.id},s.title||s.name))),
      button('Review snapshot',prepare,busy||!connected||!selection)),
     review&&ASn(k.Fragment,null,view(review,true),ASn('p',null,'Only the content shown above is shared. Anyone with a sharing code can read it. Snapshot copies cannot be revoked.'),
      ASn('div',{className:'ar-collab-row'},button('Create peer invite',start,busy),button('Create snapshot code',()=>{stop();setInvite(ArchonCollabModel.encode(review));setStatus('Snapshot code ready · copy it to your friend')},busy))),

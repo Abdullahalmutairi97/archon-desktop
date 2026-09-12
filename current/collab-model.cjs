@@ -4,10 +4,10 @@ const ArchonCollabModel=(()=>{
  const str=(s,max)=>typeof s==='string'&&s.length<=max;
  function validate(p){
   if(!p||p.type!=='archon-collab'||p.version!==2||!['session','project'].includes(p.kind)||!str(p.title,500)||!Array.isArray(p.sessions)||!p.sessions.length||p.sessions.length>100)fail();
-  if(JSON.stringify(p).length>MAX)fail();
-  const sessions=p.sessions.map(s=>{
+  if(new TextEncoder().encode(JSON.stringify(p)).byteLength>MAX)fail();
+  const sessions=Array.from(p.sessions,s=>{
    if(!s||!str(s.id,500)||!str(s.title,500)||!Array.isArray(s.messages)||s.messages.length>2000)fail();
-   const messages=s.messages.map(m=>{if(!m||!['user','agent'].includes(m.role)||!str(m.content,MAX))fail();return {role:m.role,content:m.content}});
+   const messages=Array.from(s.messages,m=>{if(!m||!['user','agent'].includes(m.role)||!str(m.content,MAX))fail();return {role:m.role,content:m.content}});
    return {id:s.id,title:s.title,messages};
   });
   return {type:p.type,version:2,kind:p.kind,title:p.title,sessions};
