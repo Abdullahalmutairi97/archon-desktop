@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
 const baseline = require('./baseline.json');
+const { patchRendererQueueStatus } = require('./queue-status-patch.cjs');
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function verifyOfficial(bytes) {
@@ -85,7 +86,7 @@ function patchRenderer(original) {
   if (result.split(shortcutStrip).length !== 2) throw new Error('browser shortcut strip terminator must occur exactly once');
   result = result.replace(shortcutStrip, '}),r.jsx(ArchonResultLinks,{onOpen:w})]})}const Bm=typeof navigator');
 
-  return result;
+  return patchRendererQueueStatus(result);
 }
 
 async function build(args) {
