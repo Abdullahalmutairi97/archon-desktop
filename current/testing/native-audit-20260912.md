@@ -12,6 +12,24 @@ Validation: six regression tests exercise the release's actual data converters a
 
 One test request was cancelled successfully using the native app's Stop control. The second remains queued, alongside one older request. No unrelated tasks were cancelled.
 
-## In progress
+## Codex and IDE verification
 
-Codex integration and further native mini-project tests are being verified before publication of their feature commit.
+Added Codex as a real local agent backed by the signed-in Codex CLI app server. Prime and Pi remain remote server agents. Codex projects and sessions are stored on this PC, with local models shown only for Codex and remote models retained for Prime and Pi. Local file reads and writes require an owned Codex session, stay inside its project root, and reject protected credentials, private keys, and escaping symlinks. Unsupported approval requests are declined unless the desktop approval dialog explicitly allows the single request.
+
+Native verification on the installed candidate:
+
+- Settings shows a usable **Codex** card marked **THIS PC**, a ready status, and five discovered local models. Prime retains its remote model catalog.
+- Created the local project **Codex Audit - Text Tools** at `/home/archonminipc/projects/codex-audit-20260912-text-tools` and two Codex sessions.
+- Created `text_stats.py`, `test_text_stats.py`, and `README.md` in that project. Codex reported three passing unittest cases and a matching example; a separate shell check confirmed the three tests pass and Unicode output works.
+- Opened `text_stats.py` from the new IDE panel, edited it, saved it with Ctrl+S, and confirmed the exact edit on disk. The IDE displayed **This PC**, scoped the explorer to the Codex project, and disabled the server terminal for the local session.
+- Reopened the installed app with the same profile and confirmed both Codex sessions and the local project persisted. No renderer errors were reported.
+
+Follow-up issues found and fixed during native testing:
+
+- Codex sessions were initially displayed as Prime in the session list. Session labels now use the actual runtime.
+- Switching into a local session could leave the explorer on the previous server root until a manual refresh. The explorer now keys its first load to the visible session ID and immediately scopes local sessions to their local root.
+- The server model response uses a `choices` collection. The adapter now preserves the release's collection envelopes so Prime/Pi models remain available alongside Codex models.
+- Local project/session association now rejects cross-runtime IDs, and a projectless local session uses an explicit scratch folder instead of the app launch folder.
+- Task acknowledgements and early notifications wait for accepted turn mapping and synced local metadata. A failed metadata write interrupts the accepted turn.
+
+The installed candidate is backed up at `/home/archonminipc/.local/state/archon-desktop-backups/20260912-native-audit/`. The Archon backend and worker service remain unchanged; the two remote Prime/Pi test requests are still queued because no execution worker is running.

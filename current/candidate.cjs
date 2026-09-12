@@ -9,6 +9,8 @@ const { spawnSync } = require('node:child_process');
 
 const baseline = require('./baseline.json');
 const { patchRendererQueueStatus } = require('./queue-status-patch.cjs');
+const { patchCodexRenderer } = require('./codex-patch.cjs');
+const { prepareCodex } = require('./codex-main-patch.cjs');
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function verifyOfficial(bytes) {
@@ -86,7 +88,7 @@ function patchRenderer(original) {
   if (result.split(shortcutStrip).length !== 2) throw new Error('browser shortcut strip terminator must occur exactly once');
   result = result.replace(shortcutStrip, '}),r.jsx(ArchonResultLinks,{onOpen:w})]})}const Bm=typeof navigator');
 
-  return patchRendererQueueStatus(result);
+  return patchCodexRenderer(patchRendererQueueStatus(result));
 }
 
 async function build(args) {
@@ -100,6 +102,7 @@ async function build(args) {
     const app = path.join(temp, 'app');
     asar.extractAll(input, app);
     prepareCollaboration(app);
+    prepareCodex(app);
     const renderer = path.join(app, baseline.rendererPath);
     const patched = patchRenderer(fs.readFileSync(renderer, 'utf8'));
     const syntax = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: patched, encoding: 'utf8' });
