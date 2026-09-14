@@ -1,41 +1,25 @@
-# Source synchronization — 2026-09-08
+# Repository publication
 
-## 2026-09-10 candidate follow-up
+The active source is the `main` branch of `Abdullahalmutairi97/archon-desktop`. The repository now contains the v0.3.0 kit, shared backend, server deployment files, tests, and focused documentation. Generated ASARs, dependencies, credentials, private profiles, and runtime data remain outside Git.
 
-Abdullah Almutairi's Browser/IDE/collaboration changes and documentation are merged into `main` through pull request #1, followed by the simplified README in pull request #2. The implementation history starts at `fc0a0f3`. These source updates are not a release, deployment, or installed-app update. The [candidate ledger](releases/v0.3.0-candidate.md) lists each implementation commit and the commands to reproduce the candidate.
+## Current state
 
-Generated ASARs, dependency directories, private profiles, credentials, real transcripts, and live screenshots are excluded. Historical prototypes remain traceable through Git; the candidate guide describes the final behavior rather than treating early prototypes as complete collaboration.
+- Local and remote branch: `main` only.
+- Latest verified source commit before this cleanup: `69bcf1e` (`Merge verified v0.3.0 desktop audit`).
+- Official frozen v0.3.0 input SHA-256: `36d3ae03bd6b20c4e9ea5fc690461ef972b16eb0c9433bfb1305daeb068e549b`.
+- MiniPC installed candidate payload verified against a clean build from `main`: `e409eaf57cebf98152d68842f19e98b7e15ab1931e2af38372fa371fe723b856`.
+- Collaboration uses bundled PeerJS and does not add backend routes, tables, credentials, or services.
 
-The owner authorized committing and pushing the Archon updates. GitHub authentication is now configured through GitHub CLI's credential-store-backed login; both repositories were confirmed private with owner access. No credentials were copied into source or passed in remote URLs.
+The removed legacy desktop source, design archives, version-specific launchers, and dated maintenance reports were not inputs to the active build or tests. Their history remains available through Git commits; they are no longer part of the working tree.
 
-## Branch map
+## Verification commands
 
-| Repository | Branch | Purpose |
-| --- | --- | --- |
-| `Abdullahalmutairi97/archon-desktop` | `main` | Current v0.3.0 reconstruction kit, shared backend, documentation, and preserved legacy desktop source |
-| Same repository | `chore/repository-refresh-20260908` | Maintenance branch carrying the same synchronized source |
-| Same repository | `legacy/prime-0.4.2-20260908` | Separate Prime client history, explicitly legacy; not merged over the main layout |
-| `Abdullahalmutairi97/archon-desktop-client` | `main` | Standalone legacy client updates and corrected README |
-| Same repository | `chore/legacy-client-sync-20260908` | Maintenance branch for that client sync |
+```bash
+npm run setup
+ARCHON_V030_ASAR=/path/to/app-v0.3.0-unified-refresh.asar npm test
+npm run test:backend
+npm run build:candidate -- /path/to/app-v0.3.0-unified-refresh.asar /tmp/archon-v030-candidate.asar
+git diff --check
+```
 
-Both main-branch updates are intended as ordinary fast-forwards from the inspected remote history. No force-push, default-branch change, release tag, artifact upload, deployment, or restart is part of this sync. The GitHub branch refs are the final authority for whether a push completed.
-
-## Fresh pre-push checks
-
-- Current v0.3.0 kit: **7 tests passed**.
-- Backend: **169 tests passed**.
-- Legacy main desktop: **86 tests passed**, typecheck/build passed.
-- Prime client: **64 tests passed**, typecheck/build passed.
-- Standalone client: **88 tests passed**, typecheck/build passed.
-- Existing canvas-test and large-bundle warnings remain; these checks are not new graphical/live verification.
-- Staged whitespace checks caught trailing spaces/blank lines in five previously untracked source/test files. Those were trimmed without behavior changes, and the affected tests were rerun.
-- Current source trees and outgoing historical blobs were checked for common credential/key patterns without printing secret values. Apparent credential-literal matches were shell-generated values and test fixtures. Reference ZIP filenames and known-key patterns were also checked. This limited scan is not a comprehensive security audit.
-
-## Excluded intentionally
-
-- Environment files/backups, credentials, session/history/recovery data, live screenshots, generated binaries, dependencies, and local audit output.
-- The standalone client's untracked `LICENSE` file: it proposes MIT licensing while app metadata remains `UNLICENSED`. It is left local pending an explicit licensing decision, not silently published.
-
-Source updates include existing local backend/client work and the new baseline kit/documentation. Old build numbers remain legacy provenance. The installed AbdullahPC archive is unchanged. Earlier maintenance documents' "not pushed" and authentication-blocked notes describe the initial work; this synchronization record supersedes those as the publication plan.
-
-For the exact v0.3.0 identity and reconstruction limitations, see [the baseline record](releases/v0.3.0.md). A clone still needs the verified frozen parent archive for full ASAR reconstruction; source synchronization does not upload that artifact.
+A source publication is separate from packaging or installation. Uploading an ASAR, changing the update feed, restarting a service, or installing on another PC requires its own deliberate release step.

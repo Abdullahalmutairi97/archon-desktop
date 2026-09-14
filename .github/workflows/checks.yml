@@ -23,22 +23,6 @@ jobs:
       - run: npm test
       # Full reconstruction needs the private frozen parent archive; no download here.
 
-  desktop:
-    name: Legacy desktop regression checks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
-      - run: npm --prefix desktop ci
-      - run: npm --prefix desktop test
-      - run: npm --prefix desktop run typecheck
-      - run: npm --prefix desktop run build
-      - run: git diff --check
-
   backend:
     runs-on: ubuntu-latest
     steps:

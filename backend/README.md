@@ -48,4 +48,4 @@ Tests cover authentication, API operations, runtime selection, native histories,
 - Blank API authentication is supported for local fixtures but must not be used for a shared endpoint.
 - Optional Telegram needs private bot configuration. Tests use fake clients; do not invoke a live bot for unit verification.
 
-See the root [README](../README.md), [work history](../docs/work-history.md), and [release checklist](../docs/releases.md).
+See the root [README](../README.md), [version policy](../docs/versions.md), and [release checklist](../docs/releases.md).

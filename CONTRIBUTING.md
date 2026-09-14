@@ -1,42 +1,20 @@
 # Contributing
 
-## Before editing
-
-1. Read [AGENTS.md](AGENTS.md), the root README, and the component README.
-2. Check `git status --short --branch` and preserve existing work. This repository currently contains substantial pre-existing uncommitted changes.
-3. Confirm which client lineage you mean using [versions](docs/versions.md). Do not overwrite the main desktop with the separate Prime client or blindly merge their histories.
-4. Use a focused branch. Keep visual behavior and per-client preferences intact unless the task explicitly changes them.
+Read [AGENTS.md](AGENTS.md) and the [README](README.md) first. Work on the active v0.3.0 kit in `current/`; keep the shared backend in `backend/` unchanged unless the task explicitly requires a backend fix. Preserve existing work and review the diff before staging.
 
 ## Checks
 
 ```bash
-# Current v0.3.0 patch/metadata and backend fixtures
+npm run setup
 npm test
 npm run test:backend
-
-# Legacy source regressions (not the current release build)
-npm --prefix desktop test
-npm --prefix desktop run typecheck
-npm --prefix desktop run build
 git diff --check
 ```
 
-The official baseline is AbdullahPC's verified unified-refresh v0.3.0. Read `current/README.md` before changing its reconstruction kit. Exact reconstruction requires a verified frozen parent archive; never update expected hashes merely to make a failing comparison pass.
+When the verified parent archive is available, set `ARCHON_V030_ASAR` so the tests inspect the packaged renderer. Build a candidate with `npm run build:candidate -- <parent> <new-output>`. Never update expected hashes to hide a mismatch.
 
-Install dependencies as documented in the README first. Backend tests use fixtures and fake runners. For bug fixes, reproduce the problem and add a failing regression before changing behavior. Report warnings and skipped/failed checks honestly.
+The preview and unit suites use synthetic data. Native Electron behavior, live agent execution, deployment, service restarts, database changes, and real session mutations require a separate deliberate check. Report warnings and skipped checks honestly.
 
-Electron screenshot/smoke tests require a display and an isolated profile. Live API tests, agent prompts, deployment, restarts, database changes, deletion, and cron mutations require separate operator approval. Unit/build success is not proof of UI behavior or production health.
+## Documentation and Git
 
-## Changes and documentation
-
-- Document user-visible changes under **Unreleased** in `CHANGELOG.md`.
-- Update component setup when scripts, dependencies, runtime behavior, or configuration change.
-- Keep historical validation reports intact; add a new report instead of editing old results to sound current.
-- Keep API and backend versions independent unless an intentional release changes both.
-- Never silently choose a new license; ownership and third-party/reference asset provenance must be reviewed before public distribution.
-
-## Review and publication
-
-Review an explicit source-file allowlist before staging. Never use `git add .` as a substitute for inspecting untracked files in this checkout. Environment backups, recovery data, private screenshots, operational session logs, and binaries do not belong in a source commit.
-
-Do not commit, push, tag, force-push, or publish on the operator's behalf without approval. Follow the [release checklist](docs/releases.md). Git ignore rules protect future staging only; they do not remove sensitive material already committed or replace a pre-publication review.
+Document user-visible changes in `CHANGELOG.md` and update the relevant component guide. Keep release notes tied to the active v0.3.0 kit. Do not commit credentials, environment files, runtime data, generated ASARs, dependency directories, or private screenshots. Use a focused branch for work and a concise commit message after verification.
