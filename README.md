@@ -1,8 +1,8 @@
 # Archon Desktop
 
-A Linux app for working with your Prime and Pi agents. Organize projects and conversations, inspect agent-written code, and open results in a browser panel.
+A Linux app for working with Prime, Pi, and Codex. Organize projects and conversations, inspect agent-written code, and open results in a browser panel.
 
-**Current version: v0.3.0.** The latest IDE, browser, sharing, and connection improvements are in the candidate build. They are merged into this repository but have not been installed or released as a new desktop package.
+**Current version: v0.3.0.** The latest features and fixes are in the candidate build. Use the instructions below to build and preview them.
 
 ## What you can do
 
@@ -21,7 +21,9 @@ In the candidate desktop app:
 3. Choose your agent and model in **Settings → Agents & models**.
 4. Start a session and select your project.
 
-Your agents must already be configured on the server. Tailscale can provide a private connection between your PCs; you still need the Archon device token. Keep tokens out of Git and chat. See [backend setup](backend/README.md) if you need to configure a server.
+Prime and Pi must already be configured on the server, with its execution worker running. **Queued** means a task has been accepted but has not started. Tailscale can provide a private connection between your PCs; you still need the Archon device token. See [backend setup](backend/README.md) for server setup.
+
+For **Codex**, install and sign in to the [Codex CLI](https://developers.openai.com/codex/cli/) on the PC running this app. Choose **Codex** in **Settings → Agents & models**, select a model, and create a project. Codex runs locally without changing the Archon backend. Use the IDE to read and edit its files; ask Codex to run project commands. Its projects and sessions stay on that PC. Keep tokens out of Git and chat.
 
 ## Share with a friend
 
@@ -45,7 +47,7 @@ node current/testing/preview.cjs "$ARCHON_V030_ASAR"
 
 Open **http://127.0.0.1:4318**. This preview uses test data—do not enter real tokens or use it for actual work. The generated ASAR is an app payload, not an installer.
 
-The candidate passed 20 tests and a two-client sharing test. Native desktop installation, live agents, and connections between separate PCs still need verification. See the [readiness report](current/testing/readiness-audit.md).
+See the [native desktop audit](current/testing/native-audit-20260912.md) and [earlier fixture audit](current/testing/audit-20260912.md) for tested workflows, fixes, and remaining checks. The preview uses disposable data; it does not verify your live agents or connections between separate PCs.
 
 ## More details
 

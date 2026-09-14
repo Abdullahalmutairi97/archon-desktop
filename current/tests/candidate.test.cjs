@@ -22,7 +22,7 @@ test('candidate adds IDE, result links, and six workbench shortcuts', { skip: !r
   }
   assert.ok(patched.includes(fs.readFileSync(path.join(__dirname, '../ide-renderer.js'), 'utf8')), 'Helper injection preserves literal replacement characters');
   assert.ok(patched.includes('ASn(ArchonDeviceToken)'), 'Connection settings offer token setup');
-  assert.ok(patched.includes('await K.host();setTestResult'), 'Connection test verifies authorization');
+  assert.ok(patched.includes('await K.host();if(!current())return;setTestResult'), 'Connection test verifies authorization for the current server');
   const check = require('node:child_process').spawnSync(process.execPath, ['--input-type=module', '--check'], { input: patched, encoding: 'utf8' });
   assert.equal(check.status, 0, check.stderr);
 });
