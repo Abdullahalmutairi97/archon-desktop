@@ -13,6 +13,8 @@ To connect an agent, open **Settings → Connection**, enter the server URL and 
 
 ## Repository layout
 
+Implementation work is tracked in the [phased roadmap](docs/roadmap/README.md). Each phase records its dependencies, acceptance checks and publication status; completed source increments are published as pull requests for review.
+
 | Path | Purpose |
 | --- | --- |
 | `current/` | Active v0.3.0 final-stage kit, Browser/IDE/collaboration patches, tests, and preview |
