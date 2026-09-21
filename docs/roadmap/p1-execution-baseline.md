@@ -1,6 +1,6 @@
 # P1 — Trustworthy execution baseline
 
-**Status:** in progress. **Current increment:** Phase 1A. **Dependencies:** audited backend and isolated fixture environment; backend work does not require the private ASAR. **Outcome:** admission, execution modes, locking, recovery and readiness describe enforced behavior truthfully.
+**Status:** P1 remains in progress; Phase 1A source is published for review in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14). Work is stopped at this boundary; Phases 1B–1D remain pending. **Dependencies:** audited backend and isolated fixture environment; backend work does not require the private ASAR. **Outcome:** admission, execution modes, locking, recovery and readiness describe enforced behavior truthfully.
 
 Publish each completed increment as a pull request for review. The current work stops after Phase 1A and its evidence are published. P1 remains open until 1B–1D and the combined acceptance checks also pass. No merge, production deployment or service restart is included.
 
@@ -8,22 +8,24 @@ Publish each completed increment as a pull request for review. The current work 
 
 | Increment | Milestone items | Status | Dependency / scope boundary |
 | --- | --- | --- | --- |
-| Phase 1A — Locking and conservative recovery | M1.4 and the current-schema portion of M1.6 | In progress | Can proceed with existing backend; do not claim durable attempt fencing or all of M1.6 without M1.5 |
+| Phase 1A — Locking and conservative recovery | M1.4 and the current-schema portion of M1.6 | Published for review; stopped | Can proceed with existing backend; do not claim durable attempt fencing or all of M1.6 without M1.5 |
 | Phase 1B — Admission, runtimes and modes | M1.1, M1.2, M1.3 | Not started | Coordinate ownership fields with 1C; no unsupported-mode fallback |
 | Phase 1C — Durable admission and attempts | M1.5 and remaining M1.6 | Not started | 1B/1C can be developed in either order with an explicit compatibility contract; completes durable attempt identity and stale-result fencing |
 | Phase 1D — Credentials and readiness | M1.7, M1.8 | Not started | Integrates 1B/1C; native credential handling remains gated on P2 evidence |
 
 ## Phase 1A checklist and publication gate
 
-- [ ] Add regression tests reproducing the stale-owner lease hang and unsafe recovery of already-started work before changing behavior.
-- [ ] Replace unbounded/spinning lease acquisition with bounded nonblocking waits and reliable owner release. Do not unlink a live lock inode or allow two owners during recovery.
-- [ ] Gate legacy lock migration: demonstrate old/new/native lock compatibility, or require old-worker drain and an explicit maintenance migration before switching lock formats. Unknown or live legacy ownership must block safely rather than be removed automatically.
-- [ ] Exercise killed owner, live owner, malformed metadata, timeout/cancellation and concurrent contenders; demonstrate event-loop responsiveness.
-- [ ] Preserve unstarted queued work. Mark started work interrupted/reviewable unless verified process/native evidence proves continuation; never infer success from uncertainty.
-- [ ] Demonstrate a fixture side effect is not executed twice after restart. Preserve existing client response shapes/status compatibility with a documented translation if needed.
-- [ ] Record where the current schema cannot distinguish launch intent from started execution. Use conservative interruption, and carry durable attempt identity/fencing into 1C instead of claiming it exists.
-- [ ] Run focused tests and applicable backend regressions with isolated paths/fake commands; inspect the diff and document result counts, skips and limitations.
-- [ ] Publish the Phase 1A PR for review, link the P1 tracker, and stop. Leave the rest of P1 open.
+- [x] Add regression tests reproducing the stale-owner lease hang and unsafe recovery of already-started work before changing behavior.
+- [x] Replace unbounded/spinning lease acquisition with bounded nonblocking waits and reliable owner release. Do not unlink a live lock inode or allow two owners during recovery.
+- [x] Gate legacy lock migration: demonstrate old/new/native lock compatibility, or require old-worker drain and an explicit maintenance migration before switching lock formats. Unknown or live legacy ownership must block safely rather than be removed automatically.
+- [x] Exercise killed owner, live owner, malformed metadata, timeout/cancellation and concurrent contenders; demonstrate event-loop responsiveness.
+- [x] Preserve unstarted queued work. Mark started work interrupted/reviewable unless verified process/native evidence proves continuation; never infer success from uncertainty.
+- [x] Demonstrate a fixture side effect is not executed twice after restart. Preserve existing client response shapes/status compatibility with a documented translation if needed.
+- [x] Record where the current schema cannot distinguish launch intent from started execution. Use conservative interruption, and carry durable attempt identity/fencing into 1C instead of claiming it exists.
+- [x] Run focused tests and applicable backend regressions with isolated paths/fake commands; inspect the diff and document result counts, skips and limitations.
+- [x] Publish the Phase 1A PR for review, link the P1 tracker, and stop. Leave the rest of P1 open.
+
+Phase 1A validation: 196 backend tests passed; 72 desktop tests passed and 16 existing ASAR-dependent checks skipped. Legacy lock migration and reverse migration require quiescence; native Prime/Electron qualification remains unperformed. See [the implementation evidence](https://github.com/Abdullahalmutairi97/archon-desktop/blob/codex/phase-1a-execution-recovery/docs/releases/phase-1a-execution-recovery.md). Checked items above describe the bounded source/publication gate, not full-P1 or production readiness.
 
 ## Full M1 work packages
 
@@ -63,6 +65,8 @@ Likely files: `prime_runner.py`, `pi_runner.py`, registry and API validation.
 Likely files: `prime_runner.py` and its regression tests. Any native-lock compatibility not observed remains an explicit limitation in the PR.
 
 ### M1.5 — Durable admission and attempt schema (Phase 1C)
+
+- [ ] Fix the preexisting queued-cancellation/claim race: a queued-only cancellation transition must not return before cancelling a process that became running between the status read and transaction. Add a concurrent regression.
 
 - [ ] Introduce ordered/checksummed migrations, idempotency request hashes, runtime/session ownership and explicit task-attempt states.
 - [ ] Commit task, initial event and owned project relation together; use visible pending reconciliation for legacy cross-store imports.

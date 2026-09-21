@@ -2,13 +2,13 @@
 
 This backlog turns the 21 September 2026 repository audit and revised implementation plan into reviewable phases. Implementation starts from the existing Linux Electron/React application, FastAPI service and SQLite ledger. Preserve the familiar project/session/workbench layout, native histories and working integrations.
 
-**Current boundary: complete Phase 1A, publish its pull request for review, then stop.** Phase 1A contains bounded session locking and conservative recovery; it does not complete all of P1. Later phases are recorded here so they can proceed without losing requirements. Publishing means opening a GitHub pull request after the applicable checks pass. It does not mean merging, deploying, restarting services or publishing an installer.
+**Stopped at Phase 1A:** its tested source changes are published for review in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14). Phase 1A contains bounded session locking and conservative recovery; it does not complete all of P1. Later phases are recorded here so they can proceed without losing requirements. Publishing means opening a GitHub pull request after the applicable checks pass. It does not mean merging, deploying, restarting services or publishing an installer.
 
 ## Phase index
 
 | Phase | Outcome | Dependencies | Status |
 | --- | --- | --- | --- |
-| [P1 — Trustworthy execution baseline](p1-execution-baseline.md) | Honest admission, modes, locks, recovery, credentials and readiness | Existing backend and isolated fixtures | In progress; Phase 1A is the current increment |
+| [P1 — Trustworthy execution baseline](p1-execution-baseline.md) | Honest admission, modes, locks, recovery, credentials and readiness | Existing backend and isolated fixtures | In progress; Phase 1A published for review, 1B–1D pending |
 | [P2 — Maintainable source build](p2-source-build.md) | Build the actual desktop from authored source and preserve UI behavior | Matching source/asset inventory; runs alongside P1 | Not started; source provenance/input gap |
 | [P3 — Workspaces and persistent runner](p3-workspaces-runner.md) | Protected solo bootstrap; one workspace identity; work outlives UI | P1; P2 before desktop delivery | Not started |
 | [P4 — Full solo workstation](p4-solo-workstation.md) | Full IDE, persistent terminal and managed private previews | P2 and P3 | Not started |
@@ -18,6 +18,19 @@ This backlog turns the 21 September 2026 repository audit and revised implementa
 | [P8 — Optional enhancements](p8-enhancements.md) | Selected improvements with independently measured value | Relevant essential phases and an actual need | Deferred; optional |
 
 The main dependency chain is P1 → P3 → P4 → P5 → P6 → P7. P2 runs in parallel with P1 and gates delivery of new desktop UI. Adapter work can use separate branches once its contracts are stable. No essential phase depends on P8.
+
+## GitHub tracking
+
+- [P1 — Trustworthy execution baseline](https://github.com/Abdullahalmutairi97/archon-desktop/issues/6)
+- [P2 — Maintainable source build and UI parity](https://github.com/Abdullahalmutairi97/archon-desktop/issues/7)
+- [P3 — Unified workspaces and persistent runner](https://github.com/Abdullahalmutairi97/archon-desktop/issues/8)
+- [P4 — Full solo workstation](https://github.com/Abdullahalmutairi97/archon-desktop/issues/9)
+- [P5 — Native runtime parity and resource management](https://github.com/Abdullahalmutairi97/archon-desktop/issues/10)
+- [P6 — Genuine collaboration for friends](https://github.com/Abdullahalmutairi97/archon-desktop/issues/11)
+- [P7 — Release, operations and recovery qualification](https://github.com/Abdullahalmutairi97/archon-desktop/issues/12)
+- [P8 — Optional enhancements](https://github.com/Abdullahalmutairi97/archon-desktop/issues/13)
+
+The roadmap is published in [PR #5](https://github.com/Abdullahalmutairi97/archon-desktop/pull/5). Phase 1A is in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14), with 196 backend tests passed and 72 desktop tests passed/16 existing ASAR-dependent skips. These local checks are fresh; GitHub Actions results are attached to the PR. No later increment has started.
 
 ## How work is published
 
