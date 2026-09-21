@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from ..db import Database
-from ..tasks import TaskStore
+from ..tasks import TaskStore, hash_request_payload
 
 
 logger = logging.getLogger(__name__)
@@ -129,6 +129,13 @@ class TelegramBridge:
         )
         if request_id is not None:
             submit_kwargs["request_id"] = request_id
+            # Completing a turn advances session_for_chat before reply delivery.
+            # A delivery retry must retain the immutable inbound request identity
+            # rather than fingerprinting that now-changed conversation state.
+            submit_kwargs["request_hash"] = hash_request_payload({
+                "transport": "telegram", "sender_id": sender["id"],
+                "chat_id": chat_id, "text": text, "update_id": update.get("update_id"),
+            })
         task = self.tasks.submit(text.strip(), **submit_kwargs)
         if task.get("status") in {"queued", "running"}:
             await self.telegram.send_message(chat_id, "Prime received your request and is working. I will send the result here.")

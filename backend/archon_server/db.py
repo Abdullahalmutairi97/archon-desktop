@@ -1,105 +1,140 @@
 from __future__ import annotations
 
+import fcntl
+import hashlib
+import os
 import sqlite3
+import stat
+import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from .migrations import v001
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS tasks (
-    id TEXT PRIMARY KEY,
-    prompt TEXT NOT NULL,
-    cwd TEXT,
-    model TEXT,
-    provider TEXT,
-    session_id TEXT,
-    profile TEXT,
-    approval_mode TEXT NOT NULL DEFAULT 'approve' CHECK(approval_mode IN ('auto','approve','plan')),
-    chat_only INTEGER NOT NULL DEFAULT 0,
-    skills_json TEXT NOT NULL DEFAULT '[]',
-    status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','cancelled','blocked')),
-    result_json TEXT,
-    error TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    started_at TEXT,
-    completed_at TEXT,
-    retry_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at);
-CREATE TABLE IF NOT EXISTS events (
-    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    type TEXT NOT NULL,
-    data_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_events_task_seq ON events(task_id, seq);
-CREATE TABLE IF NOT EXISTS app_settings (
-    key TEXT PRIMARY KEY,
-    value_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS session_locations (
-    session_id TEXT PRIMARY KEY,
-    cwd TEXT NOT NULL,
-    source TEXT NOT NULL CHECK(source IN ('task','hermes')),
-    discovered_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_session_locations_updated ON session_locations(updated_at DESC);
-CREATE TABLE IF NOT EXISTS session_projects (
-    session_id TEXT PRIMARY KEY,
-    project_id TEXT,
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_session_projects_project ON session_projects(project_id);
-CREATE TABLE IF NOT EXISTS deleted_sessions (
-    session_id TEXT PRIMARY KEY,
-    deleted_at TEXT NOT NULL
-);
-"""
+SCHEMA = v001.SCHEMA
+MIGRATION_VERSION = 1
+MIGRATION_CHECKSUM = hashlib.sha256(Path(v001.__file__).read_bytes()).hexdigest()
+MIGRATION_LOCK_TIMEOUT = 30.0
+SNAPSHOT_TIMEOUT = 30.0
+
+
+@contextmanager
+def _migration_lock(path: Path):
+    lock_path = path.with_name(path.name + ".migrate.lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise RuntimeError("Database migration lock must be a regular file")
+        deadline = time.monotonic() + MIGRATION_LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("Timed out waiting for database migration lock")
+                time.sleep(min(0.05, remaining))
+        current = lock_path.stat(follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+            raise RuntimeError("Database migration lock was replaced while waiting")
+        yield
+    finally:
+        os.close(fd)
+
+
+def _schema_version(conn: sqlite3.Connection) -> int:
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    ledger_exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone()
+    if version > MIGRATION_VERSION:
+        raise RuntimeError("Database schema version is newer than this server supports")
+    if not ledger_exists:
+        if version != 0:
+            raise RuntimeError("Database version has no matching migration ledger")
+        return 0
+    entries = conn.execute("SELECT version,checksum FROM schema_migrations ORDER BY version").fetchall()
+    if any(entry[0] > MIGRATION_VERSION for entry in entries):
+        raise RuntimeError("Database migration ledger contains a newer version")
+    if version != MIGRATION_VERSION or [entry[0] for entry in entries] != [1]:
+        raise RuntimeError("Database version and migration ledger are inconsistent or contain gaps")
+    if entries[0][1] != MIGRATION_CHECKSUM:
+        raise RuntimeError("Database migration checksum does not match the installed migration")
+    if "request_hash" not in {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}:
+        raise RuntimeError("Database schema differs from its migration ledger")
+    return version
+
+
+def _snapshot(path: Path) -> Path:
+    """Copy committed pages, including WAL, while another connection blocks writers."""
+    fd, temporary_name = tempfile.mkstemp(prefix=path.name + ".pre-v1-", suffix=".sqlite3.tmp", dir=path.parent)
+    os.close(fd)
+    temporary = Path(temporary_name)
+    destination = temporary.with_suffix("")
+    deadline = time.monotonic() + SNAPSHOT_TIMEOUT
+    def progress(_status, _remaining, _total):
+        if time.monotonic() > deadline:
+            raise RuntimeError("Timed out creating database migration snapshot")
+    try:
+        source = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
+        try:
+            backup = sqlite3.connect(temporary, isolation_level=None)
+            try:
+                source.backup(backup, pages=256, progress=progress, sleep=0.05)
+                backup.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+                if backup.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                    raise RuntimeError("Database migration snapshot failed integrity verification")
+            finally:
+                backup.close()
+        finally:
+            source.close()
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        # Publish without replacing any existing file, then persist its name.
+        os.link(temporary, destination)
+        temporary.unlink()
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        return destination
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as conn:
-            conn.executescript(SCHEMA)
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
-            if "session_id" not in columns:
-                conn.execute("ALTER TABLE tasks ADD COLUMN session_id TEXT")
-            if "approval_mode" not in columns:
-                conn.execute("ALTER TABLE tasks ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'approve'")
-            if "chat_only" not in columns:
-                conn.execute("ALTER TABLE tasks ADD COLUMN chat_only INTEGER NOT NULL DEFAULT 0")
-            if "profile" not in columns:
-                conn.execute("ALTER TABLE tasks ADD COLUMN profile TEXT")
-            if "retry_at" not in columns:
-                conn.execute("ALTER TABLE tasks ADD COLUMN retry_at TEXT")
-            # Create this only after legacy tasks tables have gained session_id.
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_session_updated ON tasks(session_id, updated_at DESC, id DESC)")
-            location_columns = {row[1] for row in conn.execute("PRAGMA table_info(session_locations)")}
-            if "source" not in location_columns:
-                conn.execute("ALTER TABLE session_locations ADD COLUMN source TEXT NOT NULL DEFAULT 'hermes'")
-            if "discovered_at" not in location_columns:
-                conn.execute("ALTER TABLE session_locations ADD COLUMN discovered_at TEXT NOT NULL DEFAULT ''")
-            if "updated_at" not in location_columns:
-                conn.execute("ALTER TABLE session_locations ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
-            # Sessions created before this registry existed already have their
-            # dispatch directory in the task ledger. Seed the durable registry
-            # once from those records, without overwriting a newer live mapping.
-            conn.execute(
-                """INSERT OR IGNORE INTO session_locations(session_id,cwd,source,discovered_at,updated_at)
-                   SELECT session_id,cwd,'task',created_at,updated_at
-                   FROM tasks
-                   WHERE NULLIF(TRIM(session_id),'') IS NOT NULL
-                     AND NULLIF(TRIM(cwd),'') IS NOT NULL
-                   ORDER BY created_at ASC"""
-            )
+        self.migration_backup: Path | None = None
+        with _migration_lock(self.path):
+            existed = self.path.exists() and self.path.stat().st_size > 0
+            # Validate before changing persistent pragmas, creating schema, or
+            # applying the old bootstrap. executescript would auto-commit DDL.
+            conn = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+            try:
+                conn.execute("PRAGMA foreign_keys=ON")
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    version = _schema_version(conn)
+                    if version == 0:
+                        if existed:
+                            self.migration_backup = _snapshot(self.path)
+                        v001.apply(conn)
+                        conn.execute("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,checksum TEXT NOT NULL,applied_at TEXT NOT NULL)")
+                        conn.execute("INSERT INTO schema_migrations VALUES (?,?,?)", (MIGRATION_VERSION, MIGRATION_CHECKSUM, datetime.now(timezone.utc).isoformat()))
+                        conn.execute("PRAGMA user_version=1")
+                    conn.commit()
+                except BaseException:
+                    conn.rollback()
+                    raise
+                conn.execute("PRAGMA journal_mode=WAL")
+            finally:
+                conn.close()
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:

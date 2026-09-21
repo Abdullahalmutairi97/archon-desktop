@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Phase 1C.1 durable request admission
+
+- Introduce a versioned, checksummed SQLite migration with a verified mode-0600 pre-migration snapshot for existing databases. Reject newer or inconsistent migration metadata before schema changes.
+- Support authenticated `Idempotency-Key` task requests. Identical retries return the existing task; changed payloads or unverifiable legacy keys return HTTP 409. Preserve one task/event across concurrent retries and Telegram delivery failures.
+- Fix the queued-cancellation/claim race with a queued-only compare-and-swap before routing a newly running task through runner cancellation. Durable attempt fencing and native prelaunch cancellation remain Phase 1C.2.
+
 ## Unreleased — Phase 1B task admission
 
 - Resolve Prime/Pi through an explicit execution registry and documented profile aliases. Unknown profiles and unavailable executables fail before task acknowledgment; `/api/runtimes` describes filesystem availability and supported modes separately from the agent roster.

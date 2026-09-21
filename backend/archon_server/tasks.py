@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 import re
@@ -39,8 +40,41 @@ def is_quota_error(error: str) -> bool:
     return bool(re.search(r"\b(?:rate[ -]?limit|quota|usage limit|too many requests|429)\b", text))
 
 
+def hash_request_payload(payload: Mapping[str, Any]) -> str:
+    """Fingerprint a transport's semantic request before mutable admission.
+
+    Mapping order is irrelevant; ordered lists and explicit null values remain
+    significant. Callers must exclude credentials and transport retry metadata.
+    """
+    encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'),
+                         ensure_ascii=False, allow_nan=False).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_request_id(request_id: str) -> None:
+    if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', request_id):
+        raise ValueError('Invalid task request id: use 1-200 letters, digits, underscores or hyphens')
+
+
+def _validate_request_hash(request_hash: str) -> str:
+    if not isinstance(request_hash, str) or not re.fullmatch(r'[A-Fa-f0-9]{64}', request_hash):
+        raise ValueError('Invalid task request hash: expected a SHA256 hex digest')
+    return request_hash.lower()
+
+
+def _require_matching_request(row, request_hash: str) -> None:
+    if row['request_hash'] is None:
+        raise ValueError(
+            'Existing task has no request fingerprint (legacy task). '
+            'Review its outcome before submitting a new request id.'
+        )
+    if row['request_hash'] != request_hash:
+        raise ValueError('Task request id conflicts with a different request payload')
+
+
 def _decode(row) -> dict[str, Any]:
     item = dict(row)
+    item.pop('request_hash', None)
     try:
         skills = json.loads(item.pop("skills_json") or "[]")
     except (TypeError, json.JSONDecodeError):
@@ -75,24 +109,38 @@ class TaskStore:
                provider: str | None = None, skills: list[str] | None = None,
                session_id: str | None = None, approval_mode: str = "approve",
                chat_only: bool = False, profile: str | None = None,
-               request_id: str | None = None, project_id: str | None | object = _PROJECT_UNSET) -> dict[str, Any]:
-        if request_id and (
-            len(request_id) > 200
-            or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for char in request_id)
-        ):
-            raise ValueError("Invalid task request id")
-        task_id = request_id or uuid.uuid4().hex
+               request_id: str | None = None, project_id: str | None | object = _PROJECT_UNSET,
+               request_hash: str | None = None) -> dict[str, Any]:
+        if request_id is None:
+            if request_hash is not None:
+                raise ValueError('A task request hash requires an explicit request id')
+        else:
+            _validate_request_id(request_id)
+            if request_hash is not None:
+                # Server-only override: HTTP/Telegram fingerprint their original
+                # input before resolving mutable session/workspace defaults.
+                request_hash = _validate_request_hash(request_hash)
+            else:
+                request_hash = hash_request_payload({
+                    'prompt': prompt, 'cwd': cwd, 'model': model, 'provider': provider,
+                    'skills': skills or [], 'session_id': session_id,
+                    'approval_mode': approval_mode, 'chat_only': bool(chat_only), 'profile': profile,
+                    'project_binding': ({'specified': False} if project_id is _PROJECT_UNSET else
+                                        {'specified': True, 'project_id': project_id}),
+                })
+        task_id = request_id if request_id is not None else uuid.uuid4().hex
         # Reserve the deterministic Prime session at enqueue time. The runner uses
         # the same id, so the UI can open it immediately instead of waiting for
         # the first worker event to finish creating session metadata.
         session_id = session_id or f"prime-{task_id}"
         now = utcnow()
         with self.db.transaction() as conn:
-            if request_id and conn.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
-                # Durable idempotency for external transports such as Telegram:
-                # a redelivered update observes the original task instead of
-                # repeating a potentially side-effecting prompt.
-                pass
+            existing = (conn.execute('SELECT request_hash FROM tasks WHERE id=?', (task_id,)).fetchone()
+                        if request_id is not None else None)
+            if existing is not None:
+                # Recheck under the write lock. A lookup before admission cannot
+                # prevent two concurrent clients from submitting the same key.
+                _require_matching_request(existing, request_hash)
             else:
                 if session_id and conn.execute(
                     "SELECT 1 FROM deleted_sessions WHERE session_id=? LIMIT 1", (session_id,)
@@ -100,9 +148,9 @@ class TaskStore:
                     raise ValueError("Session has been deleted")
                 conn.execute(
                     """INSERT INTO tasks
-                       (id,prompt,cwd,model,provider,session_id,profile,approval_mode,chat_only,skills_json,status,created_at,updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,'queued',?,?)""",
-                    (task_id, prompt, cwd, model, provider, session_id, profile, approval_mode, int(chat_only), json.dumps(skills or []), now, now),
+                       (id,prompt,cwd,model,provider,session_id,profile,approval_mode,chat_only,skills_json,status,created_at,updated_at,request_hash)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,'queued',?,?,?)""",
+                    (task_id, prompt, cwd, model, provider, session_id, profile, approval_mode, int(chat_only), json.dumps(skills or []), now, now, request_hash),
                 )
                 self._append_event(conn, task_id, "task.queued", {"status": "queued"})
                 if project_id is not _PROJECT_UNSET:
@@ -117,6 +165,17 @@ class TaskStore:
                         (session_id, project_id, now),
                     )
         return self.get(task_id)
+
+    def lookup_request(self, request_id: str, request_hash: str) -> dict[str, Any] | None:
+        """Find a retry before admission, without queuing or changing its task."""
+        _validate_request_id(request_id)
+        request_hash = _validate_request_hash(request_hash)
+        with self.db.connect() as conn:
+            existing = conn.execute('SELECT * FROM tasks WHERE id=?', (request_id,)).fetchone()
+        if existing is None:
+            return None
+        _require_matching_request(existing, request_hash)
+        return _decode(existing)
 
     def _append_event(self, conn, task_id: str, event_type: str, data: dict[str, Any]) -> int:
         cur = conn.execute(
@@ -364,6 +423,19 @@ class TaskStore:
             if changed:
                 self._append_event(conn, task_id, "task.failed", {"status": "failed", "error": error[:4000]})
 
+    def cancel_queued(self, task_id: str) -> bool:
+        """Cancel only an unclaimed task; a raced claim needs runner teardown."""
+        now = utcnow()
+        with self.db.transaction() as conn:
+            changed = conn.execute(
+                """UPDATE tasks SET status='cancelled',completed_at=?,updated_at=?
+                   WHERE id=? AND status='queued' AND started_at IS NULL""",
+                (now, now, task_id),
+            ).rowcount
+            if changed:
+                self._append_event(conn, task_id, "task.cancelled", {"status": "cancelled"})
+        return bool(changed)
+
     def cancel(self, task_id: str) -> bool:
         now = utcnow()
         with self.db.transaction() as conn:
@@ -490,7 +562,7 @@ class TaskEngine:
     async def cancel(self, task_id: str) -> None:
         task = self.store.get(task_id)
         if task["status"] == "queued":
-            if self.store.cancel(task_id):
+            if self.store.cancel_queued(task_id):
                 return
             # The worker may have claimed the task between the initial read and
             # the transactional cancellation. Re-check and cancel its process

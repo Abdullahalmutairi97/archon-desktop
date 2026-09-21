@@ -41,7 +41,7 @@ from .services.telegram import TelegramBotClient, TelegramBridge
 from .services.kanban import KanbanService
 from .services.voice import VoiceService
 from .services.workspace import ProjectService, SessionService, PrimeSessionService
-from .tasks import TaskEngine, TaskStore
+from .tasks import TaskEngine, TaskStore, hash_request_payload
 
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,8 @@ class TaskCreate(BaseModel):
     cwd: str | None = Field(default=None, max_length=1000)
     model: str | None = Field(default=None, max_length=100)
     provider: str | None = Field(default=None, max_length=100)
-    session_id: str | None = Field(default=None, max_length=200)
+    # A maximum-length idempotency key yields a 'prime-' + 200-char session.
+    session_id: str | None = Field(default=None, max_length=206)
     project_id: str | None = Field(default=None, max_length=200)
     profile: str | None = Field(default=None, max_length=64)
     approval_mode: str = Field(default="approve", pattern="^(auto|approve|plan)$")
@@ -391,7 +392,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         CORSMiddleware,
         allow_origin_regex=r"^(null|file://|https?://(127\.0\.0\.1|localhost)(:\d+)?)$",
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     )
 
     def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -492,7 +493,16 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         return {"tasks": store.list(limit)}
 
     @app.post("/api/tasks", status_code=202, dependencies=protected)
-    def create_task(payload: TaskCreate):
+    def create_task(payload: TaskCreate, idempotency_key: Annotated[str | None, Header()] = None):
+        request_hash = None
+        if idempotency_key is not None:
+            request_hash = hash_request_payload(payload.model_dump())
+            try:
+                existing = store.lookup_request(idempotency_key, request_hash)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if existing is not None:
+                return {"task": existing}
         if payload.session_id and payload.session_id.startswith("pi-native-"):
             raise HTTPException(status_code=409, detail="Native Pi history is read-only here. Start a new Pi conversation to work.")
         if payload.project_id and (not projects.contains(payload.project_id)):
@@ -519,6 +529,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 payload.prompt, admitted.cwd, payload.model, payload.provider, payload.skills,
                 payload.session_id, payload.approval_mode, payload.chat_only,
                 task_profile, project_id=admitted.project_id,
+                request_id=idempotency_key, request_hash=request_hash,
             )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

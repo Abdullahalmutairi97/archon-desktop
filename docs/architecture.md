@@ -19,6 +19,8 @@ Prime uses an advisory lock on a stable session lock file. Waiting yields to the
 
 Clients request `/api/tasks/{id}/events?after=<sequence>` to replay only events missed after their last acknowledged sequence.
 
+An optional authenticated `Idempotency-Key` binds the normalized HTTP request to a SHA256 fingerprint. Lookup precedes mutable workspace admission, and the task transaction repeats the check to collapse simultaneous retries. Telegram supplies a fingerprint of its immutable incoming envelope. Changed payloads and legacy keys with no fingerprint conflict. This deduplicates task submission; it does not make native tool effects exactly once. A queued-only cancellation transition distinguishes an unclaimed task from one which must first reach its runner's cancellation path.
+
 ## Operational adapters
 
 - Models: inspected and changed through the Archon profile config
@@ -32,3 +34,5 @@ Clients request `/api/tasks/{id}/events?after=<sequence>` to replay only events 
 ## Persistence and migration
 
 Application state is under `~/.local/share/archon-desktop`. Existing Hermes state remains under `~/.hermes`; backups remain under `~/backups`. All paths are configuration-derived rather than tied to the temporary Hermes process `$HOME`, which may point inside a profile directory.
+
+Schema version 1 replaces repeated ad-hoc bootstrap with an immutable checksummed migration and a version ledger. Existing database upgrades create a restrictive, integrity-checked SQLite backup before the transactional schema change; snapshot failure aborts the upgrade. The current binary rejects newer versions or checksum/ledger disagreement. Older binaries predate that guard, so rollback must restore a compatible snapshot while all writers are stopped. Attempt identity, stale-result fencing and legacy cross-store ownership reconciliation remain pending in Phase 1C.2.

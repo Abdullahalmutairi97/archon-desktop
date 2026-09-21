@@ -80,3 +80,70 @@ async def test_unauthorized_commands_do_not_reset_conversation(tmp_path):
     await b.handle_update({'message':{'from':{'id':7},'chat':{'id':99},'text':'/new'}})
     assert b.session_for_chat(99)=='keep'
     assert tg.sent==[]
+
+
+class CompleteOnceTasks(TaskStore):
+    def __init__(self, db):
+        super().__init__(db)
+        self.model_calls = 0
+
+    def submit(self, *args, **kwargs):
+        task = super().submit(*args, **kwargs)
+        if task['status'] == 'queued':
+            self.model_calls += 1
+            self.complete(task['id'], {'text': 'Original result', 'session_id': 'session-result'})
+        return self.get(task['id'])
+
+
+def task_update(**changes):
+    update = {
+        'update_id': 17,
+        'message': {'from': {'id': 42}, 'chat': {'id': 99}, 'text': 'work once'},
+    }
+    if 'sender_id' in changes:
+        update['message']['from']['id'] = changes['sender_id']
+    if 'chat_id' in changes:
+        update['message']['chat']['id'] = changes['chat_id']
+    if 'text' in changes:
+        update['message']['text'] = changes['text']
+    if 'update_id' in changes:
+        update['update_id'] = changes['update_id']
+    return update
+
+
+@pytest.mark.asyncio
+async def test_retry_uses_original_update_after_conversation_state_advances(tmp_path):
+    db = Database(tmp_path / 'db')
+    tasks = CompleteOnceTasks(db)
+    telegram = Telegram()
+    bridge = TelegramBridge(db, tasks, telegram, 42)
+    await bridge.handle_update(task_update(), request_id='telegram-17')
+    assert bridge.session_for_chat(99) == 'session-result'
+    await bridge.handle_update(task_update(), request_id='telegram-17')
+    assert tasks.model_calls == 1
+    assert len(tasks.list()) == 1
+    assert telegram.sent == [(99, 'Original result'), (99, 'Original result')]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', [
+    {'text': 'different work'}, {'text': ' work once '},
+    {'chat_id': 100}, {'sender_id': 7}, {'update_id': 18},
+])
+async def test_same_update_key_with_changed_inbound_envelope_never_reexecutes(tmp_path, change):
+    db = Database(tmp_path / 'db')
+    tasks = CompleteOnceTasks(db)
+    telegram = Telegram()
+    bridge = TelegramBridge(db, tasks, telegram, 42)
+    await bridge.handle_update(task_update(), request_id='telegram-17')
+    # A new authorized bridge configuration must not reinterpret an old key as
+    # a request from another identity, chat, update or body.
+    with db.transaction() as conn:
+        conn.execute('DELETE FROM telegram_conversations')
+    retry_bridge = TelegramBridge(db, tasks, telegram, change.get('sender_id', 42))
+    with pytest.raises(ValueError, match='different request payload'):
+        await retry_bridge.handle_update(task_update(**change), request_id='telegram-17')
+    assert tasks.model_calls == 1
+    assert len(tasks.list()) == 1
+    assert len(tasks.all_events(0)) == 2
+    assert telegram.sent == [(99, 'Original result')]
