@@ -2,13 +2,13 @@
 
 This backlog turns the 21 September 2026 repository audit and revised implementation plan into reviewable phases. Implementation starts from the existing Linux Electron/React application, FastAPI service and SQLite ledger. Preserve the familiar project/session/workbench layout, native histories and working integrations.
 
-**Implementation resumed with an 8% remaining-usage stopping threshold.** Phase 1A is published in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14); Phase 1B adds explicit admission, runtimes and trusted-mode enforcement. Neither completes all of P1. Later phases are recorded here so they can proceed without losing requirements. Publishing means opening a GitHub pull request after the applicable checks pass. It does not mean merging, deploying, restarting services or publishing an installer.
+**Stopped after publishing Phase 1C.1, above the requested 8% remaining-usage threshold.** Phase 1A is published in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14); Phase 1B adds explicit admission, runtimes and trusted-mode enforcement. Neither completes all of P1. Later phases are recorded here so they can proceed without losing requirements. Publishing means opening a GitHub pull request after the applicable checks pass. It does not mean merging, deploying, restarting services or publishing an installer.
 
 ## Phase index
 
 | Phase | Outcome | Dependencies | Status |
 | --- | --- | --- | --- |
-| [P1 — Trustworthy execution baseline](p1-execution-baseline.md) | Honest admission, modes, locks, recovery, credentials and readiness | Existing backend and isolated fixtures | In progress; 1A and 1B source increments complete, 1C–1D pending |
+| [P1 — Trustworthy execution baseline](p1-execution-baseline.md) | Honest admission, modes, locks, recovery, credentials and readiness | Existing backend and isolated fixtures | In progress; 1A, 1B and 1C.1 published; 1C.2 and 1D pending |
 | [P2 — Maintainable source build](p2-source-build.md) | Build the actual desktop from authored source and preserve UI behavior | Matching source/asset inventory; runs alongside P1 | Not started; source provenance/input gap |
 | [P3 — Workspaces and persistent runner](p3-workspaces-runner.md) | Protected solo bootstrap; one workspace identity; work outlives UI | P1; P2 before desktop delivery | Not started |
 | [P4 — Full solo workstation](p4-solo-workstation.md) | Full IDE, persistent terminal and managed private previews | P2 and P3 | Not started |
@@ -30,7 +30,7 @@ The main dependency chain is P1 → P3 → P4 → P5 → P6 → P7. P2 runs in p
 - [P7 — Release, operations and recovery qualification](https://github.com/Abdullahalmutairi97/archon-desktop/issues/12)
 - [P8 — Optional enhancements](https://github.com/Abdullahalmutairi97/archon-desktop/issues/13)
 
-The roadmap is published in [PR #5](https://github.com/Abdullahalmutairi97/archon-desktop/pull/5). Phase 1A is in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14), with 196 backend tests passed and 72 desktop tests passed/16 existing ASAR-dependent skips. These local checks are fresh; GitHub Actions results are attached to the PR. Phase 1B is published in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15): 306 backend tests passed, 72 desktop tests passed and 16 existing ASAR-dependent checks skipped. Both push and PR GitHub Actions passed. Phase 1C.1 is in progress.
+The roadmap is published in [PR #5](https://github.com/Abdullahalmutairi97/archon-desktop/pull/5). Phase 1A is in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14), with 196 backend tests passed and 72 desktop tests passed/16 existing ASAR-dependent skips. These local checks are fresh; GitHub Actions results are attached to the PR. Phase 1B is published in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15): 306 backend tests passed, 72 desktop tests passed and 16 existing ASAR-dependent checks skipped. Both push and PR GitHub Actions passed. Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16): 381 backend tests passed and the desktop result remains 72 passed/16 existing ASAR skips. Work stops at this tested increment boundary to preserve the requested usage reserve; Phase 1C.2 is next.
 
 ## How work is published
 
