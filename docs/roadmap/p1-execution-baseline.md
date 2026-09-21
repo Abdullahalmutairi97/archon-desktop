@@ -1,16 +1,16 @@
 # P1 — Trustworthy execution baseline
 
-**Status:** P1 remains in progress; Phase 1A source is published for review in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14). Work is stopped at this boundary; Phases 1B–1D remain pending. **Dependencies:** audited backend and isolated fixture environment; backend work does not require the private ASAR. **Outcome:** admission, execution modes, locking, recovery and readiness describe enforced behavior truthfully.
+**Status:** P1 remains in progress; Phase 1A source is published for review in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14). Phase 1B is published for review in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15); Phase 1C.1 is in progress and 1C.2/1D remain pending. **Dependencies:** audited backend and isolated fixture environment; backend work does not require the private ASAR. **Outcome:** admission, execution modes, locking, recovery and readiness describe enforced behavior truthfully.
 
-Publish each completed increment as a pull request for review. The current work stops after Phase 1A and its evidence are published. P1 remains open until 1B–1D and the combined acceptance checks also pass. No merge, production deployment or service restart is included.
+Publish each completed increment as a pull request for review. Continue through tested increments with enough headroom to publish before 8% usage remains. P1 remains open until 1B–1D and the combined acceptance checks also pass. No merge, production deployment or service restart is included.
 
 ## Increment map
 
 | Increment | Milestone items | Status | Dependency / scope boundary |
 | --- | --- | --- | --- |
-| Phase 1A — Locking and conservative recovery | M1.4 and the current-schema portion of M1.6 | Published for review; stopped | Can proceed with existing backend; do not claim durable attempt fencing or all of M1.6 without M1.5 |
-| Phase 1B — Admission, runtimes and modes | M1.1, M1.2, M1.3 | Not started | Coordinate ownership fields with 1C; no unsupported-mode fallback |
-| Phase 1C — Durable admission and attempts | M1.5 and remaining M1.6 | Not started | 1B/1C can be developed in either order with an explicit compatibility contract; completes durable attempt identity and stale-result fencing |
+| Phase 1A — Locking and conservative recovery | M1.4 and the current-schema portion of M1.6 | Published for review | Can proceed with existing backend; do not claim durable attempt fencing or all of M1.6 without M1.5 |
+| Phase 1B — Admission, runtimes and modes | M1.1, M1.2, M1.3 | Published for review in #15 | Coordinate ownership fields with 1C; no unsupported-mode fallback |
+| Phase 1C — Durable admission and attempts | M1.5 and remaining M1.6 | 1C.1 in progress; 1C.2 pending | Split into 1C.1 migrations/idempotency/queued cancellation and 1C.2 durable attempts/fencing/native cancellation; no full 1C claim before both pass |
 | Phase 1D — Credentials and readiness | M1.7, M1.8 | Not started | Integrates 1B/1C; native credential handling remains gated on P2 evidence |
 
 ## Phase 1A checklist and publication gate
@@ -23,7 +23,7 @@ Publish each completed increment as a pull request for review. The current work 
 - [x] Demonstrate a fixture side effect is not executed twice after restart. Preserve existing client response shapes/status compatibility with a documented translation if needed.
 - [x] Record where the current schema cannot distinguish launch intent from started execution. Use conservative interruption, and carry durable attempt identity/fencing into 1C instead of claiming it exists.
 - [x] Run focused tests and applicable backend regressions with isolated paths/fake commands; inspect the diff and document result counts, skips and limitations.
-- [x] Publish the Phase 1A PR for review, link the P1 tracker, and stop. Leave the rest of P1 open.
+- [x] Publish the Phase 1A PR for review, link the P1 tracker, and record the boundary. Leave the rest of P1 open.
 
 Phase 1A validation: 196 backend tests passed; 72 desktop tests passed and 16 existing ASAR-dependent checks skipped. Legacy lock migration and reverse migration require quiescence; native Prime/Electron qualification remains unperformed. See [the implementation evidence](https://github.com/Abdullahalmutairi97/archon-desktop/blob/codex/phase-1a-execution-recovery/docs/releases/phase-1a-execution-recovery.md). Checked items above describe the bounded source/publication gate, not full-P1 or production readiness.
 
@@ -31,28 +31,28 @@ Phase 1A validation: 196 backend tests passed; 72 desktop tests passed and 16 ex
 
 ### M1.1 — Explicit runtime registry (Phase 1B)
 
-- [ ] Add an execution registry used by admission and dispatch. Prime and Pi are active only when configured/probed; Hermes remains unavailable until explicitly registered.
-- [ ] Preserve documented legacy profile aliases through an explicit map. Unknown runtime/profile selections never fall back silently.
-- [ ] Separate executable/version/readiness from user-facing roster/profile names.
-- [ ] Assert exact dispatch for every supported alias and 422 for unknown/unsupported requests, with no runner launch on denial.
+- [x] Add an execution registry used by admission and dispatch. Prime and Pi are active only when configured/probed; Hermes remains unavailable until explicitly registered.
+- [x] Preserve documented legacy profile aliases through an explicit map. Unknown runtime/profile selections never fall back silently.
+- [x] Separate executable/version/readiness from user-facing roster/profile names.
+- [x] Assert exact dispatch for every supported alias and HTTP 409 for unknown/unsupported requests (preserving the API conflict envelope), with no runner launch on denial.
 
 Likely files: `backend/archon_server/app.py`, `tasks.py`, `services/agents.py`; proposed `runtimes/registry.py`.
 
 ### M1.2 — Admission boundaries (Phase 1B)
 
-- [ ] Resolve project/session ownership and canonical cwd before submitting the task.
-- [ ] Map compatible projectless solo requests only to an explicitly registered scratch root within configured allowed roots.
-- [ ] Reject outside-root, missing/non-directory, escaping symlink and mismatched session/project inputs. Admission resolution is defense in depth, not a filesystem sandbox.
-- [ ] Test every denial with zero fake-runner launches; preserve legitimate native-session cwd ownership.
+- [x] Resolve project/session ownership and canonical cwd before submitting the task.
+- [x] Map compatible projectless solo requests only to an explicitly registered scratch root within configured allowed roots.
+- [x] Reject outside-root, missing/non-directory, escaping symlink and mismatched session/project inputs. Admission resolution is defense in depth, not a filesystem sandbox.
+- [x] Test every denial with zero fake-runner launches; preserve legitimate native-session cwd ownership.
 
 Likely files: `app.py`, `services/workspace.py`, `services/files.py`; proposed workspace resolver.
 
 ### M1.3 — Honest execution modes (Phase 1B)
 
-- [ ] Advertise supported modes per adapter and validate before admission and dispatch.
-- [ ] Reject Prime `chat_only` or protected plan/approve requests when deterministic enforcement is absent. Retain explicitly owner-authorized execution through an accurately named trusted mode.
-- [ ] Verify Pi flags/extensions against the pinned invocation; do not claim unrestricted shell execution is sandboxed by tool labels.
-- [ ] Replace tests that assume prompt prefixes enforce restrictions with explicit compatibility/denial cases.
+- [x] Advertise supported modes per adapter and validate before admission and dispatch.
+- [x] Reject Prime `chat_only` or protected plan/approve requests when deterministic enforcement is absent. Retain explicitly owner-authorized execution through an accurately named trusted mode.
+- [x] Reject Pi restricted modes until pinned native conformance is verified; tool/extension flags alone are not proof of enforcement. Native verification remains a later adapter gate.
+- [x] Replace tests that assume prompt prefixes enforce restrictions with explicit compatibility/denial cases.
 
 Likely files: `prime_runner.py`, `pi_runner.py`, registry and API validation.
 
@@ -69,7 +69,7 @@ Likely files: `prime_runner.py` and its regression tests. Any native-lock compat
 - [ ] Fix the preexisting queued-cancellation/claim race: a queued-only cancellation transition must not return before cancelling a process that became running between the status read and transaction. Add a concurrent regression.
 
 - [ ] Introduce ordered/checksummed migrations, idempotency request hashes, runtime/session ownership and explicit task-attempt states.
-- [ ] Commit task, initial event and owned project relation together; use visible pending reconciliation for legacy cross-store imports.
+- [ ] Preserve Phase 1B atomic task/event/project binding; add durable ownership reconciliation for legacy cross-store imports.
 - [ ] Identical idempotent requests return one task; reuse with a changed payload returns 409.
 - [ ] Test migration and snapshot/import/rollback with duplicate project names, native Prime/Pi IDs, tombstoned sessions, and queued/running tasks.
 - [ ] Restore the pre-migration copy under a tested compatibility procedure; never open an incompatible newer schema with an older binary.
