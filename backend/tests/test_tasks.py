@@ -162,7 +162,7 @@ async def test_events_replay_after_last_seen_sequence(tmp_path):
     assert all_events[0]["seq"] < all_events[1]["seq"] < all_events[2]["seq"]
 
 
-def test_inflight_tasks_requeue_after_server_restart(tmp_path):
+def test_inflight_tasks_require_review_after_server_restart(tmp_path):
     store = TaskStore(Database(tmp_path / "state.db"))
     task = store.submit("survive a restart")
     store.mark_running(task["id"])
@@ -170,8 +170,10 @@ def test_inflight_tasks_requeue_after_server_restart(tmp_path):
     recovered = store.recover_inflight()
 
     assert recovered == 1
-    assert store.get(task["id"])["status"] == "queued"
-    assert store.events(task["id"])[-1]["type"] == "task.recovered"
+    saved = store.get(task["id"])
+    assert saved["status"] == "failed"
+    assert saved["result"]["recovery"]["review_required"] is True
+    assert store.events(task["id"])[-1]["type"] == "task.failed"
 
 
 def test_global_events_replay_in_one_ordered_cursor(tmp_path):
@@ -235,7 +237,7 @@ async def test_failed_task_keeps_error_and_events(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_engine_retries_transient_prime_daemon_disconnect_once(tmp_path):
+async def test_engine_does_not_retry_prime_disconnect_without_output(tmp_path):
     class DisconnectOnceRunner:
         def __init__(self):
             self.calls = 0
@@ -253,10 +255,10 @@ async def test_engine_retries_transient_prime_daemon_disconnect_once(tmp_path):
     await engine.run_once()
 
     saved = store.get(task["id"])
-    assert runner.calls == 2
-    assert saved["status"] == "completed"
-    assert saved["result"]["text"] == "answer after reconnect"
-    assert any("retrying this turn once" in str(event["data"].get("text", "")) for event in store.events(task["id"]))
+    assert runner.calls == 1
+    assert saved["status"] == "failed"
+    assert saved["result"]["recovery"]["reason"] == "runner_disconnected"
+    assert saved["result"]["recovery"]["automatic_retry"] is False
 
 
 
@@ -279,7 +281,7 @@ def test_quota_error_is_detected_but_ordinary_errors_are_not():
 
 
 @pytest.mark.asyncio
-async def test_quota_failure_waits_and_is_claimed_after_retry_window(tmp_path):
+async def test_quota_failure_requires_review_instead_of_replay(tmp_path):
     class QuotaRunner:
         async def run(self, task, emit):
             raise RuntimeError("provider usage limit reached")
@@ -291,14 +293,14 @@ async def test_quota_failure_waits_and_is_claimed_after_retry_window(tmp_path):
     await engine.run_once()
 
     saved = store.get(task["id"])
-    assert saved["status"] == "queued"
-    assert saved["retry_at"]
-    assert saved["error"] == "Provider limit reached; waiting to retry automatically"
-    assert store.events(task["id"])[-1]["type"] == "task.quota_waiting"
+    assert saved["status"] == "failed"
+    assert saved["retry_at"] is None
+    assert saved["result"]["recovery"]["reason"] == "provider_limit"
+    assert store.events(task["id"])[-1]["type"] == "task.failed"
     assert store.claim_next() is None
     with store.db.transaction() as conn:
         conn.execute("UPDATE tasks SET retry_at=? WHERE id=?", ("2000-01-01T00:00:00+00:00", task["id"]))
-    assert store.claim_next()["id"] == task["id"]
+    assert store.claim_next() is None
 
 
 def test_decode_tolerates_corrupt_json_fields():

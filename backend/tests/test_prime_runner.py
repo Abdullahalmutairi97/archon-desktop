@@ -467,11 +467,11 @@ def test_agent_session_path_ignores_non_object_records(tmp_path):
 async def test_same_session_runs_serialize_but_distinct_sessions_overlap(tmp_path):
     from archon_server.prime_runner import PrimeRunner
 
-    runner = PrimeRunner(tmp_path / "prime")
+    runner = PrimeRunner(tmp_path / "prime", tmp_path / "sessions", tmp_path, tmp_path / "agent-sessions")
     active = 0
     maximum = 0
 
-    async def fake_run(task, emit):
+    async def fake_run(task, emit, lease):
         nonlocal active, maximum
         active += 1
         maximum = max(maximum, active)
@@ -493,8 +493,8 @@ async def test_same_session_runs_serialize_but_distinct_sessions_overlap(tmp_pat
 def _cross_process_prime_worker(root, active, maximum):
     from archon_server.prime_runner import PrimeRunner
     async def go():
-        runner = PrimeRunner(Path(root))
-        async def fake(task, emit):
+        runner = PrimeRunner(Path(root) / "prime", Path(root) / "sessions", Path(root), Path(root) / "agent-sessions")
+        async def fake(task, emit, lease):
             with active.get_lock():
                 active.value += 1
                 maximum.value = max(maximum.value, active.value)

@@ -43,9 +43,19 @@ Tests cover authentication, API operations, runtime selection, native histories,
 ## Runtime contract
 
 - Accepted tasks are committed before acknowledgment.
+- On restart, only never-started queued tasks remain eligible for automatic execution. Started tasks with unknown outcomes become `failed`, with review instructions in `error`, structured `result.recovery`, and a `task.failed` event. Existing clients can display the failure without a new status vocabulary.
+- Daemon resets and provider-limit errors do not automatically replay a started turn. Inspect its files, native history, external effects and surviving process state before submitting new work. An interrupted outcome does not certify process teardown or exactly-once effects.
 - Reconnect uses ordered event cursors; cancel is not an optimistic UI state change.
 - Prime/Pi histories have different continuation and deletion rules; check runtime-specific API responses rather than treating them as interchangeable.
-- Blank API authentication is supported for local fixtures but must not be used for a shared endpoint.
+- Blank configured authentication currently disables the shared-token check; use it only in isolated fixtures. Phase 1A does not add team identities or complete the planned admission/authentication hardening.
 - Optional Telegram needs private bot configuration. Tests use fake clients; do not invoke a live bot for unit verification.
 
 See the root [README](../README.md), [version policy](../docs/versions.md), and [release checklist](../docs/releases.md).
+
+### Prime lock migration
+
+Phase 1A uses Linux `flock` on a persistent `.<session-id>.lock` file under the configured Prime session root. Do not remove an active lock file: replacing its inode can split ownership. The process supervisor retains the descriptor while its supervised work survives, even if the server dies.
+
+The earlier implementation used a directory of the same name containing `owner.json`. A directory or unsafe file type now gives a bounded, actionable error. Before the first production upgrade, drain admissions and verify that old servers, supervisors and native session writers have stopped. Back up and migrate only the verified legacy directory while all writers are quiescent; the new runner creates the regular lock file. PID metadata alone is not proof that the work has stopped. Rolling mixed-version execution and external Prime CLI coordination are not certified by fixture tests.
+
+See the [Phase 1A validation and upgrade notes](../docs/releases/phase-1a-execution-recovery.md) before deploying this source change.

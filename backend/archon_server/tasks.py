@@ -4,7 +4,6 @@ import asyncio
 import json
 import uuid
 import re
-from datetime import timedelta
 from datetime import datetime, timezone
 from typing import Any, Protocol, Mapping
 
@@ -14,6 +13,11 @@ from .hermes_runner import RunnerCancelled
 
 MAX_EVENT_TEXT = 4096
 _EVENT_TRUNCATION_MARKER = "\n…[truncated]"
+_RECOVERY_GUIDANCE = (
+    "Side effects are unknown. Review the workspace and agent session and confirm "
+    "the previous runner has stopped before submitting another task. "
+    "This task will not be retried automatically."
+)
 
 
 def _cap_event_text(value: str) -> str:
@@ -111,6 +115,14 @@ class TaskStore:
     def append_event(self, task_id: str, event_type: str, data: dict[str, Any]) -> int:
         with self.db.transaction() as conn:
             return self._append_event(conn, task_id, event_type, data)
+
+    def append_running_event(self, task_id: str, event_type: str, data: dict[str, Any]) -> None:
+        """Discard stale runner notifications after a terminal transition."""
+        with self.db.transaction() as conn:
+            if conn.execute(
+                "SELECT 1 FROM tasks WHERE id=? AND status='running'", (task_id,)
+            ).fetchone():
+                self._append_event(conn, task_id, event_type, data)
 
     def get(self, task_id: str) -> dict[str, Any]:
         with self.db.connect() as conn:
@@ -233,19 +245,21 @@ class TaskStore:
     def mark_running(self, task_id: str) -> None:
         now = utcnow()
         with self.db.transaction() as conn:
-            conn.execute(
-                "UPDATE tasks SET status='running',started_at=?,updated_at=? WHERE id=?",
+            changed = conn.execute(
+                """UPDATE tasks SET status='running',started_at=?,updated_at=?
+                   WHERE id=? AND status='queued' AND started_at IS NULL""",
                 (now, now, task_id),
-            )
-            self._append_event(conn, task_id, "task.running", {"status": "running"})
+            ).rowcount
+            if changed:
+                self._append_event(conn, task_id, "task.running", {"status": "running"})
 
     def defer_for_quota(self, task_id: str, retry_seconds: float) -> None:
-        retry_at = (datetime.now(timezone.utc) + timedelta(seconds=max(1.0, retry_seconds))).isoformat()
-        now = utcnow()
-        with self.db.transaction() as conn:
-            changed = conn.execute("UPDATE tasks SET status='queued', retry_at=?, error=?, updated_at=? WHERE id=? AND status='running'", (retry_at, "Provider limit reached; waiting to retry automatically", now, task_id)).rowcount
-            if changed:
-                self._append_event(conn, task_id, "task.quota_waiting", {"status": "queued", "retry_at": retry_at})
+        """Compatibility entry point: a quota error cannot prove no work happened.
+
+        Keep the former call signature for integrations, but never queue a
+        started task again without an explicit, reviewed new submission.
+        """
+        self.interrupt(task_id, "provider_limit", "Provider limit reached.")
 
     def claim_next(self) -> dict[str, Any] | None:
         now = utcnow()
@@ -253,6 +267,7 @@ class TaskStore:
             row = conn.execute(
                 """SELECT candidate.id FROM tasks AS candidate
                    WHERE candidate.status='queued'
+                     AND candidate.started_at IS NULL
                      AND (candidate.retry_at IS NULL OR candidate.retry_at <= ?)
                      AND (candidate.session_id IS NULL OR NOT EXISTS (
                        SELECT 1 FROM tasks AS active
@@ -264,7 +279,7 @@ class TaskStore:
                 return None
             changed = conn.execute(
                 """UPDATE tasks SET status='running',started_at=COALESCE(started_at,?),retry_at=NULL,error=NULL,updated_at=?
-                   WHERE id=? AND status='queued'""",
+                   WHERE id=? AND status='queued' AND started_at IS NULL""",
                 (now, now, row["id"]),
             ).rowcount
             if not changed:
@@ -280,9 +295,11 @@ class TaskStore:
         """
         now = utcnow()
         with self.db.transaction() as conn:
-            existing = conn.execute("SELECT session_id,cwd FROM tasks WHERE id=?", (task_id,)).fetchone()
+            existing = conn.execute("SELECT session_id,cwd,status FROM tasks WHERE id=?", (task_id,)).fetchone()
             if existing is None:
                 raise KeyError(task_id)
+            if existing["status"] not in {"queued", "running"}:
+                return
             provisional = f"prime-{task_id}"
             attached = existing["session_id"]
             if not attached or attached == provisional:
@@ -346,15 +363,52 @@ class TaskStore:
         return bool(changed)
 
     def recover_inflight(self) -> int:
-        now = utcnow()
+        """Record unknown outcomes without replaying potentially applied effects.
+
+        A former version also put quota-limited tasks back into the queue after
+        execution started. Only queued rows with no started_at are safe to keep
+        eligible on startup. No claim is made that an orphaned runner stopped.
+        """
         with self.db.transaction() as conn:
-            rows = conn.execute("SELECT id FROM tasks WHERE status='running'").fetchall()
+            rows = conn.execute(
+                """SELECT id,status FROM tasks WHERE status IN ('running','cancelling')
+                   OR (status='queued' AND started_at IS NOT NULL)"""
+            ).fetchall()
             for row in rows:
-                conn.execute(
-                    "UPDATE tasks SET status='queued',updated_at=? WHERE id=?", (now, row["id"])
+                self._interrupt(
+                    conn, row["id"], row["status"], "server_restart",
+                    "Server restarted before an execution outcome was recorded.",
                 )
-                self._append_event(conn, row["id"], "task.recovered", {"status": "queued"})
         return len(rows)
+
+    def interrupt(self, task_id: str, reason: str, error: str) -> None:
+        """Finish a started task in the current clients' failed-status envelope."""
+        with self.db.transaction() as conn:
+            row = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is not None and row["status"] in {"running", "cancelling"}:
+                self._interrupt(conn, task_id, row["status"], reason, error)
+
+    def _interrupt(self, conn, task_id: str, previous_status: str, reason: str, error: str) -> None:
+        now = utcnow()
+        recovery = {
+            "reason": reason,
+            "previous_status": previous_status,
+            "side_effects": "unknown",
+            "review_required": True,
+            "automatic_retry": False,
+        }
+        error = f"{error[:3500]} {_RECOVERY_GUIDANCE}"
+        # Use the supported terminal status/event instead of inventing an
+        # interrupted status that existing clients would continue polling.
+        changed = conn.execute(
+            """UPDATE tasks SET status='failed',result_json=?,error=?,retry_at=NULL,
+               completed_at=?,updated_at=? WHERE id=? AND status=?""",
+            (json.dumps({"recovery": recovery}), error, now, now, task_id, previous_status),
+        ).rowcount
+        if changed:
+            self._append_event(conn, task_id, "task.failed", {
+                "status": "failed", "error": error, "recovery": recovery,
+            })
 
 
 class TaskEngine:
@@ -362,6 +416,8 @@ class TaskEngine:
         self.store = store
         self.runner = runner
         self.poll_seconds = poll_seconds
+        # Retain the constructor argument for callers; started work is no longer
+        # replayed automatically after a provider error.
         self.quota_retry_seconds = quota_retry_seconds
         self._stop = asyncio.Event()
         self._recovered = False
@@ -371,34 +427,20 @@ class TaskEngine:
         if task is None:
             return False
 
-        saw_streamed_output = False
-
         async def emit(event_type: str, data: dict[str, Any]) -> None:
-            nonlocal saw_streamed_output
-            if event_type in {"output", "thinking", "code", "tool", "message.delta", "message.done"}:
-                saw_streamed_output = True
             # Hermes announces its session id on stderr as soon as it has one,
             # long before the task finishes. Persist it the moment it arrives so
             # the row is addressable while it is still running — otherwise every
             # follow-up prompt has no session to continue and opens a new one.
             if event_type == "session" and data.get("session_id"):
                 self.store.set_session(task["id"], str(data["session_id"]))
-            self.store.append_event(task["id"], event_type, data)
+            self.store.append_running_event(task["id"], event_type, data)
 
         runner = self._runner_for(task)
         try:
-            try:
-                result = await runner.run(task, emit)
-            except Exception as exc:
-                # Prime's daemon can transiently close a worker before producing
-                # any answer. One immediate retry makes this transport hiccup
-                # invisible instead of forcing the user to type the prompt twice.
-                if "Daemon worker client closed" not in str(exc) or saw_streamed_output:
-                    # Once output reached the client, retrying would duplicate
-                    # thinking/code/tool blocks and possibly side effects.
-                    raise
-                await emit("output", {"text": "Prime connection reset; retrying this turn once."})
-                result = await runner.run(task, emit)
+            # Missing output does not prove that the runner made no side effects.
+            # Each claim invokes the runner once, including transport failures.
+            result = await runner.run(task, emit)
         except RunnerCancelled:
             self.store.cancel(task["id"])
         except asyncio.CancelledError:
@@ -406,7 +448,9 @@ class TaskEngine:
         except Exception as exc:
             message = str(exc)
             if is_quota_error(message):
-                self.store.defer_for_quota(task["id"], self.quota_retry_seconds)
+                self.store.interrupt(task["id"], "provider_limit", message)
+            elif "Daemon worker client closed" in message:
+                self.store.interrupt(task["id"], "runner_disconnected", message)
             else:
                 self.store.fail(task["id"], message)
         else:
@@ -439,7 +483,7 @@ class TaskEngine:
 
     async def run_forever(self) -> None:
         # Multiple workers share one engine. Recover only once; repeating this
-        # operation lets one worker requeue tasks already claimed by another.
+        # operation lets one worker interrupt tasks already claimed by another.
         if not self._recovered:
             self._recovered = True
             self.store.recover_inflight()

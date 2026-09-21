@@ -28,6 +28,7 @@ async def test_shutdown_waits_for_active_task_instead_of_cancelling_it(tmp_path)
     await lifespan.__aenter__()
     task = app.state.store.submit("finish before restart")
     await asyncio.wait_for(runner.started.wait(), timeout=1)
+    queued = app.state.store.submit("wait until the next startup")
 
     shutdown = asyncio.create_task(lifespan.__aexit__(None, None, None))
     await asyncio.sleep(0.05)
@@ -36,6 +37,11 @@ async def test_shutdown_waits_for_active_task_instead_of_cancelling_it(tmp_path)
     runner.release.set()
     await asyncio.wait_for(shutdown, timeout=1)
     assert app.state.store.get(task["id"])["status"] == "completed"
+    assert app.state.store.get(queued["id"])["status"] == "queued"
+    assert app.state.store.get(queued["id"])["started_at"] is None
+    assert [event["type"] for event in app.state.store.events(task["id"])] == [
+        "task.queued", "task.running", "task.completed",
+    ]
 
 
 @pytest.mark.asyncio

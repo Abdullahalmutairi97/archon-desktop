@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
+import math
 import os
+import stat
 import time
-import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from .hermes_runner import (
     MAX_EVENT_TEXT,
@@ -25,57 +28,74 @@ MAX_JSONL_RECORD_BYTES = 32 * 1024 * 1024
 _EVENT_TRUNCATION_MARKER = "\n…[truncated]"
 
 
-def _process_start_identity(pid: int) -> str | None:
-    try:
-        fields = Path(f"/proc/{pid}/stat").read_text().split()
-        return fields[21] if len(fields) > 21 else None
-    except (OSError, ValueError):
-        return None
+@dataclass
+class _SessionLease:
+    """One open description of a persistent Linux advisory lock file."""
+
+    _fd: int | None
+
+    def fileno(self) -> int:
+        if self._fd is None:
+            raise ValueError("Session lease is closed")
+        return self._fd
+
+    def close(self) -> None:
+        if self._fd is not None:
+            fd, self._fd = self._fd, None
+            # Do not LOCK_UN: a surviving supervisor may still hold a copy of
+            # this open description while the native process finishes.
+            os.close(fd)
 
 
-def _owner_alive(pid: int, start: str) -> bool:
-    try:
-        os.kill(pid, 0)
-    except (ProcessLookupError, PermissionError):
-        return False
-    except OSError:
-        return False
-    return bool(start) and _process_start_identity(pid) == start
-
-
-async def _acquire_session_lease(root: Path, session_id: str, timeout: float = 30.0):
-    lease = root / f".{session_id}.lock"
+async def _acquire_session_lease(
+    root: Path, session_id: str, timeout: float = 30.0,
+) -> _SessionLease:
+    if not session_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for char in session_id):
+        raise ValueError('Invalid session id')
+    if timeout < 0 or not math.isfinite(timeout):
+        raise ValueError("Session lease timeout must be finite and nonnegative")
+    path = root / f".{session_id}.lock"
     root.mkdir(parents=True, exist_ok=True)
-    owner = {"pid": os.getpid(), "start": _process_start_identity(os.getpid()) or "", "token": uuid.uuid4().hex}
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            lease.mkdir()
-            (lease / "owner.json").write_text(json.dumps(owner), encoding="utf-8")
-            return lease, owner["token"]
-        except FileExistsError:
-            try:
-                current = json.loads((lease / "owner.json").read_text(encoding="utf-8"))
-                dead = not _owner_alive(int(current.get("pid", -1)), str(current.get("start", "")))
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                dead = False
-            if dead:
-                try: lease.rmdir()
-                except OSError: pass
-                continue
-            if time.monotonic() >= deadline:
-                raise RuntimeError(f"Timed out waiting for session lease: {session_id}")
-            await asyncio.sleep(0.05)
-
-
-def _release_session_lease(lease: Path, token: str) -> None:
     try:
-        owner = json.loads((lease / "owner.json").read_text(encoding="utf-8"))
-        if owner.get("token") != token: return
-        (lease / "owner.json").unlink(missing_ok=True)
-        lease.rmdir()
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    except IsADirectoryError as exc:
+        # Old runners use mkdir/rmdir, not flock. Never remove a live or
+        # uncertain legacy lease, even when its owner metadata looks stale.
+        raise RuntimeError(
+            f"Legacy session lease for {session_id}; quiesce all Archon and native Prime "
+            "processes using this session, then archive its legacy lock directory before retrying"
+        ) from exc
+    lease = _SessionLease(fd)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise RuntimeError(f"Session lease is not a regular file: {session_id}")
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(f"Timed out waiting for session lease: {session_id}")
+                await asyncio.sleep(min(0.05, remaining))
+        current = path.stat(follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+            raise RuntimeError(f"Session lease file was replaced while waiting: {session_id}")
+        # Diagnostic only. Kernel ownership, not PID or JSON contents, decides
+        # whether another runner may enter. Never unlink or replace this inode.
+        os.ftruncate(fd, 0)
+        with os.fdopen(os.dup(fd), "w", encoding="utf-8") as metadata:
+            json.dump({"pid": os.getpid(), "acquired_at": time.time()}, metadata)
+        return lease
+    except BaseException:
+        lease.close()
+        raise
+
+
+def _release_session_lease(lease: _SessionLease) -> None:
+    lease.close()
 
 
 class PrimeRunner:
@@ -98,8 +118,6 @@ class PrimeRunner:
         self._active: dict[str, asyncio.subprocess.Process] = {}
         self._identities: dict[str, ProcessIdentity] = {}
         self._cancelled: set[str] = set()
-        # Prime permits only one active process per native session.
-        self._session_locks: dict[str, asyncio.Lock] = {}
 
     def _agent_session_path(self, session_id: str) -> Path | None:
         direct = self.agent_session_root / f"{session_id}.jsonl"
@@ -129,15 +147,15 @@ class PrimeRunner:
         session_id = str(task.get("session_id") or f"prime-{task['id']}")
         if not session_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for char in session_id):
             raise ValueError('Invalid session id')
-        lock = self._session_locks.setdefault(session_id, asyncio.Lock())
-        async with lock:
-            lease, token = await _acquire_session_lease(self.session_root, session_id)
-            try:
-                return await self._run_once(task, emit)
-            finally:
-                _release_session_lease(lease, token)
+        # flock also serializes separate opens in this process, so every
+        # contender uses the same bounded, cancellable acquisition path.
+        lease = await _acquire_session_lease(self.session_root, session_id)
+        try:
+            return await self._run_once(task, emit, lease)
+        finally:
+            _release_session_lease(lease)
 
-    async def _run_once(self, task: dict, emit) -> dict:
+    async def _run_once(self, task: dict, emit, lease: _SessionLease) -> dict:
         """Run Prime in its structured JSON mode.
 
         Text mode writes the final reply to stdout. Treating stdout as live
@@ -195,6 +213,9 @@ class PrimeRunner:
         process = await asyncio.create_subprocess_exec(
             *supervised_argv(argv), cwd=str(cwd), env=os.environ.copy(), stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True,
+            # The supervisor keeps the lease if the backend is killed. The
+            # native CLI is launched by the supervisor with close_fds=True.
+            pass_fds=(lease.fileno(),),
         )
         identity: ProcessIdentity | None = None
         try:
