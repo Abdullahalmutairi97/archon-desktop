@@ -44,7 +44,7 @@ def _hold_until_killed(root, ready):
 def _run_native_fixture(root):
     root = Path(root)
     runner = prime_runner.PrimeRunner(root / "fake-prime", root / "sessions", root, root / "agent-sessions")
-    asyncio.run(runner.run({"id": "fixture", "session_id": "shared", "prompt": "wait"}, lambda *_args: asyncio.sleep(0)))
+    asyncio.run(runner.run({"id": "fixture", "approval_mode": "auto", "session_id": "shared", "prompt": "wait"}, lambda *_args: asyncio.sleep(0)))
 
 
 @pytest.mark.asyncio
@@ -264,7 +264,7 @@ async def test_cancelled_runner_releases_lease_before_next_task(tmp_path):
         await asyncio.Event().wait()
 
     runner._run_once = wait_forever
-    running = asyncio.create_task(runner.run({"id": "first", "session_id": "shared"}, None))
+    running = asyncio.create_task(runner.run({"id": "first", "approval_mode": "auto", "session_id": "shared"}, None))
     await asyncio.wait_for(entered.wait(), 1)
     running.cancel()
     with pytest.raises(asyncio.CancelledError):

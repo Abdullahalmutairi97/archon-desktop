@@ -21,11 +21,15 @@ class Settings(BaseSettings):
     )
 
     archon_root: Path = Field(default_factory=_account_home)
+    # Explicit solo scratch registration; None uses the configured archon_root.
+    task_scratch_root: Path | None = None
+    runtime_profile_aliases: dict[str, str] = Field(default_factory=dict)
     hermes_home: Path = Field(default_factory=lambda: _account_home() / ".hermes")
     data_dir: Path = Field(default_factory=lambda: _account_home() / ".local" / "share" / "archon-desktop")
     profile: str = "archon"
     hermes_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "hermes")
     prime_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "prime-agent")
+    pi_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "pi")
     prime_agent_session_dir: Path = Field(default_factory=lambda: _account_home() / ".prime" / "agent" / "sessions")
     pi_agent_session_dir: Path = Field(default_factory=lambda: _account_home() / ".pi" / "agent" / "sessions")
     resource_node_executable: str = "node"
@@ -59,8 +63,7 @@ class Settings(BaseSettings):
     # than a graceful slowdown.
     worker_count: int = Field(default=2, ge=1)
     worker_poll_seconds: float = 0.5
-    # Provider subscription windows are commonly five hours; tasks remain queued
-    # server-side and are retried after this delay without user intervention.
+    # Compatibility setting only: started tasks are never automatically replayed.
     quota_retry_seconds: float = Field(default=18000, ge=1)
 
     @property

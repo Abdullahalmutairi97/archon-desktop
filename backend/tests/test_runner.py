@@ -358,7 +358,7 @@ async def test_prime_early_cancel_aborts_before_session_event(tmp_path, monkeypa
     events = []
     async def record(kind, data):
         events.append((kind, data))
-    running = asyncio.create_task(runner.run({"id": "early", "prompt": "hello", "cwd": str(tmp_path)}, record))
+    running = asyncio.create_task(runner.run({"id": "early", "prompt": "hello", "cwd": str(tmp_path), "approval_mode": "auto"}, record))
     await asyncio.wait_for(release_started.wait(), timeout=2)
     assert await runner.cancel("early") is False
     release_gate.set()
@@ -378,4 +378,4 @@ async def test_prime_rejects_unsafe_session_id_before_filesystem_access(tmp_path
     async def emit(_kind, _data):
         pass
     with pytest.raises(ValueError, match="Invalid session id"):
-        await runner.run({"id": "unsafe", "prompt": "hello", "cwd": str(tmp_path), "session_id": "../../outside"}, emit)
+        await runner.run({"id": "unsafe", "prompt": "hello", "cwd": str(tmp_path), "session_id": "../../outside", "approval_mode": "auto"}, emit)

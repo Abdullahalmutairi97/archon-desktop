@@ -12,7 +12,10 @@ def history(tmp_path):
     text='\n'.join(map(json.dumps,records))+'\n'
     native=pi/'timestamp_uuid.jsonl'; native.write_text(text)
     (prime/'renamed.jsonl').write_text(text)
-    settings=Settings(archon_root=tmp_path,hermes_home=tmp_path/'hermes',data_dir=tmp_path/'data',prime_agent_session_dir=prime,prime_agent_artifact_dir=tmp_path/'artifacts',pi_agent_session_dir=pi.parent,prime_executable=tmp_path/'no-prime',auth_token='test',start_worker=False)
+    executable=tmp_path/'fixture-prime'
+    executable.write_text("#!/bin/sh\nif [ \"$1\" = list ]; then printf '%s\\n' '{\"sessions\":[]}'; else exit 99; fi\n")
+    executable.chmod(0o700)
+    settings=Settings(archon_root=tmp_path,hermes_home=tmp_path/'hermes',data_dir=tmp_path/'data',prime_agent_session_dir=prime,prime_agent_artifact_dir=tmp_path/'artifacts',pi_agent_session_dir=pi.parent,prime_executable=executable,auth_token='test',start_worker=False)
     with TestClient(create_app(settings)) as client:
         client.headers['Authorization']='Bearer test'
         yield client,native,text,tmp_path

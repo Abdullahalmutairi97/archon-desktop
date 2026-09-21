@@ -21,14 +21,15 @@ class BlockingRunner:
 async def test_shutdown_waits_for_active_task_instead_of_cancelling_it(tmp_path):
     runner = BlockingRunner()
     app = create_app(Settings(
+        archon_root=tmp_path, hermes_home=tmp_path / ".hermes",
         data_dir=tmp_path, auth_token="test", worker_count=1,
         worker_poll_seconds=0.01,
     ), runner=runner)
     lifespan = app.router.lifespan_context(app)
     await lifespan.__aenter__()
-    task = app.state.store.submit("finish before restart")
+    task = app.state.store.submit("finish before restart", cwd=str(tmp_path), approval_mode="auto")
     await asyncio.wait_for(runner.started.wait(), timeout=1)
-    queued = app.state.store.submit("wait until the next startup")
+    queued = app.state.store.submit("wait until the next startup", cwd=str(tmp_path), approval_mode="auto")
 
     shutdown = asyncio.create_task(lifespan.__aexit__(None, None, None))
     await asyncio.sleep(0.05)
@@ -45,7 +46,7 @@ async def test_shutdown_waits_for_active_task_instead_of_cancelling_it(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_shutdown_drains_queued_telegram_turn_before_stopping_workers(tmp_path, monkeypatch):
+async def test_shutdown_delivers_queued_telegram_policy_failure_before_stopping_workers(tmp_path, monkeypatch):
     import archon_server.app as app_module
 
     class Telegram:
@@ -82,12 +83,13 @@ async def test_shutdown_drains_queued_telegram_turn_before_stopping_workers(tmp_
     runner = FirstTurnBlocks()
     monkeypatch.setattr(app_module, "TelegramBotClient", lambda _token: telegram)
     app = create_app(Settings(
+        archon_root=tmp_path, hermes_home=tmp_path / ".hermes",
         data_dir=tmp_path, auth_token="test", worker_count=1,
         worker_poll_seconds=0.01, telegram_bot_token="token", telegram_allowed_user_id=42,
     ), runner=runner)
     lifespan = app.router.lifespan_context(app)
     await lifespan.__aenter__()
-    first = app.state.store.submit("already active")
+    first = app.state.store.submit("already active", cwd=str(tmp_path), approval_mode="auto")
     await asyncio.wait_for(runner.started.wait(), timeout=1)
     for _ in range(100):
         if len(app.state.store.list()) == 2:
@@ -102,11 +104,14 @@ async def test_shutdown_drains_queued_telegram_turn_before_stopping_workers(tmp_
     await asyncio.wait_for(shutdown, timeout=2)
 
     assert app.state.store.get(first["id"])["status"] == "completed"
-    assert all(task["status"] == "completed" for task in app.state.store.list())
-    assert telegram.sent == [
-        (99, "Prime received your request and is working. I will send the result here."),
-        (99, "done"),
-    ]
+    telegram_task = next(task for task in app.state.store.list() if task["id"] != first["id"])
+    assert telegram_task["status"] == "failed"
+    assert "explicit approval_mode='auto'" in telegram_task["error"]
+    assert runner.calls == 1
+    assert telegram.sent[0] == (
+        99, "Prime received your request and is working. I will send the result here."
+    )
+    assert telegram.sent[1] == (99, f"Task failed: {telegram_task['error']}")
 
 
 @pytest.mark.asyncio
@@ -122,6 +127,7 @@ async def test_shutdown_still_stops_engine_when_telegram_poll_failed(tmp_path, m
 
     monkeypatch.setattr(app_module, "TelegramBotClient", lambda _token: BrokenTelegram())
     app = create_app(Settings(
+        archon_root=tmp_path, hermes_home=tmp_path / ".hermes",
         data_dir=tmp_path, auth_token="test", worker_count=1,
         worker_poll_seconds=0.01, telegram_bot_token="token", telegram_allowed_user_id=42,
     ), runner=BlockingRunner())

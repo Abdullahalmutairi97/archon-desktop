@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 1B task admission
+
+- Resolve Prime/Pi through an explicit execution registry and documented profile aliases. Unknown profiles and unavailable executables fail before task acknowledgment; `/api/runtimes` describes filesystem availability and supported modes separately from the agent roster.
+- Require explicit `approval_mode: "auto"`, labeled trusted execution. Reject approval, planning and chat-only requests because neither native adapter has a verified enforcement protocol for those restrictions.
+- Canonicalize task working folders within the configured scratch root or a selected registered project. Preserve session runtime/cwd ownership, reject mismatched inputs, and recheck workspace authorization before dispatch and native launch.
+- Commit an initial project assignment with the task and initial event. Missing folders never silently fall back to the account home. These admission checks do not sandbox trusted execution.
+
 ## Unreleased — Phase 1A execution recovery
 
 - Replace Prime's directory-based session lease with a bounded Linux advisory lock, retained by the process supervisor while its work survives. Legacy directory locks require a deliberate, quiescent migration instead of spinning indefinitely.

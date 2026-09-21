@@ -103,7 +103,7 @@ def test_prime_session_uses_latest_task_cwd_for_project_inference(tmp_path):
     assert row["project_id"] == newer["id"]
 
 
-def test_prime_session_ignores_stale_project_assignment_and_uses_cwd(tmp_path):
+def test_prime_session_with_stale_project_assignment_does_not_infer_another_project(tmp_path):
     db = Database(tmp_path / "tasks.db")
     project_db = tmp_path / "projects.db"
     make_projects(project_db)
@@ -121,7 +121,7 @@ def test_prime_session_ignores_stale_project_assignment_and_uses_cwd(tmp_path):
     service = PrimeSessionService(db, tmp_path / "desktop", sessions,
                                   projects=ProjectService(project_db),
                                   agent_artifact_root=tmp_path / "artifacts")
-    assert service.list()[0]["project_id"] == "p1"
+    assert service.list()[0]["project_id"] is None
 
 
 def test_project_service_lists_real_project_folders(tmp_path):

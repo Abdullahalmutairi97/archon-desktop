@@ -4,7 +4,9 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from .runtimes import execution_cwd, validate_execution_mode
 
 from .hermes_runner import RunnerCancelled, ProcessIdentity, capture_process_identity, release_supervised_target, abort_supervised_start, abort_uncaptured_process, supervised_argv, terminate_process_tree
 
@@ -36,14 +38,16 @@ class PiRunner:
     """
 
     def __init__(self, executable: Path | str | None = None, session_root: Path | None = None, default_cwd: Path | None = None):
-        self.executable = Path(executable or (Path.home() / ".local/bin/pi")).expanduser()
+        self.executable = Path(executable or (Path.home() / ".local/bin/pi")).expanduser().absolute()
         self.session_root = Path(session_root or (Path.home() / ".local/share/archon-desktop/pi-sessions")).expanduser()
         self.default_cwd = Path(default_cwd or Path.home()).expanduser()
         self._active: dict[str, asyncio.subprocess.Process] = {}
         self._identities: dict[str, ProcessIdentity] = {}
         self._cancelled: set[str] = set()
+        self.preflight: Callable[[dict[str, Any]], None] | None = None
 
     async def run(self, task: dict[str, Any], emit) -> dict[str, Any]:
+        validate_execution_mode(task)
         task_id = str(task["id"])
         session_id = str(task.get("session_id") or f"prime-{task_id}")
         if not session_id or any(ch not in VALID_ID for ch in session_id):
@@ -53,20 +57,11 @@ class PiRunner:
 
         session_dir = self.session_root / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
-        requested_cwd = Path(str(task.get("cwd") or self.default_cwd)).expanduser()
-        cwd = requested_cwd if requested_cwd.is_dir() else self.default_cwd
+        if self.preflight is not None:
+            self.preflight(task)
+        cwd = execution_cwd(task.get("cwd") or self.default_cwd, require_canonical=bool(task.get("cwd")))
         prompt = str(task.get("prompt") or "")
-        mode = task.get("approval_mode") or "auto"
-        if not task.get("chat_only") and mode == "plan":
-            prompt = "Planning only: do not edit files or run destructive commands. Return an actionable implementation plan.\n\n" + prompt
-        elif not task.get("chat_only") and mode == "approve":
-            prompt = "Do not perform destructive or production actions without explicit approval. Explain proposed actions first.\n\n" + prompt
-
         argv = [str(self.executable), "--print", "--mode", "json", "--session-dir", str(session_dir), "--session-id", session_id]
-        if task.get("chat_only"):
-            argv += ["--no-tools", "--no-extensions"]
-        elif mode == "plan":
-            argv += ["--tools", "read,grep,find,ls", "--no-extensions"]
         if task.get("provider") and task.get("model"):
             argv += ["--provider", str(task["provider"]), "--model", str(task["model"])]
         for skill in task.get("skills") or []:

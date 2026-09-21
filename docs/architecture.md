@@ -7,11 +7,13 @@ Archon Desktop has two independent halves:
 
 ## Durable task contract
 
-`POST /api/tasks` commits a task row and its initial ordered event in one SQLite transaction before returning HTTP 202. A server worker claims queued tasks atomically, selects its registered runner, records events, and saves the final response. Closing a remote client does not stop the server worker.
+`POST /api/tasks` validates the runtime, execution mode and canonical workspace before committing a task row, its initial ordered event and initial project assignment in one SQLite transaction and returning HTTP 202. A server worker claims queued tasks atomically, selects its registered runner, rechecks admission, records events, and saves the final response. Closing a remote client does not stop the server worker.
+
+The execution registry is separate from the Hermes agent roster. Prime/Pi support only explicit trusted `auto` execution until native restricted-mode enforcement is verified. Unknown runtime aliases, unavailable executable files and unsupported restrictions fail closed. Runtime file availability is not a provider or native-version readiness check. Project/session resolution confines the initial cwd to registered folders and preserves session ownership; trusted tools remain unrestricted OS-account processes.
 
 Recovery keeps tasks that have never started queued. Started tasks whose outcome is unknown become terminal `failed` records with `result.recovery` metadata and a compatible `task.failed` event. Previously deferred queued tasks with a start timestamp also require review. Neither a daemon disconnect before visible output nor a provider-limit message proves that a tool had no side effects, so these failures do not trigger automatic replay. Late completion/state transitions cannot replace the recovered terminal outcome.
 
-This prevents automatic replay of the interrupted task; it does not prove that an old native process stopped, reconcile external effects, or isolate all new work from surviving processes. Review effects and runner state before submitting another turn. Persistent runner/attempt reconciliation and the other admission/permission boundaries remain later work.
+This prevents automatic replay of the interrupted task; it does not prove that an old native process stopped, reconcile external effects, or isolate all new work from surviving processes. Review effects and runner state before submitting another turn. Persistent runner/attempt reconciliation, durable ownership migrations and credential hardening remain later work.
 
 Prime uses an advisory lock on a stable session lock file. Waiting yields to the event loop and times out; release closes the descriptor without removing the inode. The supervisor inherits the lock so surviving supervised work retains ownership after its parent server exits. An old directory-format lock fails with a migration error; drain and verify old processes before migrating it. External native Prime invocations do not participate in this Archon lock protocol.
 

@@ -424,6 +424,13 @@ class PrimeSessionService:
             raise KeyError(project_id)
         from datetime import datetime, timezone
         with self.locations.transaction() as conn:
+            # Hold the same write lock as task submission while checking and
+            # updating identity, so a newly queued turn cannot race this check.
+            if conn.execute(
+                "SELECT 1 FROM tasks WHERE session_id=? "
+                "AND status IN ('queued','running','cancelling') LIMIT 1", (session_id,),
+            ).fetchone():
+                raise ValueError("Session has active tasks; wait for them to finish before changing its project")
             conn.execute(
                 "INSERT INTO session_projects(session_id,project_id,updated_at) VALUES (?,?,?) "
                 "ON CONFLICT(session_id) DO UPDATE SET project_id=excluded.project_id,updated_at=excluded.updated_at",
@@ -519,15 +526,14 @@ class PrimeSessionService:
             started = self._timestamp(row["started"]) if row else 0
             active = self._timestamp(row["active"]) if row else 0
             cwd = cwd or str((row["cwd"] if row else "") or "")
-            # Explicit NULL is a deliberate detach and must suppress cwd inference.
-            # Non-NULL assignments are validated against the current catalog because
-            # projects and session mappings live in separate databases.
+            # Explicit bindings, including NULL and a removed project, suppress
+            # cwd inference. A replacement project must not adopt old sessions.
             if session_id in assignments:
                 assigned_project = assignments[session_id]
                 matched_project = (
                     assigned_project
                     if assigned_project is None or assigned_project in known_project_ids
-                    else self.projects.project_for_path(cwd, project_catalog) if self.projects else None
+                    else None
                 )
             else:
                 matched_project = self.projects.project_for_path(cwd, project_catalog) if self.projects else None

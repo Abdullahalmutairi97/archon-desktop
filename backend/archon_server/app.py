@@ -9,6 +9,7 @@ import os
 import re
 import uuid
 from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -18,6 +19,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .config import Settings
+from .admission import SessionWorkspace, admit_workspace, revalidate_workspace
+from .runtimes import RuntimeRegistry
 from .db import Database
 from .prime_runner import PrimeRunner
 from .pi_runner import PiRunner
@@ -241,23 +244,24 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     agents = AgentService(settings.hermes_home, settings.profile)
     kanban = KanbanService(settings.kanban_db, settings.hermes_executable, agents)
     store = TaskStore(Database(settings.database_path))
-    # Archon Desktop is Prime-only. Hermes is not started, resumed, or used as
-    # a fallback; native Prime sessions remain isolated from any legacy Hermes
-    # state that may exist on the host.
-    selected_runner = runner or {
-        "default": PrimeRunner(
+    selected_runner = {
+        "prime": PrimeRunner(
             settings.prime_executable,
             settings.data_dir / "prime-sessions",
             settings.archon_root,
             settings.prime_agent_session_dir,
         ),
         "pi": PiRunner(
-            Path.home() / ".local/bin/pi",
+            settings.pi_executable,
             settings.data_dir / "prime-sessions",
             settings.archon_root,
         ),
     }
-    engine = TaskEngine(store, selected_runner, settings.worker_poll_seconds, settings.quota_retry_seconds)
+    if runner is not None:
+        selected_runner = ({('prime' if key == 'default' else key): value for key, value in runner.items()}
+                           if isinstance(runner, Mapping) else {"prime": runner})
+    registry = RuntimeRegistry(selected_runner, default_profile=settings.profile,
+                               aliases=settings.runtime_profile_aliases)
     files = FileService(settings.archon_root)
     models = ModelService(
         settings.config_path, settings.profile_home / "provider_models_cache.json", settings.prime_auth_path
@@ -273,6 +277,41 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         settings.prime_executable,
         pi_session_root=settings.pi_agent_session_dir,
     )
+
+    def session_workspace(session_id: str, catalog):
+        with store.db.connect() as conn:
+            owner = conn.execute(
+                "SELECT profile,cwd FROM tasks WHERE session_id=? ORDER BY created_at,id LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            assignment = conn.execute(
+                "SELECT project_id FROM session_projects WHERE session_id=?", (session_id,),
+            ).fetchone()
+        if not owner and not prime_sessions.contains(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        native_cwd = prime_sessions.cwd_for(session_id)
+        cwd = owner['cwd'] if owner else native_cwd
+        if owner and native_cwd and cwd and Path(native_cwd).expanduser().resolve() != Path(cwd).expanduser().resolve():
+            raise ValueError("Session history disagrees with its recorded working folder")
+        project_id = assignment['project_id'] if assignment else projects.project_for_path(cwd, catalog)
+        return owner, SessionWorkspace(cwd=cwd, project_id=project_id)
+
+    def preflight(task):
+        # Recheck durable inputs immediately before invoking an adapter, including
+        # tasks submitted by transports which do not use the HTTP admission route.
+        catalog = projects.list()
+        owner, session = session_workspace(task['session_id'], catalog)
+        if owner and registry.resolve(owner['profile']) != registry.resolve(task.get('profile')):
+            raise ValueError("Task runtime disagrees with its session owner")
+        admitted = admit_workspace(scratch_root=settings.task_scratch_root or settings.archon_root,
+                                   projects=catalog, cwd=task.get('cwd'), session=session)
+        task['cwd'] = revalidate_workspace(task.get('cwd'), admitted.authorized_roots)
+
+    engine = TaskEngine(store, selected_runner, settings.worker_poll_seconds, settings.quota_retry_seconds,
+                        registry=registry, preflight=preflight)
+    for adapter in selected_runner.values():
+        if isinstance(adapter, (PrimeRunner, PiRunner)):
+            adapter.preflight = preflight
     skills = PrimeSkillService(settings.prime_bundled_skills_dir, settings.prime_user_skills_dir)
     resource_home = settings.resource_home.expanduser()
     resources = AgentResourceService({
@@ -305,6 +344,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         app.state.settings = settings
         app.state.store = store
         app.state.engine = engine
+        app.state.runtimes = registry
         app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
         if settings.start_worker:
             # Each worker shares the engine's one-time recovery guard and
@@ -415,6 +455,10 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             })
         return {"agents": roster}
 
+    @app.get("/api/runtimes", dependencies=protected)
+    def list_runtimes():
+        return {"runtimes": registry.describe()}
+
     @app.get("/api/kanban/tasks", dependencies=protected)
     def kanban_list(limit: int = Query(300, ge=1, le=1000), archived: bool = False):
         return {"cards": kanban.list(limit, archived), "stats": kanban.stats()}
@@ -453,37 +497,31 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             raise HTTPException(status_code=409, detail="Native Pi history is read-only here. Start a new Pi conversation to work.")
         if payload.project_id and (not projects.contains(payload.project_id)):
             raise HTTPException(status_code=404, detail="Project was not found")
-        task_cwd = payload.cwd
         try:
-            task_profile = "pi" if payload.profile == "pi" else agents.resolve(payload.profile)
+            task_profile = registry.resolve(payload.profile)
+            catalog = projects.list()
+            session = None
+            if payload.session_id:
+                owner, session = session_workspace(payload.session_id, catalog)
+                # Existing conversations retain their original runtime when the
+                # user changes the new-conversation picker.
+                task_profile = registry.resolve(owner['profile'] if owner else 'prime')
+            admitted = admit_workspace(
+                scratch_root=settings.task_scratch_root or settings.archon_root,
+                projects=catalog, cwd=payload.cwd, project_id=payload.project_id, session=session,
+            )
+            registry.validate({"profile": task_profile, "approval_mode": payload.approval_mode,
+                               "chat_only": payload.chat_only})
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if payload.session_id:
-            # A session belongs to its original runtime, regardless of the new-session picker.
-            with store.db.connect() as conn:
-                owner = conn.execute(
-                    "SELECT profile,cwd FROM tasks WHERE session_id=? ORDER BY created_at ASC LIMIT 1",
-                    (payload.session_id,),
-                ).fetchone()
-            if not owner and not prime_sessions.contains(payload.session_id):
-                raise HTTPException(status_code=404, detail="Session not found")
-            prime_sessions.messages(payload.session_id, limit=1)
-            task_cwd = prime_sessions.cwd_for(payload.session_id) or (owner["cwd"] if owner else None) or task_cwd
-            task_profile = (owner["profile"] if owner else None) or agents.resolve(None)
         try:
             task = store.submit(
-                payload.prompt, task_cwd, payload.model, payload.provider, payload.skills,
+                payload.prompt, admitted.cwd, payload.model, payload.provider, payload.skills,
                 payload.session_id, payload.approval_mode, payload.chat_only,
-                task_profile,
+                task_profile, project_id=admitted.project_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if payload.project_id:
-            # PrimeRunner deterministically uses prime-{task_id} for a new
-            # session. Persist the relationship before the first response so
-            # a project view cannot miss the session during its first turn.
-            session_id = payload.session_id or f"prime-{task['id']}"
-            prime_sessions.assign_project_pending(session_id, payload.project_id)
         return {"task": task}
 
     @app.get("/api/tasks/{task_id}", dependencies=protected)
@@ -615,15 +653,10 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     def delete_project(project_id: str):
         if not projects.contains(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
-        assigned = prime_sessions.clear_project(project_id)
-        try:
-            if not projects.delete(project_id):
-                prime_sessions.restore_project(project_id, assigned)
-                raise HTTPException(status_code=404, detail="Project not found")
-        except Exception:
-            if projects.contains(project_id):
-                prime_sessions.restore_project(project_id, assigned)
-            raise
+        # Preserve the session's original binding. Admission must reject a
+        # removed project instead of silently reclassifying its queued work.
+        if not projects.delete(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
         return {"ok": True, "files_preserved": True}
 
     @app.get("/api/sessions", dependencies=protected)
@@ -650,6 +683,8 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="Prime session not found")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Project not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "session_id": session_id, "project_id": payload.project_id}
 
     @app.get("/api/sessions/{session_id}/messages", dependencies=protected)

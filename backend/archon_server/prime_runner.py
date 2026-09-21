@@ -9,6 +9,8 @@ import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable
+from .runtimes import execution_cwd, validate_execution_mode
 from .hermes_runner import (
     MAX_EVENT_TEXT,
     ProcessIdentity,
@@ -111,13 +113,14 @@ class PrimeRunner:
         default_cwd: Path | None = None,
         agent_session_root: Path | None = None,
     ):
-        self.executable = Path(executable)
+        self.executable = Path(executable).expanduser().absolute()
         self.session_root = Path(session_root or (Path.home() / '.local/share/archon-desktop/prime-sessions'))
         self.default_cwd = Path(default_cwd or Path.home())
         self.agent_session_root = Path(agent_session_root or (Path.home() / '.prime/agent/sessions'))
         self._active: dict[str, asyncio.subprocess.Process] = {}
         self._identities: dict[str, ProcessIdentity] = {}
         self._cancelled: set[str] = set()
+        self.preflight: Callable[[dict[str, Any]], None] | None = None
 
     def _agent_session_path(self, session_id: str) -> Path | None:
         direct = self.agent_session_root / f"{session_id}.jsonl"
@@ -144,6 +147,7 @@ class PrimeRunner:
         return None
 
     async def run(self, task: dict, emit) -> dict:
+        validate_execution_mode(task)
         session_id = str(task.get("session_id") or f"prime-{task['id']}")
         if not session_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for char in session_id):
             raise ValueError('Invalid session id')
@@ -176,11 +180,6 @@ class PrimeRunner:
         if not agent_session:
             session_dir.mkdir(parents=True, exist_ok=True)
         prompt = task['prompt']
-        mode = task.get('approval_mode') or 'auto'
-        if mode == 'plan':
-            prompt = 'Planning only: do not edit files or run destructive commands. Return an actionable implementation plan.\n\n' + prompt
-        elif mode == 'approve':
-            prompt = 'Do not perform destructive or production actions without explicit approval. Explain proposed actions first.\n\n' + prompt
         saved_cwd = task.get('cwd')
         if agent_session and not saved_cwd:
             try:
@@ -193,8 +192,9 @@ class PrimeRunner:
                         break
             except (OSError, json.JSONDecodeError):
                 pass
-        requested_cwd = Path(str(saved_cwd or self.default_cwd))
-        cwd = requested_cwd if requested_cwd.is_dir() else self.default_cwd
+        if self.preflight is not None:
+            self.preflight(task)
+        cwd = execution_cwd(saved_cwd or self.default_cwd, require_canonical=bool(saved_cwd))
         argv = [str(self.executable), '--print', '--mode', 'json', '--cwd', str(cwd)]
         if agent_session:
             argv += ['--resume', session_id]

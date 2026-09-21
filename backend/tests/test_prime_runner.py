@@ -48,7 +48,7 @@ async def test_prime_runner_streams_native_text_and_returns_session(tmp_path):
         emitted.append((kind, data))
 
     result = await PrimeRunner(executable, tmp_path / "sessions", tmp_path).run(
-        {"id": "task-1", "prompt": "implement", "cwd": str(tmp_path)}, emit
+        {"id": "task-1", "approval_mode": "auto", "prompt": "implement", "cwd": str(tmp_path)}, emit
     )
 
     assert result["text"] == "response"
@@ -85,7 +85,7 @@ async def test_prime_runner_resumes_native_agent_session_by_exact_id(tmp_path):
 
     result = await PrimeRunner(
         executable, tmp_path / "archon-sessions", tmp_path, agent_sessions
-    ).run({"id": "task-2", "prompt": "continue", "session_id": session_id}, emit)
+    ).run({"id": "task-2", "approval_mode": "auto", "prompt": "continue", "session_id": session_id}, emit)
 
     argv = args.read_text().splitlines()
     assert argv[argv.index("--resume") + 1] == session_id
@@ -106,7 +106,7 @@ async def test_prime_runner_cancel_reaps_tool_children(tmp_path):
     )
     executable.chmod(0o755)
     runner = PrimeRunner(executable, tmp_path / "sessions", tmp_path, tmp_path / "agent-sessions")
-    running = asyncio.create_task(runner.run({"id": "cancel-prime", "prompt": "wait"}, lambda _kind, _data: asyncio.sleep(0)))
+    running = asyncio.create_task(runner.run({"id": "cancel-prime", "approval_mode": "auto", "prompt": "wait"}, lambda _kind, _data: asyncio.sleep(0)))
     for _ in range(100):
         if child_file.exists():
             break
@@ -152,7 +152,7 @@ async def test_prime_runner_handles_tool_result_larger_than_previous_limit(tmp_p
         emitted.append((kind, data))
 
     result = await PrimeRunner(executable, tmp_path / "sessions", tmp_path).run(
-        {"id": "large-result", "prompt": "inspect"}, emit
+        {"id": "large-result", "approval_mode": "auto", "prompt": "inspect"}, emit
     )
 
     assert result["text"] == "finished"
@@ -186,7 +186,7 @@ async def test_prime_runner_terminates_process_when_event_handling_fails(tmp_pat
     runner = PrimeRunner(executable, tmp_path / "sessions", tmp_path)
     try:
         with pytest.raises(RuntimeError, match="event store unavailable"):
-            await runner.run({"id": "emit-failure", "prompt": "inspect"}, broken_emit)
+            await runner.run({"id": "emit-failure", "approval_mode": "auto", "prompt": "inspect"}, broken_emit)
 
         await _wait_for_path(pid_file)
         pid = int(pid_file.read_text())
@@ -216,7 +216,7 @@ async def test_prime_runner_rejects_record_over_configured_memory_bound(tmp_path
 
     with pytest.raises(RuntimeError, match="Prime JSONL record exceeds 1024 bytes"):
         await PrimeRunner(executable, tmp_path / "sessions", tmp_path).run(
-            {"id": "oversized-record", "prompt": "inspect"}, emit
+            {"id": "oversized-record", "approval_mode": "auto", "prompt": "inspect"}, emit
         )
 
 
@@ -262,7 +262,7 @@ async def test_process_cleanup_reaps_descendant_forked_during_sigterm(tmp_path):
     try:
         runner = PrimeRunner(executable, tmp_path / "sessions", tmp_path)
         with pytest.raises(RuntimeError, match="event store unavailable"):
-            await runner.run({"id": "late-fork", "prompt": "inspect"}, broken_emit)
+            await runner.run({"id": "late-fork", "approval_mode": "auto", "prompt": "inspect"}, broken_emit)
 
         await _wait_for_path(late_file)
         late_pid = int(late_file.read_text())
@@ -380,7 +380,7 @@ async def test_prime_runner_reaps_child_that_emits_after_target_exits(tmp_path):
     try:
         runner = PrimeRunner(executable, tmp_path / "sessions", tmp_path)
         with pytest.raises(RuntimeError, match="event store unavailable"):
-            await runner.run({"id": "late-child-output", "prompt": "inspect"}, broken_emit)
+            await runner.run({"id": "late-child-output", "approval_mode": "auto", "prompt": "inspect"}, broken_emit)
 
         # The shell may publish the background PID just after the target exits.
         # Wait briefly for that handoff instead of racing the child setup.
@@ -416,7 +416,7 @@ async def test_prime_runner_aborts_supervisor_before_target_when_identity_captur
     runner = PrimeRunner(executable, tmp_path / "sessions", tmp_path)
     with pytest.raises(OSError, match="too many open files"):
         await asyncio.wait_for(
-            runner.run({"id": "pidfd-failure", "prompt": "inspect"}, lambda _kind, _data: asyncio.sleep(0)),
+            runner.run({"id": "pidfd-failure", "approval_mode": "auto", "prompt": "inspect"}, lambda _kind, _data: asyncio.sleep(0)),
             timeout=2,
         )
 
@@ -440,7 +440,7 @@ async def test_prime_runner_aborts_without_resuming_after_release_failure(tmp_pa
     runner = PrimeRunner(executable, tmp_path / "sessions", tmp_path)
     with pytest.raises(RuntimeError, match="release failed"):
         await asyncio.wait_for(
-            runner.run({"id": "release-failure", "prompt": "inspect"}, lambda _kind, _data: asyncio.sleep(0)),
+            runner.run({"id": "release-failure", "approval_mode": "auto", "prompt": "inspect"}, lambda _kind, _data: asyncio.sleep(0)),
             timeout=4,
         )
 
@@ -480,12 +480,12 @@ async def test_same_session_runs_serialize_but_distinct_sessions_overlap(tmp_pat
         return {"id": task["id"]}
 
     runner._run_once = fake_run
-    same = [{"id": "one", "session_id": "shared"}, {"id": "two", "session_id": "shared"}]
+    same = [{"id": "one", "approval_mode": "auto", "session_id": "shared"}, {"id": "two", "approval_mode": "auto", "session_id": "shared"}]
     await asyncio.gather(*(runner.run(task, None) for task in same))
     assert maximum == 1
 
     maximum = 0
-    distinct = [{"id": "a", "session_id": "a"}, {"id": "b", "session_id": "b"}]
+    distinct = [{"id": "a", "approval_mode": "auto", "session_id": "a"}, {"id": "b", "approval_mode": "auto", "session_id": "b"}]
     await asyncio.gather(*(runner.run(task, None) for task in distinct))
     assert maximum == 2
 
@@ -501,7 +501,7 @@ def _cross_process_prime_worker(root, active, maximum):
             await asyncio.sleep(0.05)
             with active.get_lock(): active.value -= 1
         runner._run_once = fake
-        await runner.run({"id": "task", "session_id": "shared"}, None)
+        await runner.run({"id": "task", "approval_mode": "auto", "session_id": "shared"}, None)
     asyncio.run(go())
 
 

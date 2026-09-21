@@ -138,12 +138,16 @@ def test_project_creation_creates_registered_folder(tmp_path):
 
 
 def test_new_task_reserves_project_before_prime_session_exists(tmp_path):
+    executable = tmp_path / "fake-prime"
+    executable.write_text("#!/bin/sh\nexit 99\n")
+    executable.chmod(0o700)
     root = tmp_path / "host"
     root.mkdir()
     settings = Settings(
         archon_root=root, hermes_home=root / ".hermes", data_dir=root / ".data",
         auth_token="token", start_worker=False, profile="archon",
         prime_agent_session_dir=root / ".prime/agent/sessions",
+        prime_executable=executable,
     )
     headers = {"Authorization": "Bearer token"}
     app = create_app(settings)

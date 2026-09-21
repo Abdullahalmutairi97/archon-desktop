@@ -5,13 +5,15 @@ import json
 import uuid
 import re
 from datetime import datetime, timezone
-from typing import Any, Protocol, Mapping
+from typing import Any, Callable, Protocol, Mapping
 
 from .db import Database
 from .hermes_runner import RunnerCancelled
+from .runtimes import RuntimeRegistry
 
 
 MAX_EVENT_TEXT = 4096
+_PROJECT_UNSET = object()
 _EVENT_TRUNCATION_MARKER = "\n…[truncated]"
 _RECOVERY_GUIDANCE = (
     "Side effects are unknown. Review the workspace and agent session and confirm "
@@ -73,7 +75,7 @@ class TaskStore:
                provider: str | None = None, skills: list[str] | None = None,
                session_id: str | None = None, approval_mode: str = "approve",
                chat_only: bool = False, profile: str | None = None,
-               request_id: str | None = None) -> dict[str, Any]:
+               request_id: str | None = None, project_id: str | None | object = _PROJECT_UNSET) -> dict[str, Any]:
         if request_id and (
             len(request_id) > 200
             or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for char in request_id)
@@ -103,6 +105,17 @@ class TaskStore:
                     (task_id, prompt, cwd, model, provider, session_id, profile, approval_mode, int(chat_only), json.dumps(skills or []), now, now),
                 )
                 self._append_event(conn, task_id, "task.queued", {"status": "queued"})
+                if project_id is not _PROJECT_UNSET:
+                    binding = conn.execute(
+                        "SELECT project_id FROM session_projects WHERE session_id=?", (session_id,),
+                    ).fetchone()
+                    if binding is not None and binding['project_id'] != project_id:
+                        raise ValueError("Session project changed during task admission; refresh before retrying")
+                    conn.execute(
+                        "INSERT INTO session_projects(session_id,project_id,updated_at) VALUES (?,?,?) "
+                        "ON CONFLICT(session_id) DO NOTHING",
+                        (session_id, project_id, now),
+                    )
         return self.get(task_id)
 
     def _append_event(self, conn, task_id: str, event_type: str, data: dict[str, Any]) -> int:
@@ -412,9 +425,11 @@ class TaskStore:
 
 
 class TaskEngine:
-    def __init__(self, store: TaskStore, runner: Runner | Mapping[str, Runner], poll_seconds: float = 0.5, quota_retry_seconds: float = 18000):
+    def __init__(self, store: TaskStore, runner: Runner | Mapping[str, Runner], poll_seconds: float = 0.5, quota_retry_seconds: float = 18000, *, registry: RuntimeRegistry | None = None, preflight: Callable[[dict[str, Any]], None] | None = None):
         self.store = store
         self.runner = runner
+        self.registry = registry
+        self.preflight = preflight
         self.poll_seconds = poll_seconds
         # Retain the constructor argument for callers; started work is no longer
         # replayed automatically after a provider error.
@@ -436,8 +451,12 @@ class TaskEngine:
                 self.store.set_session(task["id"], str(data["session_id"]))
             self.store.append_running_event(task["id"], event_type, data)
 
-        runner = self._runner_for(task)
         try:
+            if self.registry is not None:
+                self.registry.validate(task)
+            if self.preflight is not None:
+                self.preflight(task)
+            runner = self._runner_for(task)
             # Missing output does not prove that the runner made no side effects.
             # Each claim invokes the runner once, including transport failures.
             result = await runner.run(task, emit)
@@ -458,8 +477,14 @@ class TaskEngine:
         return True
 
     def _runner_for(self, task: dict[str, Any]) -> Runner:
+        if self.registry is not None:
+            return self.registry.runner_for(task)
         if isinstance(self.runner, Mapping):
-            return self.runner.get(str(task.get("profile") or ""), self.runner["default"])
+            profile = task.get("profile")
+            key = "default" if profile is None else str(profile)
+            if key not in self.runner:
+                raise ValueError(f"Unknown runtime profile: {key}")
+            return self.runner[key]
         return self.runner
 
     async def cancel(self, task_id: str) -> None:
