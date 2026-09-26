@@ -1,8 +1,8 @@
 # P1 — Trustworthy execution baseline
 
-**Status:** P1 remains in progress; Phase 1A source is published for review in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14). Phase 1B is published for review in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15); Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16), and Phase 1C.2 is published in [PR #17](https://github.com/Abdullahalmutairi97/archon-desktop/pull/17). Phase 1D is in progress. **Dependencies:** audited backend and isolated fixture environment; backend work does not require the private ASAR. **Outcome:** admission, execution modes, locking, recovery and readiness describe enforced behavior truthfully.
+**Status:** Planned P1 backend source implementation is complete; native qualification remains open. Phase 1A source is published for review in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14). Phase 1B is published for review in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15); Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16), and Phase 1C.2 is published in [PR #17](https://github.com/Abdullahalmutairi97/archon-desktop/pull/17). Phase 1D is published in [PR #18](https://github.com/Abdullahalmutairi97/archon-desktop/pull/18). **Dependencies:** audited backend and isolated fixture environment; backend work does not require the private ASAR. **Outcome:** admission, execution modes, locking, recovery and readiness describe enforced behavior truthfully.
 
-Publish each completed increment as a pull request for review. Continue through tested increments, checking usage until the requested stop threshold of less than 5% remaining is reached. P1 remains open until 1B–1D and the combined acceptance checks also pass. No merge, production deployment or service restart is included.
+Publish each completed increment as a pull request for review. Continue through tested increments, checking usage until the requested stop threshold of less than 5% remaining is reached. Backend increments 1A–1D and their combined fixture checks have passed. P1 remains open for the documented native credential/runtime qualification, which continues with P2. No merge, production deployment or service restart is included.
 
 ## Increment map
 
@@ -11,7 +11,7 @@ Publish each completed increment as a pull request for review. Continue through 
 | Phase 1A — Locking and conservative recovery | M1.4 and the current-schema portion of M1.6 | Published for review | Can proceed with existing backend; do not claim durable attempt fencing or all of M1.6 without M1.5 |
 | Phase 1B — Admission, runtimes and modes | M1.1, M1.2, M1.3 | Published for review in #15 | Coordinate ownership fields with 1C; no unsupported-mode fallback |
 | Phase 1C — Durable admission and attempts | M1.5 and remaining M1.6 | 1C.1 published in #16; 1C.2 published in #17 | Split into 1C.1 migrations/idempotency/queued cancellation and 1C.2 durable attempts/fencing/native cancellation; no full 1C claim before both pass |
-| Phase 1D — Credentials and readiness | M1.7, M1.8 | In progress | Integrates 1B/1C; native credential handling remains gated on P2 evidence |
+| Phase 1D — Credentials and readiness | M1.7, M1.8 | Backend source published in #18 | Integrates 1B/1C; native credential handling remains gated on P2 evidence |
 
 ## Phase 1A checklist and publication gate
 
@@ -34,6 +34,10 @@ Published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull
 ## Phase 1C.2 boundary
 
 Published in [PR #17](https://github.com/Abdullahalmutairi97/archon-desktop/pull/17): 437 backend tests passed and the bounded Astra review approved all fixes. Durable attempts fence events/results/session attachment; cancellation intent is stored before teardown; native prelaunch gates recheck eligibility and session ownership. Immutable v1 migration and a vendored published-v1 fixture protect upgrade compatibility. Native execution and missing frozen-ASAR qualification remain separate gates.
+
+## Phase 1D boundary
+
+Published in [PR #18](https://github.com/Abdullahalmutairi97/archon-desktop/pull/18): 542 backend tests passed, 72 desktop tests passed with 16 frozen-ASAR skips, and both GitHub CI runs passed. Astra approved credentials/provisioning, scoped child environments, HTTP/WebSocket authorization and authenticated readiness after one targeted environment compatibility fix. Backend feature implementation is complete. Native desktop credential storage/onboarding, actual runtime conformance and private TLS deployment are still qualification gates; further broad backend audits are not required to begin P2A.
 
 ## Full M1 work packages
 
@@ -67,7 +71,7 @@ Likely files: `prime_runner.py`, `pi_runner.py`, registry and API validation.
 ### M1.4 — Bounded session locking (Phase 1A)
 
 - [ ] Prefer an OS advisory lock with bounded nonblocking waits and owner metadata; establish compatibility with native Prime locking.
-- [ ] Never delete a live lock inode to manufacture a new owner.
+- [x] Never delete a live lock inode to manufacture a new owner.
 - [ ] Test killed owner release, malformed metadata, responsive heartbeat and twenty contenders without overlapping critical sections. All finish or return bounded errors.
 
 Likely files: `prime_runner.py` and its regression tests. Any native-lock compatibility not observed remains an explicit limitation in the PR.
@@ -87,30 +91,30 @@ Likely files: `db.py`, `tasks.py`; proposed `migrations/` and `attempts.py`.
 
 ### M1.6 — Conservative recovery (Phases 1A and 1C)
 
-- [ ] Preserve unstarted queued tasks. Started attempts enter reconciliation/interruption unless live evidence supports continuation.
-- [ ] Never automatically repeat a started attempt with unknown side effects; record an actionable review state.
+- [x] Preserve unstarted queued tasks. Started attempts enter reconciliation/interruption unless live evidence supports continuation.
+- [x] Never automatically repeat a started attempt with unknown side effects; record an actionable review state.
 - [x] Bind events/results to attempt identity so a late old-attempt completion cannot complete its replacement (requires 1C).
 - [ ] Test failure after a side effect and before result commit, restart, explicit resume as a new attempt, and stale completion.
-- [ ] Keep native history intact and document existing-client status translation.
+- [x] Keep native history intact and document existing-client status translation.
 
 Likely files: `TaskStore.recover_inflight`, `TaskEngine`, attempt records and existing process identity helpers.
 
 ### M1.7 — Credentials and child environment (Phase 1D)
 
-- [ ] Refuse blank token outside explicit fixture mode. Missing credentials fail with actionable setup instructions, never anonymous fallback.
-- [ ] Provide an operator helper to generate a random single-owner credential into mode-0600 service configuration outside workspace roots. Keep existing wire authentication compatible; never put tokens in argv/logs.
+- [x] Refuse blank token outside explicit fixture mode. Missing credentials fail with actionable setup instructions, never anonymous fallback.
+- [x] Provide an operator helper to generate a random single-owner credential into mode-0600 service configuration outside workspace roots. Keep existing wire authentication compatible; never put tokens in argv/logs.
 - [ ] Verify protected or memory-only desktop connection handling before native onboarding. Missing authored source/ASAR blocks that evidence; backend fixtures do not certify storage.
-- [ ] Validate bind configuration and require the private authenticated TLS path for remote use. P3 replaces the interim credential with local owner/device bootstrap and expiring migration.
-- [ ] Build child environments from allowlisted essentials plus scoped runtime credentials. Secret sentinel and coordinator token must not reach fake children.
+- [x] Validate bind configuration and require the private authenticated TLS path for remote use. P3 replaces the interim credential with local owner/device bootstrap and expiring migration.
+- [x] Build child environments from allowlisted essentials plus scoped runtime credentials. Secret sentinel and coordinator token must not reach fake children.
 
 Likely files: `config.py`, `app.py`, runner spawn sites, `services/commands.py`, provisioning helper and operator guide.
 
 ### M1.8 — Readiness and observability (Phase 1D)
 
-- [ ] Keep anonymous liveness minimal; authenticate worker/runtime/resource readiness.
-- [ ] Report configured/live workers, last claim/heartbeat, queue age and per-runtime state/errors. Disabled or crashed workers cannot report execution ready.
-- [ ] Update stale HTTP 201, default Hermes execution and unconditional restart-safety documentation.
-- [ ] Document compatibility, migration, rollback and remaining unsupported behavior; add appropriate CI coverage.
+- [x] Keep anonymous liveness minimal; authenticate worker/runtime/resource readiness.
+- [x] Report configured/live workers, last claim/heartbeat, queue age and per-runtime state/errors. Disabled or crashed workers cannot report execution ready.
+- [x] Update stale HTTP 201, default Hermes execution and unconditional restart-safety documentation.
+- [x] Document compatibility, migration, rollback and remaining unsupported behavior; add appropriate CI coverage.
 
 Likely files: `app.py`, `tasks.py`, `main.py`, docs and CI.
 

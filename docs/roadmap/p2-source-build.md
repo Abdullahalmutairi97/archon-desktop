@@ -1,13 +1,13 @@
 # P2 — Maintainable source build and UI parity
 
-**Status:** Source inventory and bounded reconstruction planning are complete. P2A implementation is queued while workers finish the remaining P1 implementation. Historical authored source and design assets are recovered as references; matching v0.3.0 input remains unavailable. See the [26 September inventory](p2-source-inventory.md) and [bounded reconstruction plan](p2-reconstruction-plan.md). **Dependencies:** P2A synthetic build/domain work is independent of P1 completion. P2B live transport/credentials awaits P1D; P2 gates new P3/P4 desktop delivery.
+**Status:** Source inventory and bounded reconstruction planning are complete. P2A implementation is active after all P1 backend source increments were published through #18. Historical authored source and design assets are recovered as references; matching v0.3.0 input remains unavailable. See the [26 September inventory](p2-source-inventory.md) and [bounded reconstruction plan](p2-reconstruction-plan.md). **Dependencies:** P2A synthetic build/domain work is independent of P1 completion. P2B live transport/credentials awaits P1D; P2 gates new P3/P4 desktop delivery.
 
 ## Source increments
 
 | Increment | Deliverable | Status |
 | --- | --- | --- |
-| P2A | Authored build, isolated reference shell, pure IDE/queue/snapshot/identity models | Planned |
-| P2B | Validated main/preload boundary, protected transport/storage and local Codex adapter | Planned; P1D integration dependency |
+| P2A | Authored build, isolated reference shell, pure IDE/queue/snapshot/identity models | In progress with three Luna workers |
+| P2B | Validated main/preload boundary, protected transport/storage and local Codex adapter | Planned; P1D dependency implemented and reviewed |
 | P2C | Full renderer behavior and fixture parity | Planned; consumes P2B contracts |
 | P2D | Isolated native checks, fresh package builds and release qualification evidence | Planned; baseline parity remains an explicit gate |
 
