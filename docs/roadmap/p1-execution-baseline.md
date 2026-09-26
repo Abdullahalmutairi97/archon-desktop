@@ -1,6 +1,6 @@
 # P1 — Trustworthy execution baseline
 
-**Status:** P1 remains in progress; Phase 1A source is published for review in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14). Phase 1B is published for review in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15); Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16), and Phase 1C.2 is now in progress. Phase 1D remains pending. **Dependencies:** audited backend and isolated fixture environment; backend work does not require the private ASAR. **Outcome:** admission, execution modes, locking, recovery and readiness describe enforced behavior truthfully.
+**Status:** P1 remains in progress; Phase 1A source is published for review in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14). Phase 1B is published for review in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15); Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16), and Phase 1C.2 is published in [PR #17](https://github.com/Abdullahalmutairi97/archon-desktop/pull/17). Phase 1D is in progress. **Dependencies:** audited backend and isolated fixture environment; backend work does not require the private ASAR. **Outcome:** admission, execution modes, locking, recovery and readiness describe enforced behavior truthfully.
 
 Publish each completed increment as a pull request for review. Continue through tested increments, checking usage until the requested stop threshold of less than 5% remaining is reached. P1 remains open until 1B–1D and the combined acceptance checks also pass. No merge, production deployment or service restart is included.
 
@@ -10,8 +10,8 @@ Publish each completed increment as a pull request for review. Continue through 
 | --- | --- | --- | --- |
 | Phase 1A — Locking and conservative recovery | M1.4 and the current-schema portion of M1.6 | Published for review | Can proceed with existing backend; do not claim durable attempt fencing or all of M1.6 without M1.5 |
 | Phase 1B — Admission, runtimes and modes | M1.1, M1.2, M1.3 | Published for review in #15 | Coordinate ownership fields with 1C; no unsupported-mode fallback |
-| Phase 1C — Durable admission and attempts | M1.5 and remaining M1.6 | 1C.1 published in #16; 1C.2 in progress | Split into 1C.1 migrations/idempotency/queued cancellation and 1C.2 durable attempts/fencing/native cancellation; no full 1C claim before both pass |
-| Phase 1D — Credentials and readiness | M1.7, M1.8 | Not started | Integrates 1B/1C; native credential handling remains gated on P2 evidence |
+| Phase 1C — Durable admission and attempts | M1.5 and remaining M1.6 | 1C.1 published in #16; 1C.2 published in #17 | Split into 1C.1 migrations/idempotency/queued cancellation and 1C.2 durable attempts/fencing/native cancellation; no full 1C claim before both pass |
+| Phase 1D — Credentials and readiness | M1.7, M1.8 | In progress | Integrates 1B/1C; native credential handling remains gated on P2 evidence |
 
 ## Phase 1A checklist and publication gate
 
@@ -30,6 +30,10 @@ Phase 1A validation: 196 backend tests passed; 72 desktop tests passed and 16 ex
 ## Phase 1C.1 boundary
 
 Published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16): 381 backend tests passed, 72 desktop checks passed and 16 existing ASAR checks skipped. This increment adds versioned migration/snapshot recovery, HTTP and Telegram request fingerprints, and queued-cancellation compare-and-swap. It does not complete all of 1C. Phase 1C.2 must add attempt identity/fencing, legacy ownership reconciliation and cancellation before native launch. Native execution qualification, credential handling and full migration cutover remain separate gates.
+
+## Phase 1C.2 boundary
+
+Published in [PR #17](https://github.com/Abdullahalmutairi97/archon-desktop/pull/17): 437 backend tests passed and the bounded Astra review approved all fixes. Durable attempts fence events/results/session attachment; cancellation intent is stored before teardown; native prelaunch gates recheck eligibility and session ownership. Immutable v1 migration and a vendored published-v1 fixture protect upgrade compatibility. Native execution and missing frozen-ASAR qualification remain separate gates.
 
 ## Full M1 work packages
 
@@ -73,8 +77,8 @@ Likely files: `prime_runner.py` and its regression tests. Any native-lock compat
 - [x] Fix the preexisting queued-cancellation/claim race: a queued-only cancellation transition must not return before cancelling a process that became running between the status read and transaction. Add a concurrent regression.
 
 - [x] Introduce version-1 checksummed migration, verified pre-migration SQLite snapshots and request payload hashes (Phase 1C.1).
-- [ ] Add durable runtime/session ownership and explicit task-attempt states (Phase 1C.2).
-- [ ] Preserve Phase 1B atomic task/event/project binding; add durable ownership reconciliation for legacy cross-store imports.
+- [x] Add durable runtime/session ownership and explicit task-attempt states (Phase 1C.2).
+- [x] Preserve Phase 1B atomic task/event/project binding; add durable ownership reconciliation for legacy cross-store imports.
 - [x] Identical idempotent requests return one task; reuse with a changed payload returns 409 (Phase 1C.1).
 - [ ] Test migration and snapshot/import/rollback with duplicate project names, native Prime/Pi IDs, tombstoned sessions, and queued/running tasks.
 - [ ] Restore the pre-migration copy under a tested compatibility procedure; never open an incompatible newer schema with an older binary.
@@ -85,7 +89,7 @@ Likely files: `db.py`, `tasks.py`; proposed `migrations/` and `attempts.py`.
 
 - [ ] Preserve unstarted queued tasks. Started attempts enter reconciliation/interruption unless live evidence supports continuation.
 - [ ] Never automatically repeat a started attempt with unknown side effects; record an actionable review state.
-- [ ] Bind events/results to attempt identity so a late old-attempt completion cannot complete its replacement (requires 1C).
+- [x] Bind events/results to attempt identity so a late old-attempt completion cannot complete its replacement (requires 1C).
 - [ ] Test failure after a side effect and before result commit, restart, explicit resume as a new attempt, and stale completion.
 - [ ] Keep native history intact and document existing-client status translation.
 

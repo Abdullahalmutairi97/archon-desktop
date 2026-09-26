@@ -8,8 +8,8 @@ This backlog turns the 21 September 2026 repository audit and revised implementa
 
 | Phase | Outcome | Dependencies | Status |
 | --- | --- | --- | --- |
-| [P1 — Trustworthy execution baseline](p1-execution-baseline.md) | Honest admission, modes, locks, recovery, credentials and readiness | Existing backend and isolated fixtures | In progress; 1A, 1B and 1C.1 published; 1C.2 and 1D pending |
-| [P2 — Maintainable source build](p2-source-build.md) | Build the actual desktop from authored source and preserve UI behavior | Matching source/asset inventory; runs alongside P1 | Historical source inventory complete; reconstruction plan and baseline parity pending |
+| [P1 — Trustworthy execution baseline](p1-execution-baseline.md) | Honest admission, modes, locks, recovery, credentials and readiness | Existing backend and isolated fixtures | In progress; 1A, 1B and all of 1C published; 1D in progress |
+| [P2 — Maintainable source build](p2-source-build.md) | Build the actual desktop from authored source and preserve UI behavior | P2A runs alongside P1; P2B transport/credentials awaits P1D | Source inventory and bounded plan complete; implementation queued after remaining P1 work |
 | [P3 — Workspaces and persistent runner](p3-workspaces-runner.md) | Protected solo bootstrap; one workspace identity; work outlives UI | P1; P2 before desktop delivery | Not started |
 | [P4 — Full solo workstation](p4-solo-workstation.md) | Full IDE, persistent terminal and managed private previews | P2 and P3 | Not started |
 | [P5 — Runtime and resource parity](p5-runtimes-resources.md) | Honest Hermes/Pi/Prime/Codex adapters; scoped MCP and skills | P3; P4 for integrated UX | Not started |
@@ -30,13 +30,13 @@ The main dependency chain is P1 → P3 → P4 → P5 → P6 → P7. P2 runs in p
 - [P7 — Release, operations and recovery qualification](https://github.com/Abdullahalmutairi97/archon-desktop/issues/12)
 - [P8 — Optional enhancements](https://github.com/Abdullahalmutairi97/archon-desktop/issues/13)
 
-The roadmap is published in [PR #5](https://github.com/Abdullahalmutairi97/archon-desktop/pull/5). Phase 1A is in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14), with 196 backend tests passed and 72 desktop tests passed/16 existing ASAR-dependent skips. These local checks are fresh; GitHub Actions results are attached to the PR. Phase 1B is published in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15): 306 backend tests passed, 72 desktop tests passed and 16 existing ASAR-dependent checks skipped. Both push and PR GitHub Actions passed. Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16): 381 backend tests passed and the desktop result remains 72 passed/16 existing ASAR skips. Phase 1C.2 is now in progress under Astra planning/review and Luna implementation workers.
+The roadmap is published in [PR #5](https://github.com/Abdullahalmutairi97/archon-desktop/pull/5). Phase 1A is in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14), with 196 backend tests passed and 72 desktop tests passed/16 existing ASAR-dependent skips. These local checks are fresh; GitHub Actions results are attached to the PR. Phase 1B is published in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15): 306 backend tests passed, 72 desktop tests passed and 16 existing ASAR-dependent checks skipped. Both push and PR GitHub Actions passed. Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16): 381 backend tests passed and the desktop result remains 72 passed/16 existing ASAR skips. Phase 1C.2 is published in [PR #17](https://github.com/Abdullahalmutairi97/archon-desktop/pull/17): 437 backend tests passed and bounded Astra review approved the fixes. Phase 1D credentials, child environments and readiness is in progress with three Luna workers.
 
 ## How work is published
 
 1. Keep one tracking issue per phase, linking this document and its phase checklist. Split substantial work into child issues or explicit increments.
 2. Develop a focused increment on a branch. Write behavior tests first, use isolated data and fake runners, and preserve unrelated work.
-3. Run the required checks and inspect the full diff. Record exact commands, results, skipped checks, limitations and migration/rollback implications.
+3. Run focused regressions for changed behavior and one final integration check per increment; inspect the diff. Avoid repeated broad audits or tests without a concrete risk. Record exact commands, results, skipped checks, limitations and migration/rollback implications.
 4. Open a pull request for review. Link the phase/child issue and state which exit gates remain open. An increment PR must not close its overarching phase issue unless every phase gate has passed.
 5. A phase is complete only when its full checklist and required native/security/recovery evidence are satisfied. Passing fixtures does not certify native integration or production readiness.
 
