@@ -1,6 +1,6 @@
 # Archon Desktop
 
-Archon Desktop is a Linux app for working with Prime, Pi, and Codex. The current repository targets **v0.3.0** and includes the release reconstruction kit, the shared backend, tests, and server deployment files.
+Archon Desktop is a Linux app for working with Prime, Pi, and Codex. The official frozen release remains **v0.3.0**. The repository also includes a separate authored reconstruction build, the shared backend, tests, and server deployment files.
 
 ## Use the app
 
@@ -13,15 +13,32 @@ To connect an agent, open **Settings → Connection**, enter the server URL and 
 
 ## Repository layout
 
+Implementation work is tracked in the [phased roadmap](docs/roadmap/README.md). Each phase records its dependencies, acceptance checks and publication status; completed source increments are published as pull requests for review.
+
 | Path | Purpose |
 | --- | --- |
+| `desktop/` | Authored Electron/React reconstruction source, synthetic reference shell and pure domain models |
 | `current/` | Active v0.3.0 final-stage kit, Browser/IDE/collaboration patches, tests, and preview |
 | `backend/` | Shared FastAPI/SQLite service and fixture tests |
 | `deploy/` | Backend service template and server installer |
 | `scripts/` | Backend test entrypoint and optional live soak utility |
 | `docs/` | Architecture, security, release, and verification notes |
 
-## Setup and checks
+## Authored source build
+
+Use the pinned Node version in `.node-version`. This reconstruction build does **not** require the private ASAR:
+
+```bash
+npm run desktop:setup
+npm run desktop:typecheck
+npm run desktop:test
+npm run desktop:build
+npm run desktop:preview
+```
+
+The P2A shell uses synthetic data and has no live backend, provider, filesystem or terminal connection. It has a separate reconstruction identity and leaves the official app/profile unchanged. See [the source-build guide](desktop/README.md) for outputs, provenance and remaining native/parity gates.
+
+## Frozen kit setup and checks
 
 Requires Linux, Node.js 22.12+, npm, and the verified v0.3.0 parent ASAR. The parent is a private release input and is intentionally not stored in Git.
 

@@ -7,3 +7,9 @@ The frozen v0.3.0 input archive has SHA-256 `36d3ae03bd6b20c4e9ea5fc690461ef972b
 The Python backend has its independent package version (`0.2.0`). It is shared by configured clients and is not renumbered when the desktop release changes.
 
 Old desktop source trees, design snapshots, launchers, and dated operational reports were removed from the repository because they were not used by the active build. Their commits remain in Git history for provenance.
+
+## Authored reconstruction channel
+
+The `desktop/` source build uses **0.3.0-reconstruction.1**, a separate development identity and an isolated user-data namespace. It does not replace or renumber the official v0.3.0 baseline. Build metadata records the source revision and `baselineParity: unverified`. Automatic update/install is disabled in this route.
+
+P2A builds an authored synthetic reference shell without the private ASAR. P2B/C add trusted transport and complete feature integration; P2D separately qualifies native behavior, protected credential storage, packaging and recovery. A successful source build alone does not authorize a new official baseline or installer release.

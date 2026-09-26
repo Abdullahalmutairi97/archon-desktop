@@ -1,0 +1,16 @@
+# Renderer provenance
+
+This is a new, authored reconstruction preview. It is not a recovered source release, and visual or behavioral parity with the installed v0.3.0 baseline remains unverified. Every user-facing session, project, message, task, file, terminal, editor, and browser row comes from `shell/fixtures.ts`; no view connects to a workspace, server, provider, terminal, or native API.
+
+| Renderer area | Reference origin | Transformation in this renderer |
+| --- | --- | --- |
+| Shell geometry and navigation | `../recovered-desktop-69bcf1e/desktop/src/renderer/src/App.tsx`, `components/WorkspaceSidebar.tsx`, `components/WorkspaceBench.tsx`, and `components/TitleBar.tsx` at commit `69bcf1ecb25e4004c11576d3becdb3cb2d266767` | Authored React components with a 36 px title bar, 262 px default navigation, and 420 px right workbench. Old component state and runtime wiring are not reused. |
+| Appearance and themes | `../recovered-desktop-69bcf1e/desktop/src/renderer/src/lib/theme.ts` and `lib/appearance.ts` at the same commit | Seven theme names and their core palette values are transcribed as CSS tokens in `shell.css`. Local preferences use a new, versioned key and only store theme, navigation side, text direction, scale, and collapse state. Historical assets, fonts, backdrop management, and persistence behavior are excluded. |
+| Keyboard behavior | `../recovered-desktop-69bcf1e/desktop/src/renderer/src/App.tsx` | `shell/shortcuts.ts` is a new pure mapping for sidebar toggle, new-chat preview notice, appearance, palette, five workbench panels, and Escape dismissal priority. |
+| Runtime/session identity | P2 shared interface in `../shared/domain/identity.ts` | Fixture sessions use typed `ExecutionScope`; Prime and Pi have separate runtime/session identities on a synthetic server connection, while local Codex has a distinct connection and `codex:task:` identifier. Labels always say “Server fixture” or “THIS PC”. |
+| Queue, file and editor panels | P2 shared models in `../shared/domain/queue.ts`, `identity.ts`, and `ide.ts` | Queue counts are derived from typed synthetic tasks. File/editor previews key their document surface by the complete scoped `DocumentKey`; sample text is hard-coded and read-only. No `IdeWorkspace` file port is instantiated. |
+| Browser and terminal panels | No live endpoint or native source is used | Authored disconnected mock panels; there is no navigation, request, command execution, or bridge call. |
+| Brand and icons | New authored SVG paths in `shell/BrandMark.tsx` and `shell/Icon.tsx` | Small source-authored line graphics; no recovered bitmap, logo asset, or external font is included. |
+| Renderer entry and policy | New P2A `index.html` and `main.tsx` | React entry and strict local-only CSP. Loopback HTTP/WebSocket sources are permitted for Vite preview/HMR only; no remote origins are allowed. |
+
+`visual-smoke.ts` records synthetic viewport/theme/direction cases for manual review. These are preview targets only and do not represent reference screenshots or parity measurements.

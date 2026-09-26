@@ -1,0 +1,41 @@
+name: Authored reconstruction source build
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/desktop-reconstruction.yml'
+      - '.node-version'
+      - 'desktop/**'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    paths:
+      - '.github/workflows/desktop-reconstruction.yml'
+      - '.node-version'
+      - 'desktop/**'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-build:
+    name: P2A typecheck, fixture tests, and source build
+    runs-on: ubuntu-24.04
+    container:
+      # Official node image, resolved from the Docker Registry on 2026-09-26.
+      # Pin the OCI index digest so CI selects a fixed linux/amd64 image.
+      image: node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      SOURCE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: npm ci
+      - run: npm run ci
+      - name: Show source and emitted-file SHA-256 inventory
+        run: cat out/build-manifest.json

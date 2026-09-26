@@ -9,6 +9,15 @@ node_modules/
 current/node_modules/
 current/artifacts/
 *.asar
+# Authored reconstruction outputs; generated locally and in CI only.
+desktop/out/
+desktop/release/
+desktop/dist/
+desktop/artifacts/
+desktop/coverage/
+desktop/test-results/
+desktop/playwright-report/
+desktop/.vite/
 # Runtime
 .runtime/
 *.db

@@ -8,6 +8,12 @@
     "test": "npm --prefix current test",
     "build": "npm --prefix current run build --",
     "build:candidate": "npm --prefix current run build:candidate --",
-    "test:backend": "python3 scripts/test-backend.py"
+    "test:backend": "python3 scripts/test-backend.py",
+    "desktop:setup": "npm ci --prefix desktop",
+    "desktop:dev": "npm run dev --prefix desktop",
+    "desktop:typecheck": "npm run typecheck --prefix desktop",
+    "desktop:test": "npm run test --prefix desktop",
+    "desktop:build": "npm run build --prefix desktop",
+    "desktop:preview": "npm run build --prefix desktop && npm run preview --prefix desktop"
   }
 }

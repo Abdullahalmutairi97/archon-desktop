@@ -1,0 +1,68 @@
+{
+  "name": "archon-desktop-reconstruction",
+  "version": "0.3.0-reconstruction.1",
+  "private": true,
+  "description": "Isolated authored reconstruction shell; parity with the unavailable v0.3.0 source is unverified.",
+  "main": "out/main/index.js",
+  "packageManager": "npm@11.19.0",
+  "engines": {
+    "node": "24.21.0",
+    "npm": "11.19.0"
+  },
+  "scripts": {
+    "preinstall": "node scripts/check-toolchain.mjs",
+    "dev": "electron-vite dev",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "build": "electron-vite build && node scripts/write-build-manifest.mjs",
+    "preview": "vite preview --config vite.preview.config.ts --host 127.0.0.1 --port 4173 --strictPort",
+    "licenses": "node scripts/license-inventory.mjs --write",
+    "licenses:check": "node scripts/license-inventory.mjs --check",
+    "ci": "npm run typecheck && npm test && npm run licenses:check && npm run build"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@types/node": "24.19.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "44.4.5",
+    "electron-vite": "5.0.0",
+    "jsdom": "29.1.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "4.1.10"
+  },
+  "build": {
+    "appId": "dev.archon.desktop.reconstruction",
+    "productName": "Archon Desktop Reconstruction",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "THIRD-PARTY-LICENSES.md",
+      "!**/.env",
+      "!**/.env.*",
+      "!**/node_modules/**",
+      "!**/reference/**",
+      "!**/profiles/**",
+      "!**/test-results/**",
+      "!**/archives/**",
+      "!**/screenshots/**"
+    ],
+    "linux": {
+      "category": "Utility",
+      "executableName": "archon-desktop-reconstruction",
+      "target": [],
+      "artifactName": "Archon-Desktop-Reconstruction-${version}-${arch}.${ext}"
+    }
+  }
+}

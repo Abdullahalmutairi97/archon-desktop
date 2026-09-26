@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 2A authored source foundation
+
+- Add a separate Electron/React reconstruction source build with pinned dependencies and build provenance, without private-ASAR or bundle-replacement inputs.
+- Port queue, scoped IDE, runtime identity and read-only snapshot behavior into typed pure modules with focused parity fixtures.
+- Add a synthetic renderer shell preserving the recovered sidebar/workbench structure, theme controls and navigation shortcuts. Live transport, privileged operations, full feature parity and native qualification remain later P2 increments.
+- Keep the official v0.3.0 kit unchanged; use a separate reconstruction version/identity with baseline parity explicitly unverified.
+
 ## Unreleased — Phase 1D credentials and readiness
 
 - Require server credentials before database initialization, share HTTP/WebSocket authorization, and restrict listeners to loopback with explicit private HTTPS proxy configuration for remote use. Implicit repository `.env` loading is disabled.
