@@ -1,8 +1,8 @@
 # P1 — Trustworthy execution baseline
 
-**Status:** P1 remains in progress; Phase 1A source is published for review in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14). Phase 1B is published for review in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15); Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16), and work is stopped at this tested boundary above the usage reserve. 1C.2/1D remain pending. **Dependencies:** audited backend and isolated fixture environment; backend work does not require the private ASAR. **Outcome:** admission, execution modes, locking, recovery and readiness describe enforced behavior truthfully.
+**Status:** P1 remains in progress; Phase 1A source is published for review in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14). Phase 1B is published for review in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15); Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16), and Phase 1C.2 is now in progress. Phase 1D remains pending. **Dependencies:** audited backend and isolated fixture environment; backend work does not require the private ASAR. **Outcome:** admission, execution modes, locking, recovery and readiness describe enforced behavior truthfully.
 
-Publish each completed increment as a pull request for review. Continue through tested increments with enough headroom to publish before 8% usage remains. P1 remains open until 1B–1D and the combined acceptance checks also pass. No merge, production deployment or service restart is included.
+Publish each completed increment as a pull request for review. Continue through tested increments, checking usage until the requested stop threshold of less than 5% remaining is reached. P1 remains open until 1B–1D and the combined acceptance checks also pass. No merge, production deployment or service restart is included.
 
 ## Increment map
 
@@ -10,7 +10,7 @@ Publish each completed increment as a pull request for review. Continue through 
 | --- | --- | --- | --- |
 | Phase 1A — Locking and conservative recovery | M1.4 and the current-schema portion of M1.6 | Published for review | Can proceed with existing backend; do not claim durable attempt fencing or all of M1.6 without M1.5 |
 | Phase 1B — Admission, runtimes and modes | M1.1, M1.2, M1.3 | Published for review in #15 | Coordinate ownership fields with 1C; no unsupported-mode fallback |
-| Phase 1C — Durable admission and attempts | M1.5 and remaining M1.6 | 1C.1 published in #16; 1C.2 pending | Split into 1C.1 migrations/idempotency/queued cancellation and 1C.2 durable attempts/fencing/native cancellation; no full 1C claim before both pass |
+| Phase 1C — Durable admission and attempts | M1.5 and remaining M1.6 | 1C.1 published in #16; 1C.2 in progress | Split into 1C.1 migrations/idempotency/queued cancellation and 1C.2 durable attempts/fencing/native cancellation; no full 1C claim before both pass |
 | Phase 1D — Credentials and readiness | M1.7, M1.8 | Not started | Integrates 1B/1C; native credential handling remains gated on P2 evidence |
 
 ## Phase 1A checklist and publication gate

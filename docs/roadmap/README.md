@@ -2,14 +2,14 @@
 
 This backlog turns the 21 September 2026 repository audit and revised implementation plan into reviewable phases. Implementation starts from the existing Linux Electron/React application, FastAPI service and SQLite ledger. Preserve the familiar project/session/workbench layout, native histories and working integrations.
 
-**Stopped after publishing Phase 1C.1, above the requested 8% remaining-usage threshold.** Phase 1A is published in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14); Phase 1B adds explicit admission, runtimes and trusted-mode enforcement. Neither completes all of P1. Later phases are recorded here so they can proceed without losing requirements. Publishing means opening a GitHub pull request after the applicable checks pass. It does not mean merging, deploying, restarting services or publishing an installer.
+**Resumed on 26 September 2026 from Phase 1C.1.** Phase 1A is published in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14); Phase 1B adds explicit admission, runtimes and trusted-mode enforcement. Neither completes all of P1. Later phases are recorded here so they can proceed without losing requirements. Publishing means opening a GitHub pull request after the applicable checks pass. It does not mean merging, deploying, restarting services or publishing an installer.
 
 ## Phase index
 
 | Phase | Outcome | Dependencies | Status |
 | --- | --- | --- | --- |
 | [P1 — Trustworthy execution baseline](p1-execution-baseline.md) | Honest admission, modes, locks, recovery, credentials and readiness | Existing backend and isolated fixtures | In progress; 1A, 1B and 1C.1 published; 1C.2 and 1D pending |
-| [P2 — Maintainable source build](p2-source-build.md) | Build the actual desktop from authored source and preserve UI behavior | Matching source/asset inventory; runs alongside P1 | Not started; source provenance/input gap |
+| [P2 — Maintainable source build](p2-source-build.md) | Build the actual desktop from authored source and preserve UI behavior | Matching source/asset inventory; runs alongside P1 | Historical source inventory complete; reconstruction plan and baseline parity pending |
 | [P3 — Workspaces and persistent runner](p3-workspaces-runner.md) | Protected solo bootstrap; one workspace identity; work outlives UI | P1; P2 before desktop delivery | Not started |
 | [P4 — Full solo workstation](p4-solo-workstation.md) | Full IDE, persistent terminal and managed private previews | P2 and P3 | Not started |
 | [P5 — Runtime and resource parity](p5-runtimes-resources.md) | Honest Hermes/Pi/Prime/Codex adapters; scoped MCP and skills | P3; P4 for integrated UX | Not started |
@@ -30,7 +30,7 @@ The main dependency chain is P1 → P3 → P4 → P5 → P6 → P7. P2 runs in p
 - [P7 — Release, operations and recovery qualification](https://github.com/Abdullahalmutairi97/archon-desktop/issues/12)
 - [P8 — Optional enhancements](https://github.com/Abdullahalmutairi97/archon-desktop/issues/13)
 
-The roadmap is published in [PR #5](https://github.com/Abdullahalmutairi97/archon-desktop/pull/5). Phase 1A is in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14), with 196 backend tests passed and 72 desktop tests passed/16 existing ASAR-dependent skips. These local checks are fresh; GitHub Actions results are attached to the PR. Phase 1B is published in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15): 306 backend tests passed, 72 desktop tests passed and 16 existing ASAR-dependent checks skipped. Both push and PR GitHub Actions passed. Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16): 381 backend tests passed and the desktop result remains 72 passed/16 existing ASAR skips. Work stops at this tested increment boundary to preserve the requested usage reserve; Phase 1C.2 is next.
+The roadmap is published in [PR #5](https://github.com/Abdullahalmutairi97/archon-desktop/pull/5). Phase 1A is in [PR #14](https://github.com/Abdullahalmutairi97/archon-desktop/pull/14), with 196 backend tests passed and 72 desktop tests passed/16 existing ASAR-dependent skips. These local checks are fresh; GitHub Actions results are attached to the PR. Phase 1B is published in [PR #15](https://github.com/Abdullahalmutairi97/archon-desktop/pull/15): 306 backend tests passed, 72 desktop tests passed and 16 existing ASAR-dependent checks skipped. Both push and PR GitHub Actions passed. Phase 1C.1 is published in [PR #16](https://github.com/Abdullahalmutairi97/archon-desktop/pull/16): 381 backend tests passed and the desktop result remains 72 passed/16 existing ASAR skips. Phase 1C.2 is now in progress under Astra planning/review and Luna implementation workers.
 
 ## How work is published
 
@@ -40,7 +40,7 @@ The roadmap is published in [PR #5](https://github.com/Abdullahalmutairi97/archo
 4. Open a pull request for review. Link the phase/child issue and state which exit gates remain open. An increment PR must not close its overarching phase issue unless every phase gate has passed.
 5. A phase is complete only when its full checklist and required native/security/recovery evidence are satisfied. Passing fixtures does not certify native integration or production readiness.
 
-Continue through tested increments while usage permits, preserving time to validate and publish before stopping at or just above 8% remaining. Update this backlog and leave an accurate handoff at the boundary. Stop sooner if the next increment cannot be completed within that headroom. Do not represent partial work as a completed phase.
+Continue through tested increments under the latest instruction to stop when usage falls below 5% remaining. Check usage throughout, keep completed work published, and save unfinished work honestly if that threshold interrupts an increment. Update this backlog and leave an accurate handoff at the boundary. Do not represent partial work as a completed phase.
 
 ## Contracts retained throughout the roadmap
 
@@ -57,7 +57,7 @@ Continue through tested increments while usage permits, preserving time to valid
 
 The audit source was [revision `0d69e63`](https://github.com/Abdullahalmutairi97/archon-desktop/commit/0d69e63f0a1b40a272494281a54df5f3b5b914bf). All 122 tracked files matched that snapshot. The dated audit recorded 169 backend fixture tests passing and 72 desktop tests passing with 16 ASAR-dependent skips. These are historical baseline results, not results of this roadmap publication or evidence that a new increment passes.
 
-The repository contains an active v0.3.0 reconstruction kit rather than the complete authored desktop source. The matching private parent ASAR/source assets were unavailable during the audit; native desktop behavior, live agents and two-PC collaboration were not freshly verified. P2 tracks this gap explicitly.
+The current repository contains an active v0.3.0 reconstruction kit rather than the complete matching authored desktop source. On 26 September, all 102 files of a historical legacy Electron/React tree and both design ZIPs were recovered and hash-verified from GitHub. They are reference inputs and do not contain the matching parent ASAR. The [source inventory](p2-source-inventory.md) records the 24-commit search and provenance. Native desktop behavior, live agents and two-PC collaboration remain unverified; P2 retains explicit build and parity gates.
 
 Local Laya was run in a separate plan review: 121 calls, 16/24 factual checks correct under its original rubric, 13/19 on the unambiguous subset, and four of twelve architecture choices changed when option order reversed. It is advisory, not the plan approver. Jev API calls were zero. Separate source/plan review supplied four refinements retained here: P3 owns solo bootstrap, privileged MCP restrictions need enforcement outside workspace code, checks bind to the actual merge result, and resource accounting includes persistent child workloads.
 

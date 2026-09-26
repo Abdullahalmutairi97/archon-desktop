@@ -1,6 +1,6 @@
 # P2 — Maintainable source build and UI parity
 
-**Status:** not started; source/input provenance gap. **Dependencies:** matching authored source/assets or a documented bounded same-stack reconstruction route. Can run alongside P1; gates new P3/P4 desktop delivery.
+**Status:** repository/history inventory complete; historical authored source and design assets recovered as references, matching v0.3.0 input still unavailable. Reconstruction planning is in progress. See the [26 September inventory](p2-source-inventory.md). **Dependencies:** matching authored source/assets or a documented bounded same-stack reconstruction route. Can run alongside P1; gates new P3/P4 desktop delivery.
 
 ## Scope and preservation contract
 
