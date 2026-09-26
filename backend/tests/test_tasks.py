@@ -60,8 +60,9 @@ async def test_task_is_durable_before_worker_runs(tmp_path):
 def test_completion_persists_the_new_hermes_session_id(tmp_path):
     store = TaskStore(Database(tmp_path / "state.db"))
     task = store.submit("start a chat")
+    attempt_id = store.mark_running(task["id"])
 
-    store.complete(task["id"], {"text": "ready", "session_id": "20260725_session"})
+    store.complete(task["id"], {"text": "ready", "session_id": "20260725_session"}, attempt_id=attempt_id)
 
     assert store.get(task["id"])["session_id"] == "20260725_session"
 
@@ -69,9 +70,10 @@ def test_completion_persists_the_new_hermes_session_id(tmp_path):
 def test_completion_event_is_capped_but_task_keeps_full_result(tmp_path):
     store = TaskStore(Database(tmp_path / "state.db"))
     task = store.submit("produce a long answer")
+    attempt_id = store.mark_running(task["id"])
     full_text = "x" * 9000
 
-    store.complete(task["id"], {"text": full_text, "session_id": "session-long"})
+    store.complete(task["id"], {"text": full_text, "session_id": "session-long"}, attempt_id=attempt_id)
 
     saved = store.get(task["id"])
     completed = store.events(task["id"])[-1]
@@ -86,9 +88,11 @@ def test_set_session_persists_new_id_and_preserves_resumed_id(tmp_path):
     store = TaskStore(Database(tmp_path / "state.db"))
     new_task = store.submit("start a chat")
     resumed_task = store.submit("continue a chat", session_id="existing-session")
+    new_attempt = store.mark_running(new_task["id"])
+    resumed_attempt = store.mark_running(resumed_task["id"])
 
-    store.set_session(new_task["id"], "new-session")
-    store.set_session(resumed_task["id"], "late-announcement")
+    store.set_session(new_task["id"], "new-session", attempt_id=new_attempt)
+    store.set_session(resumed_task["id"], "late-announcement", attempt_id=resumed_attempt)
 
     assert store.get(new_task["id"])["session_id"] == "new-session"
     assert store.get(resumed_task["id"])["session_id"] == "existing-session"
@@ -323,29 +327,31 @@ def test_event_queries_tolerate_corrupt_payload():
 def test_quota_defer_does_not_append_after_cancellation(tmp_path):
     store = TaskStore(Database(tmp_path / "state.db"))
     task = store.submit("quota race")
-    store.mark_running(task["id"])
-    assert store.cancel(task["id"])
+    attempt_id = store.mark_running(task["id"])
+    assert store.request_cancel(task["id"], attempt_id=attempt_id)
+    assert store.cancel(task["id"], attempt_id=attempt_id)
 
-    store.defer_for_quota(task["id"], 60)
+    store.defer_for_quota(task["id"], 60, attempt_id=attempt_id)
 
     assert store.get(task["id"])["status"] == "cancelled"
     assert [event["type"] for event in store.events(task["id"])] == [
-        "task.queued", "task.running", "task.cancelled"
+        "task.queued", "task.running", "task.cancel_requested", "task.cancelled"
     ]
 
 
 def test_terminal_write_cannot_resurrect_cancelled_task(tmp_path):
     store = TaskStore(Database(tmp_path / "state.db"))
     task = store.submit("cancel race")
-    store.mark_running(task["id"])
-    assert store.cancel(task["id"])
+    attempt_id = store.mark_running(task["id"])
+    assert store.request_cancel(task["id"], attempt_id=attempt_id)
+    assert store.cancel(task["id"], attempt_id=attempt_id)
 
-    store.complete(task["id"], {"text": "late answer"})
-    store.fail(task["id"], "late failure")
+    assert store.complete(task["id"], {"text": "late answer"}, attempt_id=attempt_id) is False
+    assert store.fail(task["id"], "late failure", attempt_id=attempt_id) is False
 
     assert store.get(task["id"])["status"] == "cancelled"
     assert [event["type"] for event in store.events(task["id"])] == [
-        "task.queued", "task.running", "task.cancelled"
+        "task.queued", "task.running", "task.cancel_requested", "task.cancelled"
     ]
 
 
@@ -353,8 +359,8 @@ def test_cancel_queued_reports_transaction_result(tmp_path):
     store = TaskStore(Database(tmp_path / "state.db"))
     task = store.submit("cancel me")
 
-    assert store.cancel(task["id"]) is True
-    assert store.cancel(task["id"]) is False
+    assert store.cancel_queued(task["id"]) is True
+    assert store.cancel_queued(task["id"]) is False
     assert store.get(task["id"])["status"] == "cancelled"
 
 

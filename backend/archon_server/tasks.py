@@ -93,8 +93,12 @@ def _decode_event(row) -> dict[str, Any]:
         data = json.loads(row["data_json"])
     except (TypeError, json.JSONDecodeError):
         data = {}
+    try:
+        attempt_id = row["attempt_id"]
+    except (KeyError, IndexError):
+        attempt_id = None
     return {"seq": row["seq"], "task_id": row["task_id"], "type": row["type"],
-            "data": data, "created_at": row["created_at"]}
+            "data": data, "created_at": row["created_at"], "attempt_id": attempt_id}
 
 
 class Runner(Protocol):
@@ -105,12 +109,68 @@ class TaskStore:
     def __init__(self, db: Database):
         self.db = db
 
+    def bind_session_owner(self, conn, session_id: str, runtime_id: str, cwd: str | None) -> bool:
+        """Bind a new verified owner, or require an exact verified match.
+
+        The caller supplies canonical runtime identity and an already admitted
+        working directory. Historical aliases and current project names are not
+        consulted here.
+        """
+        normalized_id = session_id if isinstance(session_id, str) else ""
+        if not normalized_id.strip():
+            raise ValueError("Session ownership requires a session id")
+        if runtime_id not in {"prime", "pi"}:
+            raise ValueError("Session ownership requires canonical runtime prime or pi")
+        normalized_cwd = cwd if isinstance(cwd, str) and cwd.strip() else None
+        if conn.execute(
+            "SELECT 1 FROM deleted_sessions WHERE session_id=?", (normalized_id,),
+        ).fetchone():
+            raise ValueError("Session has been deleted")
+        location = conn.execute(
+            "SELECT cwd FROM session_locations WHERE session_id=?", (normalized_id,),
+        ).fetchone()
+        if location is not None and location["cwd"] != normalized_cwd:
+            raise ValueError("Session working directory conflicts with its durable location")
+        owner = conn.execute(
+            "SELECT runtime_id,cwd,state FROM session_ownership WHERE session_id=?", (normalized_id,),
+        ).fetchone()
+        if owner is not None:
+            if owner["state"] != "verified":
+                raise ValueError("Session ownership requires review before it can be used")
+            if owner["runtime_id"] != runtime_id or owner["cwd"] != normalized_cwd:
+                raise ValueError("Session runtime or working directory conflicts with its verified owner")
+            return True
+        now = utcnow()
+        conn.execute(
+            """INSERT INTO session_ownership
+               (session_id,runtime_id,cwd,state,reason,created_at,updated_at)
+               VALUES (?,?,?,'verified',NULL,?,?)""",
+            (normalized_id, runtime_id, normalized_cwd, now, now),
+        )
+        return True
+
+    def session_owner(self, session_id: str) -> dict[str, Any] | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM session_ownership WHERE session_id=?", (session_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def submit(self, prompt: str, cwd: str | None = None, model: str | None = None,
                provider: str | None = None, skills: list[str] | None = None,
                session_id: str | None = None, approval_mode: str = "approve",
                chat_only: bool = False, profile: str | None = None,
                request_id: str | None = None, project_id: str | None | object = _PROJECT_UNSET,
-               request_hash: str | None = None) -> dict[str, Any]:
+               request_hash: str | None = None, runtime_id: str | None = None) -> dict[str, Any]:
+        explicit_runtime_id = runtime_id is not None
+        if runtime_id is None and profile in {"prime", "pi"}:
+            # Internal callers that already use a canonical profile get the
+            # same durable dispatch identity as HTTP admissions.
+            runtime_id = profile
+        if runtime_id not in {None, "prime", "pi"}:
+            raise ValueError("Runtime id must be canonical: prime or pi")
+        if explicit_runtime_id and profile in {"prime", "pi"} and runtime_id != profile:
+            raise ValueError("Explicit runtime id must match the canonical profile")
         if request_id is None:
             if request_hash is not None:
                 raise ValueError('A task request hash requires an explicit request id')
@@ -125,6 +185,11 @@ class TaskStore:
                     'prompt': prompt, 'cwd': cwd, 'model': model, 'provider': provider,
                     'skills': skills or [], 'session_id': session_id,
                     'approval_mode': approval_mode, 'chat_only': bool(chat_only), 'profile': profile,
+                    # Keep the v1 TaskStore fingerprint for canonical profiles:
+                    # runtime_id is a derived copy of that semantic field. If a
+                    # caller supplies a runtime independently of its profile,
+                    # bind the new identity explicitly so retries cannot change it.
+                    **({'runtime_id': runtime_id} if explicit_runtime_id and profile != runtime_id else {}),
                     'project_binding': ({'specified': False} if project_id is _PROJECT_UNSET else
                                         {'specified': True, 'project_id': project_id}),
                 })
@@ -146,18 +211,23 @@ class TaskStore:
                     "SELECT 1 FROM deleted_sessions WHERE session_id=? LIMIT 1", (session_id,)
                 ).fetchone():
                     raise ValueError("Session has been deleted")
+                current_binding = conn.execute(
+                    "SELECT project_id FROM session_projects WHERE session_id=?", (session_id,),
+                ).fetchone()
+                project_snapshot = (project_id if project_id is not _PROJECT_UNSET else
+                                    current_binding["project_id"] if current_binding else None)
                 conn.execute(
                     """INSERT INTO tasks
-                       (id,prompt,cwd,model,provider,session_id,profile,approval_mode,chat_only,skills_json,status,created_at,updated_at,request_hash)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,'queued',?,?,?)""",
-                    (task_id, prompt, cwd, model, provider, session_id, profile, approval_mode, int(chat_only), json.dumps(skills or []), now, now, request_hash),
+                       (id,prompt,cwd,model,provider,session_id,profile,runtime_id,project_id,approval_mode,chat_only,skills_json,status,created_at,updated_at,request_hash)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?)""",
+                    (task_id, prompt, cwd, model, provider, session_id, profile, runtime_id, project_snapshot,
+                     approval_mode, int(chat_only), json.dumps(skills or []), now, now, request_hash),
                 )
                 self._append_event(conn, task_id, "task.queued", {"status": "queued"})
+                if runtime_id is not None:
+                    self.bind_session_owner(conn, session_id, runtime_id, cwd)
                 if project_id is not _PROJECT_UNSET:
-                    binding = conn.execute(
-                        "SELECT project_id FROM session_projects WHERE session_id=?", (session_id,),
-                    ).fetchone()
-                    if binding is not None and binding['project_id'] != project_id:
+                    if current_binding is not None and current_binding['project_id'] != project_id:
                         raise ValueError("Session project changed during task admission; refresh before retrying")
                     conn.execute(
                         "INSERT INTO session_projects(session_id,project_id,updated_at) VALUES (?,?,?) "
@@ -177,10 +247,11 @@ class TaskStore:
         _require_matching_request(existing, request_hash)
         return _decode(existing)
 
-    def _append_event(self, conn, task_id: str, event_type: str, data: dict[str, Any]) -> int:
+    def _append_event(self, conn, task_id: str, event_type: str, data: dict[str, Any],
+                      *, attempt_id: str | None = None) -> int:
         cur = conn.execute(
-            "INSERT INTO events(task_id,type,data_json,created_at) VALUES (?,?,?,?)",
-            (task_id, event_type, json.dumps(data), utcnow()),
+            "INSERT INTO events(task_id,type,data_json,created_at,attempt_id) VALUES (?,?,?,?,?)",
+            (task_id, event_type, json.dumps(data), utcnow(), attempt_id),
         )
         return int(cur.lastrowid)
 
@@ -188,13 +259,96 @@ class TaskStore:
         with self.db.transaction() as conn:
             return self._append_event(conn, task_id, event_type, data)
 
-    def append_running_event(self, task_id: str, event_type: str, data: dict[str, Any]) -> None:
-        """Discard stale runner notifications after a terminal transition."""
+    def _matching_attempt(self, conn, task_id: str, attempt_id: str | None):
+        if not isinstance(attempt_id, str) or not attempt_id:
+            return None
+        return conn.execute(
+            """SELECT t.session_id,t.cwd,t.runtime_id,t.project_id,t.status,
+                      a.id AS attempt_id,a.state,a.cancel_requested_at
+               FROM tasks AS t JOIN task_attempts AS a
+                 ON a.id=t.current_attempt_id AND a.task_id=t.id
+               WHERE t.id=? AND t.current_attempt_id=? AND t.status='running'
+                 AND a.state IN ('claimed','running') AND a.cancel_requested_at IS NULL""",
+            (task_id, attempt_id),
+        ).fetchone()
+
+    def attempt_active(self, task_id: str, attempt_id: str | None) -> bool:
+        """Return whether the captured attempt is still allowed to emit or launch."""
+        with self.db.connect() as conn:
+            return self._matching_attempt(conn, task_id, attempt_id) is not None
+
+    def _attach_provisional_session(self, conn, task_id: str, existing, session_id: str,
+                                    now: str) -> bool:
+        announced = session_id
+        if not isinstance(announced, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", announced):
+            return False
+        current = existing["session_id"]
+        provisional = f"prime-{task_id}"
+        if announced == current:
+            return True
+        # Canonical runtime tasks own exactly the session captured at admission.
+        # Only legacy/injected tasks with the original provisional id may adopt
+        # a newly created session, and only when no existing identity is merged.
+        if existing["runtime_id"] in {"prime", "pi"} or current != provisional:
+            return False
+        if announced.startswith("pi-native-"):
+            return False
+        if conn.execute(
+            "SELECT 1 FROM deleted_sessions WHERE session_id=?", (announced,),
+        ).fetchone():
+            return False
+
+        # A runner may introduce a session only if that ID has no other task or
+        # owner. Existing metadata is accepted solely when it agrees with this
+        # task's frozen cwd/project; the event never authorizes a merge.
+        if conn.execute(
+            "SELECT 1 FROM tasks WHERE session_id=? AND id<>? LIMIT 1", (announced, task_id),
+        ).fetchone():
+            return False
+        if conn.execute(
+            "SELECT 1 FROM session_ownership WHERE session_id=?", (announced,),
+        ).fetchone():
+            return False
+        cwd = existing["cwd"] if isinstance(existing["cwd"], str) and existing["cwd"].strip() else None
+        location = conn.execute(
+            "SELECT cwd FROM session_locations WHERE session_id=?", (announced,),
+        ).fetchone()
+        if location is not None and location["cwd"] != cwd:
+            return False
+        binding = conn.execute(
+            "SELECT project_id FROM session_projects WHERE session_id=?", (announced,),
+        ).fetchone()
+        if binding is not None and binding["project_id"] != existing["project_id"]:
+            return False
+        if binding is None:
+            conn.execute(
+                "INSERT INTO session_projects(session_id,project_id,updated_at) VALUES (?,?,?)",
+                (announced, existing["project_id"], now),
+            )
+        changed = conn.execute(
+            "UPDATE tasks SET session_id=?,updated_at=? "
+            "WHERE id=? AND current_attempt_id=? AND status='running' AND session_id=?",
+            (announced, now, task_id, existing["attempt_id"], current),
+        ).rowcount
+        if not changed:
+            return False
+        self.db.remember_session_location(announced, cwd, "task", conn=conn)
+        return True
+
+    def append_running_event(self, task_id: str, event_type: str, data: dict[str, Any],
+                             *, attempt_id: str | None = None) -> bool:
+        """Persist an event only while its captured attempt remains eligible."""
         with self.db.transaction() as conn:
-            if conn.execute(
-                "SELECT 1 FROM tasks WHERE id=? AND status='running'", (task_id,)
-            ).fetchone():
-                self._append_event(conn, task_id, event_type, data)
+            attempt = self._matching_attempt(conn, task_id, attempt_id)
+            if attempt is None:
+                return False
+            if event_type == "session" and data.get("session_id"):
+                if not self._attach_provisional_session(
+                    conn, task_id, attempt, str(data["session_id"]), utcnow(),
+                ):
+                    return False
+            self._append_event(conn, task_id, event_type, data, attempt_id=attempt_id)
+            return True
 
     def get(self, task_id: str) -> dict[str, Any]:
         with self.db.connect() as conn:
@@ -282,7 +436,7 @@ class TaskStore:
     def events(self, task_id: str, after: int = 0, limit: int = 1000) -> list[dict[str, Any]]:
         with self.db.connect() as conn:
             rows = conn.execute(
-                """SELECT seq,task_id,type,data_json,created_at FROM events
+                """SELECT seq,task_id,type,data_json,created_at,attempt_id FROM events
                    WHERE task_id=? AND seq>? ORDER BY seq ASC LIMIT ?""",
                 (task_id, after, max(1, min(limit, 5000))),
             ).fetchall()
@@ -291,7 +445,7 @@ class TaskStore:
     def all_events(self, after: int = 0, limit: int = 1000) -> list[dict[str, Any]]:
         with self.db.connect() as conn:
             rows = conn.execute(
-                """SELECT seq,task_id,type,data_json,created_at FROM events
+                """SELECT seq,task_id,type,data_json,created_at,attempt_id FROM events
                    WHERE seq>? ORDER BY seq ASC LIMIT ?""",
                 (after, max(1, min(limit, 5000))),
             ).fetchall()
@@ -301,11 +455,12 @@ class TaskStore:
         """Return log fields without loading unused event payloads."""
         with self.db.connect() as conn:
             rows = conn.execute(
-                """SELECT seq, type, created_at FROM events
+                """SELECT seq, type, created_at,attempt_id FROM events
                    WHERE seq>? ORDER BY seq ASC LIMIT ?""",
                 (after, max(1, min(limit, 5000))),
             ).fetchall()
-        return [{"seq": row["seq"], "type": row["type"], "created_at": row["created_at"]}
+        return [{"seq": row["seq"], "type": row["type"], "created_at": row["created_at"],
+                 "attempt_id": row["attempt_id"]}
                 for row in rows]
 
     def latest_event_seq(self) -> int:
@@ -314,30 +469,70 @@ class TaskStore:
             row = conn.execute("SELECT COALESCE(MAX(seq), 0) AS seq FROM events").fetchone()
         return int(row["seq"] if row else 0)
 
-    def mark_running(self, task_id: str) -> None:
+    def _create_attempt(self, conn, task, *, state: str, now: str,
+                        started_at: str | None = None) -> str:
+        attempt_id = uuid.uuid4().hex
+        ordinal = conn.execute(
+            "SELECT COALESCE(MAX(ordinal),0)+1 FROM task_attempts WHERE task_id=?", (task["id"],),
+        ).fetchone()[0]
+        conn.execute(
+            """INSERT INTO task_attempts
+               (id,task_id,ordinal,state,claimed_at,started_at,runtime_id,session_id,cwd,project_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (attempt_id, task["id"], ordinal, state, now, started_at, task["runtime_id"],
+             task["session_id"], task["cwd"], task["project_id"]),
+        )
+        return attempt_id
+
+    def mark_running(self, task_id: str) -> str | None:
+        """Claim a queued fixture task and return the committed attempt id."""
         now = utcnow()
         with self.db.transaction() as conn:
+            task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if task is None or task["status"] != "queued" or task["started_at"] is not None:
+                return None
+            if task["session_id"] and conn.execute(
+                "SELECT 1 FROM tasks WHERE session_id=? AND status='running' LIMIT 1", (task["session_id"],),
+            ).fetchone():
+                return None
+            attempt_id = self._create_attempt(conn, task, state="running", now=now, started_at=now)
             changed = conn.execute(
-                """UPDATE tasks SET status='running',started_at=?,updated_at=?
+                """UPDATE tasks SET status='running',started_at=?,current_attempt_id=?,retry_at=NULL,
+                          error=NULL,updated_at=?
                    WHERE id=? AND status='queued' AND started_at IS NULL""",
-                (now, now, task_id),
+                (now, attempt_id, now, task_id),
             ).rowcount
-            if changed:
-                self._append_event(conn, task_id, "task.running", {"status": "running"})
+            if not changed:
+                return None
+            self._append_event(conn, task_id, "task.running", {"status": "running"}, attempt_id=attempt_id)
+            return attempt_id
 
-    def defer_for_quota(self, task_id: str, retry_seconds: float) -> None:
+    def mark_attempt_running(self, task_id: str, *, attempt_id: str | None = None) -> bool:
+        """Record adapter invocation after validation/preflight has succeeded."""
+        now = utcnow()
+        with self.db.transaction() as conn:
+            if self._matching_attempt(conn, task_id, attempt_id) is None:
+                return False
+            changed = conn.execute(
+                """UPDATE task_attempts SET state='running',started_at=COALESCE(started_at,?)
+                   WHERE id=? AND task_id=? AND state='claimed' AND cancel_requested_at IS NULL""",
+                (now, attempt_id, task_id),
+            ).rowcount
+            return bool(changed)
+
+    def defer_for_quota(self, task_id: str, retry_seconds: float, *, attempt_id: str | None = None) -> None:
         """Compatibility entry point: a quota error cannot prove no work happened.
 
         Keep the former call signature for integrations, but never queue a
         started task again without an explicit, reviewed new submission.
         """
-        self.interrupt(task_id, "provider_limit", "Provider limit reached.")
+        self.interrupt(task_id, "provider_limit", "Provider limit reached.", attempt_id=attempt_id)
 
     def claim_next(self) -> dict[str, Any] | None:
         now = utcnow()
         with self.db.transaction() as conn:
             row = conn.execute(
-                """SELECT candidate.id FROM tasks AS candidate
+                """SELECT candidate.* FROM tasks AS candidate
                    WHERE candidate.status='queued'
                      AND candidate.started_at IS NULL
                      AND (candidate.retry_at IS NULL OR candidate.retry_at <= ?)
@@ -349,17 +544,18 @@ class TaskStore:
             ).fetchone()
             if row is None:
                 return None
+            attempt_id = self._create_attempt(conn, row, state="claimed", now=now)
             changed = conn.execute(
                 """UPDATE tasks SET status='running',started_at=COALESCE(started_at,?),retry_at=NULL,error=NULL,updated_at=?
-                   WHERE id=? AND status='queued' AND started_at IS NULL""",
-                (now, now, row["id"]),
+                   ,current_attempt_id=? WHERE id=? AND status='queued' AND started_at IS NULL""",
+                (now, now, attempt_id, row["id"]),
             ).rowcount
             if not changed:
                 return None
-            self._append_event(conn, row["id"], "task.running", {"status": "running"})
+            self._append_event(conn, row["id"], "task.running", {"status": "running"}, attempt_id=attempt_id)
         return self.get(row["id"])
 
-    def set_session(self, task_id: str, session_id: str) -> None:
+    def set_session(self, task_id: str, session_id: str, *, attempt_id: str | None = None) -> bool:
         """Attach a session to a task while it is still running.
 
         COALESCE keeps whatever is already there, so a resumed task never has its
@@ -367,61 +563,62 @@ class TaskStore:
         """
         now = utcnow()
         with self.db.transaction() as conn:
-            existing = conn.execute("SELECT session_id,cwd,status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            existing = self._matching_attempt(conn, task_id, attempt_id)
             if existing is None:
-                raise KeyError(task_id)
-            if existing["status"] not in {"queued", "running"}:
-                return
-            provisional = f"prime-{task_id}"
-            attached = existing["session_id"]
-            if not attached or attached == provisional:
-                attached = session_id
-            conn.execute(
-                "UPDATE tasks SET session_id=?,updated_at=? WHERE id=?",
-                (attached, now, task_id),
-            )
-            # Only a task that opened a session is allowed to establish its
-            # location. A resumed task may inherit a process cwd, but it must not
-            # move the existing Hermes session to a different project.
-            if not existing["session_id"] or existing["session_id"] == f"prime-{task_id}":
-                self.db.remember_session_location(session_id, existing["cwd"], "task", conn=conn)
+                return False
+            return self._attach_provisional_session(conn, task_id, existing, session_id, now)
 
-    def complete(self, task_id: str, result: dict[str, Any]) -> None:
+    def complete(self, task_id: str, result: dict[str, Any], *, attempt_id: str | None = None) -> bool:
         now = utcnow()
         event_result = dict(result)
         if isinstance(event_result.get("text"), str):
             event_result["text"] = _cap_event_text(event_result["text"])
         with self.db.transaction() as conn:
-            existing = conn.execute("SELECT session_id,cwd FROM tasks WHERE id=?", (task_id,)).fetchone()
+            existing = self._matching_attempt(conn, task_id, attempt_id)
             if existing is None:
-                raise KeyError(task_id)
+                return False
+            result_session = result.get("session_id")
+            if result_session:
+                if not self._attach_provisional_session(conn, task_id, existing, str(result_session), now):
+                    raise ValueError("Runner result session does not match its admitted identity")
             changed = conn.execute(
                 """UPDATE tasks SET status='completed',result_json=?,error=NULL,
-                   session_id=CASE WHEN session_id IS NULL OR session_id=? THEN COALESCE(?,session_id) ELSE session_id END,completed_at=?,updated_at=?
-                   WHERE id=? AND status IN ('queued','running')""",
-                (json.dumps(result), f"prime-{task_id}", result.get("session_id"), now, now, task_id),
+                   completed_at=?,updated_at=?
+                   WHERE id=? AND current_attempt_id=? AND status='running'""",
+                (json.dumps(result), now, now, task_id, attempt_id),
             ).rowcount
             if not changed:
-                return
-            if not existing["session_id"] or existing["session_id"] == f"prime-{task_id}":
-                self.db.remember_session_location(str(result.get("session_id") or ""), existing["cwd"], "task", conn=conn)
+                return False
+            conn.execute(
+                "UPDATE task_attempts SET state='completed',finished_at=? WHERE id=? AND task_id=?",
+                (now, attempt_id, task_id),
+            )
             self._append_event(
                 conn,
                 task_id,
                 "task.completed",
                 {"status": "completed", "result": event_result},
+                attempt_id=attempt_id,
             )
+            return True
 
-    def fail(self, task_id: str, error: str) -> None:
+    def fail(self, task_id: str, error: str, *, attempt_id: str | None = None) -> bool:
         now = utcnow()
         with self.db.transaction() as conn:
+            if self._matching_attempt(conn, task_id, attempt_id) is None:
+                return False
             changed = conn.execute(
                 """UPDATE tasks SET status='failed',error=?,completed_at=?,updated_at=?
-                   WHERE id=? AND status IN ('queued','running')""",
-                (error[:4000], now, now, task_id),
+                   WHERE id=? AND current_attempt_id=? AND status='running'""",
+                (error[:4000], now, now, task_id, attempt_id),
             ).rowcount
             if changed:
-                self._append_event(conn, task_id, "task.failed", {"status": "failed", "error": error[:4000]})
+                conn.execute(
+                    "UPDATE task_attempts SET state='failed',finished_at=?,error=? WHERE id=? AND task_id=?",
+                    (now, error[:4000], attempt_id, task_id),
+                )
+                self._append_event(conn, task_id, "task.failed", {"status": "failed", "error": error[:4000]}, attempt_id=attempt_id)
+            return bool(changed)
 
     def cancel_queued(self, task_id: str) -> bool:
         """Cancel only an unclaimed task; a raced claim needs runner teardown."""
@@ -436,16 +633,53 @@ class TaskStore:
                 self._append_event(conn, task_id, "task.cancelled", {"status": "cancelled"})
         return bool(changed)
 
-    def cancel(self, task_id: str) -> bool:
+    def request_cancel(self, task_id: str, *, attempt_id: str | None = None) -> bool:
         now = utcnow()
         with self.db.transaction() as conn:
+            row = conn.execute(
+                """SELECT a.cancel_requested_at FROM tasks AS t JOIN task_attempts AS a
+                     ON a.id=t.current_attempt_id AND a.task_id=t.id
+                   WHERE t.id=? AND t.current_attempt_id=? AND t.status='running'
+                     AND a.state IN ('claimed','running')""",
+                (task_id, attempt_id),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["cancel_requested_at"] is not None:
+                return True
             changed = conn.execute(
-                "UPDATE tasks SET status='cancelled',completed_at=?,updated_at=? WHERE id=? AND status IN ('queued','running','cancelling')",
-                (now, now, task_id),
+                "UPDATE task_attempts SET cancel_requested_at=? WHERE id=? AND task_id=? AND cancel_requested_at IS NULL",
+                (now, attempt_id, task_id),
             ).rowcount
             if changed:
-                self._append_event(conn, task_id, "task.cancelled", {"status": "cancelled"})
-        return bool(changed)
+                self._append_event(
+                    conn, task_id, "task.cancel_requested", {"status": "running"}, attempt_id=attempt_id,
+                )
+            return bool(changed)
+
+    def cancel(self, task_id: str, *, attempt_id: str | None = None) -> bool:
+        now = utcnow()
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                """SELECT a.cancel_requested_at FROM tasks AS t JOIN task_attempts AS a
+                     ON a.id=t.current_attempt_id AND a.task_id=t.id
+                   WHERE t.id=? AND t.current_attempt_id=? AND t.status='running'
+                     AND a.state IN ('claimed','running')""",
+                (task_id, attempt_id),
+            ).fetchone()
+            if row is None or row["cancel_requested_at"] is None:
+                return False
+            changed = conn.execute(
+                "UPDATE tasks SET status='cancelled',completed_at=?,updated_at=? WHERE id=? AND current_attempt_id=? AND status='running'",
+                (now, now, task_id, attempt_id),
+            ).rowcount
+            if changed:
+                conn.execute(
+                    "UPDATE task_attempts SET state='cancelled',finished_at=? WHERE id=? AND task_id=?",
+                    (now, attempt_id, task_id),
+                )
+                self._append_event(conn, task_id, "task.cancelled", {"status": "cancelled"}, attempt_id=attempt_id)
+            return bool(changed)
 
     def recover_inflight(self) -> int:
         """Record unknown outcomes without replaying potentially applied effects.
@@ -456,24 +690,44 @@ class TaskStore:
         """
         with self.db.transaction() as conn:
             rows = conn.execute(
-                """SELECT id,status FROM tasks WHERE status IN ('running','cancelling')
+                """SELECT * FROM tasks WHERE status IN ('running','cancelling')
                    OR (status='queued' AND started_at IS NOT NULL)"""
             ).fetchall()
             for row in rows:
+                attempt_id = row["current_attempt_id"]
+                attempt = conn.execute(
+                    "SELECT id,state FROM task_attempts WHERE id=? AND task_id=?",
+                    (attempt_id, row["id"]),
+                ).fetchone() if attempt_id else None
+                if attempt is None or attempt["state"] not in {"claimed", "running"}:
+                    attempt_id = self._create_attempt(
+                        conn, row, state="running", now=utcnow(),
+                        started_at=row["started_at"] or utcnow(),
+                    )
+                    conn.execute(
+                        "UPDATE tasks SET current_attempt_id=? WHERE id=?",
+                        (attempt_id, row["id"]),
+                    )
                 self._interrupt(
-                    conn, row["id"], row["status"], "server_restart",
+                    conn, row["id"], row["status"], "server_restart", attempt_id,
                     "Server restarted before an execution outcome was recorded.",
                 )
         return len(rows)
 
-    def interrupt(self, task_id: str, reason: str, error: str) -> None:
+    def interrupt(self, task_id: str, reason: str, error: str, *, attempt_id: str | None = None) -> bool:
         """Finish a started task in the current clients' failed-status envelope."""
         with self.db.transaction() as conn:
-            row = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
-            if row is not None and row["status"] in {"running", "cancelling"}:
-                self._interrupt(conn, task_id, row["status"], reason, error)
+            row = conn.execute(
+                "SELECT status FROM tasks WHERE id=? AND current_attempt_id=?", (task_id, attempt_id),
+            ).fetchone()
+            if row is None or row["status"] not in {"running", "cancelling"}:
+                return False
+            if self._matching_attempt(conn, task_id, attempt_id) is None:
+                return False
+            return self._interrupt(conn, task_id, row["status"], reason, attempt_id, error)
 
-    def _interrupt(self, conn, task_id: str, previous_status: str, reason: str, error: str) -> None:
+    def _interrupt(self, conn, task_id: str, previous_status: str, reason: str,
+                   attempt_id: str, error: str) -> bool:
         now = utcnow()
         recovery = {
             "reason": reason,
@@ -487,13 +741,18 @@ class TaskStore:
         # interrupted status that existing clients would continue polling.
         changed = conn.execute(
             """UPDATE tasks SET status='failed',result_json=?,error=?,retry_at=NULL,
-               completed_at=?,updated_at=? WHERE id=? AND status=?""",
-            (json.dumps({"recovery": recovery}), error, now, now, task_id, previous_status),
+               completed_at=?,updated_at=? WHERE id=? AND current_attempt_id=? AND status=?""",
+            (json.dumps({"recovery": recovery}), error, now, now, task_id, attempt_id, previous_status),
         ).rowcount
         if changed:
+            conn.execute(
+                "UPDATE task_attempts SET state='interrupted',finished_at=?,error=? WHERE id=? AND task_id=?",
+                (now, error[:4000], attempt_id, task_id),
+            )
             self._append_event(conn, task_id, "task.failed", {
                 "status": "failed", "error": error, "recovery": recovery,
-            })
+            }, attempt_id=attempt_id)
+        return bool(changed)
 
 
 class TaskEngine:
@@ -513,15 +772,17 @@ class TaskEngine:
         task = self.store.claim_next()
         if task is None:
             return False
+        attempt_id = task["current_attempt_id"]
+        # This callback is adapter-only ephemeral state. It is never part of a
+        # persisted task, event, or result payload.
+        task["_attempt_active"] = lambda: self.store.attempt_active(task["id"], attempt_id)
 
         async def emit(event_type: str, data: dict[str, Any]) -> None:
             # Hermes announces its session id on stderr as soon as it has one,
             # long before the task finishes. Persist it the moment it arrives so
             # the row is addressable while it is still running — otherwise every
             # follow-up prompt has no session to continue and opens a new one.
-            if event_type == "session" and data.get("session_id"):
-                self.store.set_session(task["id"], str(data["session_id"]))
-            self.store.append_running_event(task["id"], event_type, data)
+            self.store.append_running_event(task["id"], event_type, data, attempt_id=attempt_id)
 
         try:
             if self.registry is not None:
@@ -529,23 +790,35 @@ class TaskEngine:
             if self.preflight is not None:
                 self.preflight(task)
             runner = self._runner_for(task)
+            if not self.store.mark_attempt_running(task["id"], attempt_id=attempt_id):
+                raise RunnerCancelled(task["id"])
+            if not self.store.attempt_active(task["id"], attempt_id):
+                raise RunnerCancelled(task["id"])
             # Missing output does not prove that the runner made no side effects.
             # Each claim invokes the runner once, including transport failures.
             result = await runner.run(task, emit)
         except RunnerCancelled:
-            self.store.cancel(task["id"])
+            if not self.store.cancel(task["id"], attempt_id=attempt_id):
+                self.store.fail(task["id"], "Runner stopped without a durable cancellation request.",
+                                attempt_id=attempt_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             message = str(exc)
             if is_quota_error(message):
-                self.store.interrupt(task["id"], "provider_limit", message)
+                self.store.interrupt(task["id"], "provider_limit", message, attempt_id=attempt_id)
             elif "Daemon worker client closed" in message:
-                self.store.interrupt(task["id"], "runner_disconnected", message)
+                self.store.interrupt(task["id"], "runner_disconnected", message, attempt_id=attempt_id)
             else:
-                self.store.fail(task["id"], message)
+                self.store.fail(task["id"], message, attempt_id=attempt_id)
         else:
-            self.store.complete(task["id"], result)
+            try:
+                self.store.complete(task["id"], result, attempt_id=attempt_id)
+            except ValueError as exc:
+                # A malformed or cross-session result is a runner failure. Keep
+                # the row/attempt terminal instead of killing this worker while
+                # leaving its durable attempt marked running.
+                self.store.fail(task["id"], str(exc), attempt_id=attempt_id)
         return True
 
     def _runner_for(self, task: dict[str, Any]) -> Runner:
@@ -572,11 +845,16 @@ class TaskEngine:
                 return
         if task["status"] != "running":
             return
+        attempt_id = task.get("current_attempt_id")
+        if not isinstance(attempt_id, str) or not attempt_id:
+            return
+        if not self.store.request_cancel(task_id, attempt_id=attempt_id):
+            return
         cancel = getattr(self._runner_for(task), "cancel", None)
         if cancel is None:
             raise RuntimeError("The active runner cannot cancel process groups")
         await cancel(task_id)
-        self.store.cancel(task_id)
+        self.store.cancel(task_id, attempt_id=attempt_id)
 
     async def run_forever(self) -> None:
         # Multiple workers share one engine. Recover only once; repeating this

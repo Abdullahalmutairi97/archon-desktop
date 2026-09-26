@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .config import Settings
 from .admission import SessionWorkspace, admit_workspace, revalidate_workspace
+from .ownership import SessionOwnershipService
 from .runtimes import RuntimeRegistry
 from .db import Database
 from .prime_runner import PrimeRunner
@@ -278,32 +279,42 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         settings.prime_executable,
         pi_session_root=settings.pi_agent_session_dir,
     )
+    ownership = SessionOwnershipService(store, prime_sessions)
 
     def session_workspace(session_id: str, catalog):
-        with store.db.connect() as conn:
-            owner = conn.execute(
-                "SELECT profile,cwd FROM tasks WHERE session_id=? ORDER BY created_at,id LIMIT 1",
-                (session_id,),
-            ).fetchone()
-            assignment = conn.execute(
-                "SELECT project_id FROM session_projects WHERE session_id=?", (session_id,),
-            ).fetchone()
-        if not owner and not prime_sessions.contains(session_id):
+        owner = ownership.reconcile(session_id)
+        if owner["tombstoned"]:
+            raise ValueError("Session has been deleted")
+        if not owner["task_count"] and not prime_sessions.contains(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
-        native_cwd = prime_sessions.cwd_for(session_id)
-        cwd = owner['cwd'] if owner else native_cwd
-        if owner and native_cwd and cwd and Path(native_cwd).expanduser().resolve() != Path(cwd).expanduser().resolve():
-            raise ValueError("Session history disagrees with its recorded working folder")
-        project_id = assignment['project_id'] if assignment else projects.project_for_path(cwd, catalog)
-        return owner, SessionWorkspace(cwd=cwd, project_id=project_id)
+        if owner["state"] != "verified":
+            reason = owner["reason"] or "Session ownership requires review before it can be used"
+            raise ValueError(f"Session ownership requires review: {reason}")
+        if owner["runtime_id"] not in {"prime", "pi"} or not owner["cwd"]:
+            raise ValueError("Session runtime and working directory require review before use")
+        if owner["project_binding_present"]:
+            project_id = owner["project_id"]
+        elif owner["task_count"]:
+            # Existing task history without a binding is conservatively
+            # projectless; a later catalog addition cannot adopt it by path.
+            project_id = None
+        else:
+            project_id = projects.project_for_path(owner["cwd"], catalog)
+        return owner, SessionWorkspace(cwd=owner["cwd"], project_id=project_id)
 
     def preflight(task):
         # Recheck durable inputs immediately before invoking an adapter, including
         # tasks submitted by transports which do not use the HTTP admission route.
         catalog = projects.list()
         owner, session = session_workspace(task['session_id'], catalog)
-        if owner and registry.resolve(owner['profile']) != registry.resolve(task.get('profile')):
-            raise ValueError("Task runtime disagrees with its session owner")
+        if task.get('runtime_id') not in {'prime', 'pi'} or task['runtime_id'] != owner['runtime_id']:
+            raise ValueError("Task runtime disagrees with its verified session owner")
+        if task.get('cwd') != owner['cwd']:
+            raise ValueError("Task working directory disagrees with its verified session owner")
+        if task.get('project_id') != session.project_id:
+            raise ValueError("Task project identity changed since it was queued")
+        if task.get('project_id') is not None and not projects.contains(task['project_id']):
+            raise ValueError("Task project is no longer active")
         admitted = admit_workspace(scratch_root=settings.task_scratch_root or settings.archon_root,
                                    projects=catalog, cwd=task.get('cwd'), session=session)
         task['cwd'] = revalidate_workspace(task.get('cwd'), admitted.authorized_roots)
@@ -346,7 +357,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         app.state.store = store
         app.state.engine = engine
         app.state.runtimes = registry
-        app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
+        app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
         if settings.start_worker:
             # Each worker shares the engine's one-time recovery guard and
             # claims its own row atomically.
@@ -360,6 +371,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             telegram_bridge = TelegramBridge(
                 store.db, store, TelegramBotClient(settings.telegram_bot_token),
                 settings.telegram_allowed_user_id,
+                default_cwd=str((settings.task_scratch_root or settings.archon_root).expanduser().resolve()),
             )
             telegram_task = asyncio.create_task(telegram_bridge.run_forever(), name="archon-telegram-bridge")
         yield
@@ -508,19 +520,20 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         if payload.project_id and (not projects.contains(payload.project_id)):
             raise HTTPException(status_code=404, detail="Project was not found")
         try:
-            task_profile = registry.resolve(payload.profile)
             catalog = projects.list()
             session = None
             if payload.session_id:
                 owner, session = session_workspace(payload.session_id, catalog)
                 # Existing conversations retain their original runtime when the
                 # user changes the new-conversation picker.
-                task_profile = registry.resolve(owner['profile'] if owner else 'prime')
+                task_runtime = owner['runtime_id']
+            else:
+                task_runtime = registry.resolve(payload.profile)
             admitted = admit_workspace(
                 scratch_root=settings.task_scratch_root or settings.archon_root,
                 projects=catalog, cwd=payload.cwd, project_id=payload.project_id, session=session,
             )
-            registry.validate({"profile": task_profile, "approval_mode": payload.approval_mode,
+            registry.validate({"runtime_id": task_runtime, "approval_mode": payload.approval_mode,
                                "chat_only": payload.chat_only})
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -528,7 +541,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             task = store.submit(
                 payload.prompt, admitted.cwd, payload.model, payload.provider, payload.skills,
                 payload.session_id, payload.approval_mode, payload.chat_only,
-                task_profile, project_id=admitted.project_id,
+                task_runtime, project_id=admitted.project_id, runtime_id=task_runtime,
                 request_id=idempotency_key, request_hash=request_hash,
             )
         except ValueError as exc:
@@ -672,20 +685,46 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
 
     @app.get("/api/sessions", dependencies=protected)
     def get_sessions(limit: int = Query(120, ge=1, le=500), project_id: str | None = None):
-        rows = prime_sessions.list(limit=limit, project_id=project_id)
-        with store.db.connect() as conn:
-            for row in rows:
-                owner = conn.execute(
-                    "SELECT profile FROM tasks WHERE session_id=? ORDER BY created_at ASC LIMIT 1",
-                    (row["id"],),
-                ).fetchone()
-                native_pi = row["source"] == "pi-cli"
-                row["runtime"] = "pi" if native_pi or (owner and owner["profile"] == "pi") else "prime"
-                row["read_only"] = native_pi
-                row["can_delete"] = True
-                if row["runtime"] == "pi" and not native_pi:
-                    row["source"] = "pi"
-        return {"sessions": rows}
+        owners = ownership.reconcile_all()
+        catalog = projects.list()
+        active_project_ids = {project["id"] for project in catalog}
+        rows = prime_sessions.list(limit=500)
+        visible = []
+        for row in rows:
+            owner = owners.get(row["id"]) or ownership.reconcile(row["id"])
+            row["ownership_state"] = owner["state"]
+            row["ownership_reason"] = owner["reason"]
+            row["runtime"] = owner["runtime_id"] if owner["state"] == "verified" else None
+            row["read_only"] = bool(owner["read_only"] or row["source"] == "pi-cli")
+            row["can_delete"] = True
+            if owner["state"] == "verified":
+                row["cwd"] = owner["cwd"]
+            else:
+                row["cwd"] = None
+            if owner["project_binding_present"]:
+                row["project_id"] = (owner["project_id"]
+                                      if owner["project_id"] in active_project_ids else None)
+            elif owner["state"] == "verified" and not owner["task_count"]:
+                try:
+                    row["project_id"] = projects.project_for_path(owner["cwd"], catalog)
+                except ValueError:
+                    row["project_id"] = None
+                    row["project_ownership_ambiguous"] = True
+            else:
+                row["project_id"] = None
+            if row.get("project_ownership_ambiguous"):
+                row["ownership_state"] = "review_required"
+                row["ownership_reason"] = (
+                    "Project ownership is ambiguous because multiple registered projects "
+                    "share the longest workspace root."
+                )
+                row["runtime"] = None
+                row["cwd"] = None
+            if row["runtime"] == "pi" and row["source"] != "pi-cli":
+                row["source"] = "pi"
+            if project_id is None or row["project_id"] == project_id:
+                visible.append(row)
+        return {"sessions": visible[:limit]}
 
     @app.put("/api/sessions/{session_id}/project", dependencies=protected)
     def assign_session_project(session_id: str, payload: SessionProjectUpdate):

@@ -2,6 +2,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from archon_server.db import Database
 from archon_server.services.workspace import PrimeSessionService, ProjectService, SessionService
 
@@ -261,6 +263,18 @@ def test_project_service_resolves_symlinked_cwd_to_project(tmp_path):
     alias = tmp_path / "alias"
     alias.symlink_to(root, target_is_directory=True)
     assert service.project_for_path(str(alias / "src")) == project["id"]
+
+
+def test_project_service_rejects_equal_longest_root_tie():
+    service = ProjectService(Path("/unused/projects.db"))
+    root = "/workspace/shared"
+    catalog = [
+        {"id": "project-a", "folders": [{"path": root}]},
+        {"id": "project-b", "folders": [{"path": root}]},
+    ]
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        service.project_for_path(root + "/src", catalog)
 
 
 def test_project_service_creates_folder_and_resolves_nested_sessions(tmp_path):

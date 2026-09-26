@@ -66,7 +66,7 @@ async def test_cancel_routes_claim_race_to_owner_and_waits_for_runner(tmp_path, 
         observed = original_get(task_id)
         if not raced and observed["status"] == "queued":
             raced = True
-            store.mark_running(task_id)
+            attempt_id = store.mark_running(task_id)
             owner.active.add(task_id)
         return observed
 
@@ -86,7 +86,7 @@ async def test_cancel_routes_claim_race_to_owner_and_waits_for_runner(tmp_path, 
         # Repeated API cancellation cannot duplicate the terminal event.
         await engine.cancel(task["id"])
         assert [event["type"] for event in store.events(task["id"])] == [
-            "task.queued", "task.running", "task.cancelled",
+            "task.queued", "task.running", "task.cancel_requested", "task.cancelled",
         ]
     finally:
         owner.release_cancel.set()
@@ -119,8 +119,8 @@ async def test_cancel_race_preserves_already_completed_outcome(tmp_path, monkeyp
         observed = original_get(task_id)
         if not raced and observed["status"] == "queued":
             raced = True
-            store.mark_running(task_id)
-            store.complete(task_id, {"text": "already finished"})
+            attempt_id = store.mark_running(task_id)
+            store.complete(task_id, {"text": "already finished"}, attempt_id=attempt_id)
         return observed
 
     monkeypatch.setattr(store, "get", get_then_finish)
@@ -157,5 +157,5 @@ async def test_claim_race_does_not_report_cancelled_when_runner_stop_fails(tmp_p
         await engine.cancel(task["id"])
     assert original_get(task["id"])["status"] == "running"
     assert [event["type"] for event in store.events(task["id"])] == [
-        "task.queued", "task.running",
+        "task.queued", "task.running", "task.cancel_requested",
     ]

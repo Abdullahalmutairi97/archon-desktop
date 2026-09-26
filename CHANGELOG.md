@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 1C.2 durable execution attempts
+
+- Record an execution attempt with every claim and require its identity for runner events, results, errors and cancellation. Stale callbacks cannot mutate a newer attempt or attach a session.
+- Persist cancellation intent before awaiting native teardown; prevent cancelled work from launching while waiting for a Prime lease or gated supervisor. Uncertain started work remains failed for review after restart and is never automatically replayed.
+- Bind admitted tasks to canonical runtime and project snapshots. Reconcile session runtime/cwd ownership from complete evidence; ambiguous legacy history requires review instead of guessing from current aliases or the first native file.
+- Add migration 2 with a verified pre-upgrade snapshot, preserving the immutable version-1 migration and its checksum. See the Phase 1C.2 evidence for compatibility and remaining native qualification gates.
+
 ## Unreleased — Phase 1C.1 durable request admission
 
 - Introduce a versioned, checksummed SQLite migration with a verified mode-0600 pre-migration snapshot for existing databases. Reject newer or inconsistent migration metadata before schema changes.

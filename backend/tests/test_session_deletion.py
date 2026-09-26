@@ -58,7 +58,8 @@ def test_delete_session_purges_its_backend_tasks_and_events(tmp_path):
     with TestClient(app) as client:
         task = app.state.store.submit("delete this chat", session_id=session_id, chat_only=True)
         app.state.store.append_event(task["id"], "progress", {"message": "saved"})
-        app.state.store.complete(task["id"], {"text": "done"})
+        attempt_id = app.state.store.mark_running(task["id"])
+        app.state.store.complete(task["id"], {"text": "done"}, attempt_id=attempt_id)
 
         response = client.delete(f"/api/sessions/{session_id}", headers=headers)
         with pytest.raises(ValueError, match="deleted"):
@@ -125,8 +126,10 @@ def test_delete_multiple_sessions_purges_all_selected_session_history(tmp_path):
     with TestClient(app) as client:
         first_task = app.state.store.submit("first history", session_id=first, chat_only=True)
         second_task = app.state.store.submit("second history", session_id=second, chat_only=True)
-        app.state.store.complete(first_task["id"], {"text": "done"})
-        app.state.store.complete(second_task["id"], {"text": "done"})
+        first_attempt = app.state.store.mark_running(first_task["id"])
+        app.state.store.complete(first_task["id"], {"text": "done"}, attempt_id=first_attempt)
+        second_attempt = app.state.store.mark_running(second_task["id"])
+        app.state.store.complete(second_task["id"], {"text": "done"}, attempt_id=second_attempt)
         response = client.request(
             "DELETE", "/api/sessions", headers=headers, json={"session_ids": [first, second]}
         )

@@ -27,9 +27,9 @@ async def test_shutdown_waits_for_active_task_instead_of_cancelling_it(tmp_path)
     ), runner=runner)
     lifespan = app.router.lifespan_context(app)
     await lifespan.__aenter__()
-    task = app.state.store.submit("finish before restart", cwd=str(tmp_path), approval_mode="auto")
+    task = app.state.store.submit("finish before restart", cwd=str(tmp_path), approval_mode="auto", runtime_id="prime")
     await asyncio.wait_for(runner.started.wait(), timeout=1)
-    queued = app.state.store.submit("wait until the next startup", cwd=str(tmp_path), approval_mode="auto")
+    queued = app.state.store.submit("wait until the next startup", cwd=str(tmp_path), approval_mode="auto", runtime_id="prime")
 
     shutdown = asyncio.create_task(lifespan.__aexit__(None, None, None))
     await asyncio.sleep(0.05)
@@ -89,7 +89,7 @@ async def test_shutdown_delivers_queued_telegram_policy_failure_before_stopping_
     ), runner=runner)
     lifespan = app.router.lifespan_context(app)
     await lifespan.__aenter__()
-    first = app.state.store.submit("already active", cwd=str(tmp_path), approval_mode="auto")
+    first = app.state.store.submit("already active", cwd=str(tmp_path), approval_mode="auto", runtime_id="prime")
     await asyncio.wait_for(runner.started.wait(), timeout=1)
     for _ in range(100):
         if len(app.state.store.list()) == 2:
@@ -106,6 +106,8 @@ async def test_shutdown_delivers_queued_telegram_policy_failure_before_stopping_
     assert app.state.store.get(first["id"])["status"] == "completed"
     telegram_task = next(task for task in app.state.store.list() if task["id"] != first["id"])
     assert telegram_task["status"] == "failed"
+    assert telegram_task["runtime_id"] == "prime"
+    assert telegram_task["cwd"] == str(tmp_path)
     assert "explicit approval_mode='auto'" in telegram_task["error"]
     assert runner.calls == 1
     assert telegram.sent[0] == (

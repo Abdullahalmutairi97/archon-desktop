@@ -35,6 +35,35 @@ def test_other_roster_profiles_do_not_fall_back_to_prime():
     assert configured.resolve('reviewer') == 'prime'
 
 
+def test_bound_runtime_identity_survives_profile_alias_changes():
+    prime = RecordingRunner()
+    pi = RecordingRunner()
+    registry = RuntimeRegistry(
+        {'prime': prime, 'pi': pi}, aliases={'pi-legacy': 'pi'},
+    )
+    task = {
+        'runtime_id': 'pi', 'profile': 'pi-legacy',
+        'approval_mode': 'auto', 'chat_only': False,
+    }
+
+    assert registry.runner_for(task) is pi
+    assert registry.validate(task) == 'pi'
+
+    registry.aliases['pi-legacy'] = 'prime'
+    assert registry.runner_for(task) is pi
+    assert registry.validate(task) == 'pi'
+
+
+def test_invalid_bound_runtime_fails_closed_without_profile_fallback():
+    registry = RuntimeRegistry({'prime': RecordingRunner(), 'pi': RecordingRunner()})
+    task = {'runtime_id': 'unknown', 'profile': 'prime', 'approval_mode': 'auto'}
+
+    with pytest.raises(ValueError, match='canonical runtime'):
+        registry.runner_for(task)
+    with pytest.raises(ValueError, match='canonical runtime'):
+        registry.validate(task)
+
+
 @pytest.mark.parametrize('aliases', [{'pi': 'prime'}, {'default': 'pi'}, {'other': 'missing'}])
 def test_aliases_cannot_redefine_builtin_identity_or_target_unknown_runtime(aliases):
     with pytest.raises(ValueError):

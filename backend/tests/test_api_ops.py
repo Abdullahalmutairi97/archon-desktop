@@ -92,7 +92,8 @@ def test_project_creation_creates_registered_folder(tmp_path):
         queued = app.state.store.submit("queued", session_id=session_id)
         active_row = next(row for row in client.get("/api/sessions", headers=headers).json()["sessions"] if row["id"] == session_id)
         assert active_row["active"] is True
-        app.state.store.complete(queued["id"], {"text": "done"})
+        attempt_id = app.state.store.mark_running(queued["id"])
+        app.state.store.complete(queued["id"], {"text": "done"}, attempt_id=attempt_id)
         idle_row = next(row for row in client.get("/api/sessions", headers=headers).json()["sessions"] if row["id"] == session_id)
         assert idle_row["active"] is False
 
@@ -177,11 +178,13 @@ def test_logs_honor_source_and_minimum_level_filters(tmp_path):
     app = create_app(settings)
     with TestClient(app) as client:
         queued = app.state.store.submit("ok")
-        app.state.store.complete(queued["id"], {"text": "done"})
+        attempt_id = app.state.store.mark_running(queued["id"])
+        app.state.store.complete(queued["id"], {"text": "done"}, attempt_id=attempt_id)
         failed = app.state.store.submit("bad")
-        app.state.store.fail(failed["id"], "failure")
+        failed_attempt = app.state.store.mark_running(failed["id"])
+        app.state.store.fail(failed["id"], "failure", attempt_id=failed_attempt)
 
-        assert len(client.get("/api/logs", headers=headers).json()["logs"]) == 4
+        assert len(client.get("/api/logs", headers=headers).json()["logs"]) == 6
         assert client.get("/api/logs", params={"sources": "agent"}, headers=headers).json()["logs"] == []
         errors = client.get("/api/logs", params={"level": "ERROR"}, headers=headers).json()["logs"]
         assert len(errors) == 1 and errors[0]["level"] == "ERROR"

@@ -41,7 +41,7 @@ async def test_authorized_message_submits_approved_task_replies_and_remembers_se
     assert tasks.submissions == [{
         "prompt": "check the server", "cwd": None, "model": None, "provider": None,
         "skills": [], "session_id": None, "approval_mode": "approve", "chat_only": False,
-        "profile": None,
+        "profile": None, "runtime_id": "prime",
     }]
     assert telegram.sent == [(99, "Done")]
     assert bridge.session_for_chat(99) == "prime-1"

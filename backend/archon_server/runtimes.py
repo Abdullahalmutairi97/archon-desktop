@@ -67,6 +67,20 @@ class RuntimeRegistry:
             raise ValueError(f'Unknown runtime profile: {name}')
         return runtime
 
+    def runtime_for(self, task: Mapping[str, Any]) -> str:
+        """Select a task's frozen runtime, falling back only for legacy tasks.
+
+        Profiles and aliases are mutable roster configuration. Once a task has
+        a canonical runtime_id, changing an alias must not redirect execution
+        or cancellation.
+        """
+        runtime_id = task.get('runtime_id')
+        if runtime_id is None:
+            return self.resolve(task.get('profile'))
+        if runtime_id not in {'prime', 'pi'} or runtime_id not in self.runners:
+            raise ValueError(f'Invalid canonical runtime id: {runtime_id}')
+        return runtime_id
+
     def _availability(self, runtime: str) -> tuple[bool, str]:
         executable = getattr(self.runners[runtime], 'executable', None)
         # A directly injected runner is an explicit integration/test dependency,
@@ -80,7 +94,7 @@ class RuntimeRegistry:
             return False, 'executable_file'
 
     def validate(self, task: dict[str, Any]) -> str:
-        runtime = self.resolve(task.get('profile'))
+        runtime = self.runtime_for(task)
         validate_execution_mode(task)
         available, _ = self._availability(runtime)
         if not available:
@@ -90,7 +104,7 @@ class RuntimeRegistry:
     def runner_for(self, task: dict[str, Any]):
         # Identity selection also serves cancellation. Do not require the file
         # to still exist to cancel a process that has already been launched.
-        return self.runners[self.resolve(task.get('profile'))]
+        return self.runners[self.runtime_for(task)]
 
     def describe(self) -> list[dict[str, Any]]:
         result = []

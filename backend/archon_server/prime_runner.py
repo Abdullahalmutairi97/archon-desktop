@@ -51,11 +51,19 @@ class _SessionLease:
 
 async def _acquire_session_lease(
     root: Path, session_id: str, timeout: float = 30.0,
+    cancel_check: Callable[[], bool] | None = None,
+    cancel_task_id: str | None = None,
 ) -> _SessionLease:
     if not session_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for char in session_id):
         raise ValueError('Invalid session id')
     if timeout < 0 or not math.isfinite(timeout):
         raise ValueError("Session lease timeout must be finite and nonnegative")
+
+    def check_cancelled() -> None:
+        if cancel_check is not None and cancel_check():
+            raise RunnerCancelled(cancel_task_id or session_id)
+
+    check_cancelled()
     path = root / f".{session_id}.lock"
     root.mkdir(parents=True, exist_ok=True)
     try:
@@ -74,6 +82,7 @@ async def _acquire_session_lease(
             raise RuntimeError(f"Session lease is not a regular file: {session_id}")
         deadline = time.monotonic() + timeout
         while True:
+            check_cancelled()
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
@@ -82,6 +91,7 @@ async def _acquire_session_lease(
                 if remaining <= 0:
                     raise RuntimeError(f"Timed out waiting for session lease: {session_id}")
                 await asyncio.sleep(min(0.05, remaining))
+        check_cancelled()
         current = path.stat(follow_symlinks=False)
         if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
             raise RuntimeError(f"Session lease file was replaced while waiting: {session_id}")
@@ -119,8 +129,38 @@ class PrimeRunner:
         self.agent_session_root = Path(agent_session_root or (Path.home() / '.prime/agent/sessions'))
         self._active: dict[str, asyncio.subprocess.Process] = {}
         self._identities: dict[str, ProcessIdentity] = {}
+        self._active_attempts: dict[str, str] = {}
+        self._released_attempts: dict[str, str] = {}
+        self._run_attempts: dict[str, str] = {}
         self._cancelled: set[str] = set()
         self.preflight: Callable[[dict[str, Any]], None] | None = None
+
+    @staticmethod
+    def _attempt_key(task: dict[str, Any], task_id: str) -> str:
+        attempt_id = task.get("current_attempt_id")
+        if isinstance(attempt_id, str) and attempt_id:
+            return f"attempt:{attempt_id}"
+        return f"task:{task_id}"
+
+    def _cancellation_requested(self, task: dict[str, Any], task_id: str, attempt_key: str) -> bool:
+        is_active = task.get("_attempt_active")
+        if is_active is not None and not callable(is_active):
+            raise TypeError("Task _attempt_active must be a synchronous callable")
+        if callable(is_active):
+            if not is_active():
+                return True
+        return attempt_key in self._cancelled or task_id in self._cancelled
+
+    def _consume_cancellation(self, task_id: str, attempt_key: str) -> None:
+        self._cancelled.discard(attempt_key)
+        self._cancelled.discard(task_id)
+
+    def _clear_active(self, task_id: str, attempt_key: str) -> None:
+        if self._active_attempts.get(task_id) == attempt_key:
+            self._active_attempts.pop(task_id, None)
+            self._released_attempts.pop(task_id, None)
+            self._active.pop(task_id, None)
+            self._identities.pop(task_id, None)
 
     def _agent_session_path(self, session_id: str) -> Path | None:
         direct = self.agent_session_root / f"{session_id}.jsonl"
@@ -149,15 +189,36 @@ class PrimeRunner:
     async def run(self, task: dict, emit) -> dict:
         validate_execution_mode(task)
         session_id = str(task.get("session_id") or f"prime-{task['id']}")
+        task_id = str(task["id"])
+        attempt_key = self._attempt_key(task, task_id)
         if not session_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for char in session_id):
             raise ValueError('Invalid session id')
+        self._run_attempts[task_id] = attempt_key
         # flock also serializes separate opens in this process, so every
         # contender uses the same bounded, cancellable acquisition path.
-        lease = await _acquire_session_lease(self.session_root, session_id)
         try:
-            return await self._run_once(task, emit, lease)
+            if self._cancellation_requested(task, task_id, attempt_key):
+                self._consume_cancellation(task_id, attempt_key)
+                raise RunnerCancelled(task_id)
+            lease = await _acquire_session_lease(
+                self.session_root,
+                session_id,
+                cancel_check=lambda: self._cancellation_requested(task, task_id, attempt_key),
+                cancel_task_id=task_id,
+            )
+            try:
+                if self._cancellation_requested(task, task_id, attempt_key):
+                    self._consume_cancellation(task_id, attempt_key)
+                    raise RunnerCancelled(task_id)
+                return await self._run_once(task, emit, lease)
+            finally:
+                _release_session_lease(lease)
+        except RunnerCancelled as exc:
+            self._consume_cancellation(task_id, attempt_key)
+            raise RunnerCancelled(task_id) from exc
         finally:
-            _release_session_lease(lease)
+            if self._run_attempts.get(task_id) == attempt_key:
+                self._run_attempts.pop(task_id, None)
 
     async def _run_once(self, task: dict, emit, lease: _SessionLease) -> dict:
         """Run Prime in its structured JSON mode.
@@ -169,6 +230,10 @@ class PrimeRunner:
         """
         task_id = str(task['id'])
         session_id = str(task.get('session_id') or f'prime-{task_id}')
+        attempt_key = self._attempt_key(task, task_id)
+        if self._cancellation_requested(task, task_id, attempt_key):
+            self._consume_cancellation(task_id, attempt_key)
+            raise RunnerCancelled(task_id)
         if not session_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for char in session_id):
             raise ValueError('Invalid session id')
         # Sessions started in Prime Agent's CLI/TUI are single JSONL files in its
@@ -194,6 +259,9 @@ class PrimeRunner:
                 pass
         if self.preflight is not None:
             self.preflight(task)
+        if self._cancellation_requested(task, task_id, attempt_key):
+            self._consume_cancellation(task_id, attempt_key)
+            raise RunnerCancelled(task_id)
         cwd = execution_cwd(saved_cwd or self.default_cwd, require_canonical=bool(saved_cwd))
         argv = [str(self.executable), '--print', '--mode', 'json', '--cwd', str(cwd)]
         if agent_session:
@@ -210,6 +278,9 @@ class PrimeRunner:
             for skill in task['skills']:
                 argv += ['--skill', str(skill)]
         argv.append(prompt)
+        if self._cancellation_requested(task, task_id, attempt_key):
+            self._consume_cancellation(task_id, attempt_key)
+            raise RunnerCancelled(task_id)
         process = await asyncio.create_subprocess_exec(
             *supervised_argv(argv), cwd=str(cwd), env=os.environ.copy(), stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True,
@@ -220,11 +291,17 @@ class PrimeRunner:
         identity: ProcessIdentity | None = None
         try:
             identity = capture_process_identity(process)
-            await release_supervised_target(process)
             self._active[task_id] = process
             self._identities[task_id] = identity
-            if task_id in self._cancelled:
-                self._cancelled.discard(task_id)
+            self._active_attempts[task_id] = attempt_key
+            if self._cancellation_requested(task, task_id, attempt_key):
+                self._consume_cancellation(task_id, attempt_key)
+                raise RunnerCancelled(task_id)
+            await release_supervised_target(process)
+            if self._active_attempts.get(task_id) == attempt_key:
+                self._released_attempts[task_id] = attempt_key
+            if self._cancellation_requested(task, task_id, attempt_key):
+                self._consume_cancellation(task_id, attempt_key)
                 raise RunnerCancelled(task_id)
             # Publish while still inside the cleanup guard. Let the child get
             # scheduled first so a failing event sink cannot interrupt process
@@ -232,16 +309,23 @@ class PrimeRunner:
             session_event = asyncio.create_task(emit('session', {'session_id': session_id}))
             await asyncio.sleep(0.1)
             await session_event
-        except BaseException:
-            self._active.pop(task_id, None)
-            self._identities.pop(task_id, None)
-            if identity is not None:
-                try:
-                    await abort_supervised_start(process, identity)
-                finally:
-                    identity.close()
-            else:
-                await abort_uncaptured_process(process)
+        except BaseException as exc:
+            try:
+                if identity is not None:
+                    try:
+                        await abort_supervised_start(process, identity)
+                    finally:
+                        identity.close()
+                else:
+                    await abort_uncaptured_process(process)
+            finally:
+                self._clear_active(task_id, attempt_key)
+            cancelled = self._cancellation_requested(task, task_id, attempt_key)
+            if cancelled:
+                self._consume_cancellation(task_id, attempt_key)
+                if isinstance(exc, RunnerCancelled):
+                    raise
+                raise RunnerCancelled(task_id) from exc
             raise
         stderr: list[str] = []
         final_text = ''
@@ -350,11 +434,10 @@ class PrimeRunner:
             await terminate_process_tree(process, identity)
             raise
         finally:
-            self._active.pop(task_id, None)
-            self._identities.pop(task_id, None)
+            self._clear_active(task_id, attempt_key)
             identity.close()
-        if task_id in self._cancelled:
-            self._cancelled.discard(task_id)
+        if self._cancellation_requested(task, task_id, attempt_key):
+            self._consume_cancellation(task_id, attempt_key)
             raise RunnerCancelled(task_id)
         if code:
             raise RuntimeError('\n'.join(stderr[-50:]) or f'Prime exited with code {code}')
@@ -363,11 +446,14 @@ class PrimeRunner:
     async def cancel(self, task_id: str) -> bool:
         # Record intent before looking up the process. Startup can be between
         # spawn and _active registration; that window must not lose cancel.
-        self._cancelled.add(task_id)
+        attempt_key = self._run_attempts.get(task_id, task_id)
+        self._cancelled.add(attempt_key)
         process = self._active.get(task_id)
-        if process is None: return False
+        if process is None or self._active_attempts.get(task_id) != attempt_key:
+            return False
+        released = self._released_attempts.get(task_id) == attempt_key
         identity = self._identities.get(task_id)
         if identity is None:
             return False
         await terminate_process_tree(process, identity)
-        return True
+        return released

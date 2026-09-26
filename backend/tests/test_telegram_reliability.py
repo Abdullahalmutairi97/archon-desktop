@@ -86,12 +86,16 @@ class CompleteOnceTasks(TaskStore):
     def __init__(self, db):
         super().__init__(db)
         self.model_calls = 0
+        self.logical_session = None
 
     def submit(self, *args, **kwargs):
         task = super().submit(*args, **kwargs)
         if task['status'] == 'queued':
             self.model_calls += 1
-            self.complete(task['id'], {'text': 'Original result', 'session_id': 'session-result'})
+            attempt_id = self.mark_running(task['id'])
+            self.logical_session = task['session_id']
+            self.complete(task['id'], {'text': 'Original result', 'session_id': self.logical_session},
+                          attempt_id=attempt_id)
         return self.get(task['id'])
 
 
@@ -118,7 +122,7 @@ async def test_retry_uses_original_update_after_conversation_state_advances(tmp_
     telegram = Telegram()
     bridge = TelegramBridge(db, tasks, telegram, 42)
     await bridge.handle_update(task_update(), request_id='telegram-17')
-    assert bridge.session_for_chat(99) == 'session-result'
+    assert bridge.session_for_chat(99) == tasks.logical_session
     await bridge.handle_update(task_update(), request_id='telegram-17')
     assert tasks.model_calls == 1
     assert len(tasks.list()) == 1
@@ -145,5 +149,5 @@ async def test_same_update_key_with_changed_inbound_envelope_never_reexecutes(tm
         await retry_bridge.handle_update(task_update(**change), request_id='telegram-17')
     assert tasks.model_calls == 1
     assert len(tasks.list()) == 1
-    assert len(tasks.all_events(0)) == 2
+    assert len(tasks.all_events(0)) == 3
     assert telegram.sent == [(99, 'Original result')]

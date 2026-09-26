@@ -55,8 +55,9 @@ def test_announced_session_keeps_dispatch_location_when_hermes_cwd_is_blank(tmp_
     make_projects(projects)
     store = TaskStore(Database(tmp_path / "desktop.db"))
     task = store.submit("build here", cwd="/work/project")
+    attempt_id = store.mark_running(task["id"])
 
-    store.set_session(task["id"], "tracked-session")
+    store.set_session(task["id"], "tracked-session", attempt_id=attempt_id)
 
     rows = SessionService(state, ProjectService(projects), store.db).list()
     assert rows[0]["cwd"] == "/work/project"

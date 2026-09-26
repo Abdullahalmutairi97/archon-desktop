@@ -52,11 +52,13 @@ class TelegramBotClient:
 class TelegramBridge:
     """Relays allowlisted Telegram messages through Archon's durable task queue."""
 
-    def __init__(self, db: Database, tasks: TaskStore, telegram: TelegramClient, allowed_user_id: int):
+    def __init__(self, db: Database, tasks: TaskStore, telegram: TelegramClient, allowed_user_id: int,
+                 default_cwd: str | None = None):
         self.db = db
         self.tasks = tasks
         self.telegram = telegram
         self.allowed_user_id = allowed_user_id
+        self.default_cwd = default_cwd
         self._stop = asyncio.Event()
         with self.db.connect() as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS telegram_conversations (
@@ -123,9 +125,9 @@ class TelegramBridge:
             await self._send_text(chat_id, "New Prime conversation ready. Previous history has not been deleted.")
             return
         submit_kwargs = dict(
-            cwd=None, model=None, provider=None, skills=[],
+            cwd=self.default_cwd, model=None, provider=None, skills=[],
             session_id=self.session_for_chat(chat_id), approval_mode="approve",
-            chat_only=False, profile=None,
+            chat_only=False, profile=None, runtime_id="prime",
         )
         if request_id is not None:
             submit_kwargs["request_id"] = request_id

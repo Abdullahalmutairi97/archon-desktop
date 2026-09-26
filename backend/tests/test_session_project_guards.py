@@ -14,7 +14,8 @@ def test_project_reassignment_rechecks_busy_state_inside_write_transaction(tmp_p
     first = projects.create('First', tmp_path / 'first')
     second = projects.create('Second', tmp_path / 'second')
     original = store.submit('finished', cwd=first['primary_path'], project_id=first['id'])
-    store.complete(original['id'], {'text': 'finished'})
+    attempt_id = store.mark_running(original['id'])
+    store.complete(original['id'], {'text': 'finished'}, attempt_id=attempt_id)
     (tmp_path / 'sessions' / original['session_id']).mkdir(parents=True)
     sessions = PrimeSessionService(db, tmp_path / 'sessions', tmp_path / 'agent-sessions', projects)
     original_transaction = db.transaction

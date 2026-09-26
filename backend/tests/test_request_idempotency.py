@@ -1,9 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
+import sqlite3
 from threading import Barrier
 
 import pytest
 
+from archon_server import db as db_module
 from archon_server.db import Database
+from archon_server.migrations import v001
 from archon_server.tasks import TaskStore, hash_request_payload
 
 
@@ -21,7 +24,8 @@ def test_payload_hash_is_stable_and_preserves_list_order():
 
 def test_same_request_returns_original_after_completion_without_new_event(store):
     first = store.submit('perform side effect', request_id='telegram-17', project_id=None)
-    store.complete(first['id'], {'text': 'finished'})
+    attempt_id = store.mark_running(first['id'])
+    store.complete(first['id'], {'text': 'finished'}, attempt_id=attempt_id)
     events = store.all_events(0)
     again = store.submit('perform side effect', request_id='telegram-17', project_id=None)
     assert again['id'] == first['id']
@@ -116,6 +120,70 @@ def test_server_hash_requires_explicit_request_key(store):
     with pytest.raises(ValueError, match='request'):
         store.submit('work', request_hash='a' * 64)
     assert store.list() == []
+
+
+def test_v1_internal_fingerprint_retries_after_v2_migration(tmp_path):
+    path = tmp_path / 'v1-internal.db'
+    request_id = 'v1-internal'
+    fields = {
+        'prompt': 'retry preserved v1 task', 'cwd': '/workspace', 'model': 'model-1',
+        'provider': 'provider-1', 'skills': ['one'], 'session_id': 'prime-existing',
+        'approval_mode': 'approve', 'chat_only': False, 'profile': 'prime',
+        'project_binding': {'specified': True, 'project_id': 'project-a'},
+    }
+    # This is the published v1 implicit TaskStore fingerprint: canonical
+    # runtime identity was represented by the profile field, not a new field.
+    legacy_fingerprint = hash_request_payload(fields)
+    with sqlite3.connect(path) as conn:
+        v001.apply(conn)
+        conn.execute(
+            'CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,checksum TEXT NOT NULL,applied_at TEXT NOT NULL)'
+        )
+        conn.execute(
+            'INSERT INTO schema_migrations VALUES (1,?,?)',
+            (db_module.MIGRATION_CHECKSUM, 'historical-v1'),
+        )
+        conn.execute(
+            """INSERT INTO tasks
+               (id,prompt,cwd,model,provider,session_id,profile,approval_mode,chat_only,skills_json,
+                status,result_json,created_at,updated_at,request_hash)
+               VALUES (?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?)""",
+            (request_id, fields['prompt'], fields['cwd'], fields['model'], fields['provider'],
+             fields['session_id'], fields['profile'], fields['approval_mode'], int(fields['chat_only']),
+             '["one"]', '{"text":"already done"}', 'created', 'updated', legacy_fingerprint),
+        )
+        conn.execute(
+            "INSERT INTO session_projects(session_id,project_id,updated_at) VALUES (?,?,?)",
+            (fields['session_id'], 'project-a', 'updated'),
+        )
+        conn.execute(
+            "INSERT INTO events(task_id,type,data_json,created_at) VALUES (?,?,?,?)",
+            (request_id, 'task.queued', '{"status":"queued"}', 'created'),
+        )
+        conn.execute('PRAGMA user_version=1')
+
+    store = TaskStore(Database(path))
+    before_events = store.all_events(0)
+    retried = store.submit(
+        fields['prompt'], cwd=fields['cwd'], model=fields['model'], provider=fields['provider'],
+        skills=fields['skills'], session_id=fields['session_id'], approval_mode=fields['approval_mode'],
+        chat_only=fields['chat_only'], profile='prime', runtime_id='prime', request_id=request_id,
+        project_id='project-a',
+    )
+    assert retried['id'] == request_id
+    assert retried['status'] == 'completed'
+    assert retried['result'] == {'text': 'already done'}
+    assert store.all_events(0) == before_events
+
+
+def test_runtime_identity_cannot_change_under_same_internal_request_key(store):
+    store.submit('runtime scoped', request_id='canonical-profile', profile='prime', runtime_id='prime')
+    with pytest.raises(ValueError, match='runtime id must match'):
+        store.submit('runtime scoped', request_id='canonical-profile', profile='prime', runtime_id='pi')
+
+    store.submit('runtime scoped', request_id='explicit-runtime', runtime_id='prime')
+    with pytest.raises(ValueError, match='different request payload'):
+        store.submit('runtime scoped', request_id='explicit-runtime', runtime_id='pi')
 
 
 def test_legacy_task_without_hash_cannot_be_reinterpreted_as_retry(store):

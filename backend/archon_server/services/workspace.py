@@ -166,15 +166,21 @@ class ProjectService:
         if not cwd:
             return None
         normalized = os.path.realpath(os.path.abspath(cwd))
-        winner: tuple[int, str] | None = None
+        best_depth = -1
+        winners: set[str] = set()
         for project in self.list() if projects is None else projects:
             for folder in project["folders"]:
                 root = os.path.realpath(os.path.abspath(folder["path"]))
                 if normalized == root or normalized.startswith(root + os.sep):
-                    candidate = (len(root), project["id"])
-                    if winner is None or candidate[0] > winner[0]:
-                        winner = candidate
-        return winner[1] if winner else None
+                    depth = len(root)
+                    if depth > best_depth:
+                        best_depth = depth
+                        winners = {project["id"]}
+                    elif depth == best_depth:
+                        winners.add(project["id"])
+        if len(winners) > 1:
+            raise ValueError("Project ownership is ambiguous: multiple projects share the longest workspace root")
+        return next(iter(winners)) if winners else None
 
 
 class PrimeSessionService:
@@ -299,6 +305,177 @@ class PrimeSessionService:
         selected = {id(item) for item in branch}
         return [item for item in records if id(item) in selected or item.get("type") in {"session", "model_change"}]
 
+    @staticmethod
+    def _session_headers(path: Path) -> tuple[list[dict[str, Any]], str | None]:
+        """Read every header and retain file-level parse/read failures."""
+        headers: list[dict[str, Any]] = []
+        malformed_json = False
+        try:
+            with path.open(errors="replace") as stream:
+                for line in stream:
+                    if not line.strip():
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
+                        malformed_json = True
+                        continue
+                    if isinstance(item, dict) and item.get("type") == "session":
+                        headers.append(item)
+        except OSError:
+            return [], "unreadable_file"
+        return headers, "malformed_json" if malformed_json else None
+
+    def owner_evidence(self) -> dict[str, list[dict[str, Any]]]:
+        """Collect all native header evidence keyed by its candidate session id.
+
+        Prime agent headers use their actual header ID as the session ID; Pi
+        native history is namespaced and read-only. Archon-created per-session
+        directories can contain several native run headers, so those are kept
+        as separate evidence records without treating a run ID as the logical
+        session ID.
+        """
+        evidence: dict[str, list[dict[str, Any]]] = {}
+
+        def add(session_id: str, row: dict[str, Any]) -> None:
+            evidence.setdefault(session_id, []).append(row)
+
+        # A Desktop session is a logical directory which may contain multiple
+        # native Prime/Pi runs. The durable task ledger supplies its runtime.
+        if self.session_root.is_dir():
+            for directory in sorted(self.session_root.glob("prime-*"), key=lambda path: path.name):
+                if not directory.is_dir() or not self._safe_id(directory.name):
+                    continue
+                for path in sorted(directory.glob("*.jsonl"), key=lambda item: item.name):
+                    headers, file_error = self._session_headers(path)
+                    if not headers or file_error:
+                        add(directory.name, {
+                            "session_id": directory.name,
+                            "header_id": None,
+                            "runtime_id": None,
+                            "cwd": None,
+                            "source": "desktop",
+                            "identity_matches": False,
+                            "evidence_error": file_error or "missing_header",
+                        })
+                    for header in headers:
+                        raw_header_id = header.get("id")
+                        header_id = raw_header_id if isinstance(raw_header_id, str) else ""
+                        add(directory.name, {
+                            "session_id": directory.name,
+                            "header_id": header_id,
+                            "runtime_id": None,
+                            "cwd": str(header.get("cwd") or "") or None,
+                            "source": "desktop",
+                            "identity_matches": bool(self._safe_id(header_id)),
+                            "evidence_error": file_error or (
+                                "invalid_header_id" if not self._safe_id(header_id) else None
+                            ),
+                        })
+
+        # Keep every matching source/header pair. _agent_files intentionally
+        # projects a single path for display, which is insufficient for an
+        # ownership decision when native evidence is duplicated or conflicting.
+        candidates: set[Path] = set()
+
+        def add_files(root: Path, *, recursive: bool) -> None:
+            try:
+                resolved_root = root.resolve(strict=True)
+            except OSError:
+                return
+            paths = root.rglob("*.jsonl") if recursive else root.glob("*.jsonl")
+            for path in paths:
+                try:
+                    if path.is_file() and path.resolve(strict=True).is_relative_to(resolved_root):
+                        candidates.add(path)
+                except OSError:
+                    continue
+
+        add_files(self.agent_session_root, recursive=False)
+        add_files(self.agent_artifact_root, recursive=True)
+        if self.pi_session_root:
+            add_files(self.pi_session_root, recursive=True)
+
+        pi_root = None
+        if self.pi_session_root and self.pi_session_root.is_dir():
+            try:
+                pi_root = self.pi_session_root.resolve(strict=True)
+            except OSError:
+                pi_root = None
+
+        for path in sorted(candidates, key=lambda item: str(item)):
+            try:
+                resolved = path.resolve(strict=True)
+            except OSError:
+                continue
+            runtime_id = "pi" if pi_root is not None and resolved.is_relative_to(pi_root) else "prime"
+            headers, file_error = self._session_headers(path)
+            stem = path.stem
+            candidate_id = f"pi-native-{stem}" if runtime_id == "pi" else stem
+            if not headers and self._safe_id(stem):
+                # A native session file without its required header is not
+                # identity evidence. Keep that absence attached to a safe
+                # filename candidate so existing ownership cannot silently
+                # survive a corrupt or partially written native record.
+                add(candidate_id, {
+                    "session_id": candidate_id,
+                    "header_id": None,
+                    "runtime_id": runtime_id,
+                    "cwd": None,
+                    "source": "native",
+                    "identity_matches": False,
+                    "evidence_error": file_error or "missing_header",
+                })
+            for header in headers:
+                raw_header_id = header.get("id")
+                header_id = str(raw_header_id) if isinstance(raw_header_id, str) else ""
+                if not self._safe_id(header_id):
+                    # Do not accept a malformed header ID, but do not drop its
+                    # runtime/cwd evidence either. Associate it with the safe
+                    # filename candidate as an explicit identity mismatch.
+                    if self._safe_id(stem):
+                        add(candidate_id, {
+                            "session_id": candidate_id,
+                            "header_id": header_id or None,
+                            "runtime_id": runtime_id,
+                            "cwd": str(header.get("cwd") or "") or None,
+                            "source": "native",
+                            "identity_matches": False,
+                            "evidence_error": file_error or "invalid_header_id",
+                        })
+                    continue
+                session_id = f"pi-native-{header_id}" if runtime_id == "pi" else header_id
+                add(session_id, {
+                    "session_id": session_id,
+                    "header_id": header_id,
+                    "runtime_id": runtime_id,
+                    "cwd": str(header.get("cwd") or "") or None,
+                    "source": "native",
+                    "identity_matches": True,
+                    "evidence_error": file_error,
+                })
+
+                # A filename/header mismatch is evidence of a possible legacy
+                # alias, never a second authoritative ID. Surface it as an
+                # explicit mismatch if a caller asks for the filename ID.
+                if self._safe_id(stem) and stem != header_id:
+                    add(candidate_id, {
+                        "session_id": candidate_id,
+                        "header_id": header_id,
+                        "runtime_id": runtime_id,
+                        "cwd": str(header.get("cwd") or "") or None,
+                        "source": "native",
+                        "identity_matches": False,
+                        "evidence_error": "filename_header_mismatch",
+                    })
+
+        return evidence
+
+    def ownership_evidence(self, session_id: str) -> list[dict[str, Any]]:
+        if not self._safe_id(session_id):
+            return []
+        return self.owner_evidence().get(session_id, [])
+
     def _agent_files(self) -> dict[str, Path]:
         """All native CLI/TUI session files, including RLM child sessions.
 
@@ -390,13 +567,57 @@ class PrimeSessionService:
             ).fetchone()
         return str(row["cwd"]) if row else None
 
-    def _ids(self, agent_files: dict[str, Path] | None = None) -> set[str]:
-        native = {p.name for p in self.session_root.glob("prime-*") if p.is_dir()}
-        native.update(self._agent_files() if agent_files is None else agent_files)
+    def _ids(
+        self,
+        agent_files: dict[str, Path] | None = None,
+        evidence: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> set[str]:
+        native = {
+            path.name for path in self.session_root.glob("prime-*")
+            if path.is_dir() and self._safe_id(path.name)
+        }
+        current_agent_files = self._agent_files() if agent_files is None else agent_files
+        native.update(current_agent_files)
+        # Keep safe canonical evidence candidates visible when a native file
+        # becomes unreadable or malformed. Filename-only candidates that are
+        # known to disagree with a header stay suppressed, so renamed files do
+        # not appear as duplicate logical sessions.
+        candidates = self.owner_evidence() if evidence is None else evidence
+        filename_aliases = {
+            session_id for session_id, records in candidates.items()
+            if records and all(
+                record.get("evidence_error") == "filename_header_mismatch"
+                for record in records
+            )
+        }
+        live_evidence_ids = {
+            session_id for session_id, records in candidates.items()
+            if self._safe_id(session_id) and any(
+                record.get("evidence_error") != "filename_header_mismatch"
+                for record in records
+            )
+        }
+        native.update(live_evidence_ids)
+        live_native_ids = set(current_agent_files)
+        live_native_ids.update(live_evidence_ids)
         with self.locations.connect() as conn:
-            native.update(row["session_id"] for row in conn.execute("SELECT DISTINCT session_id FROM tasks WHERE session_id LIKE 'prime-%'") if row["session_id"])
+            for query in (
+                "SELECT DISTINCT session_id FROM tasks WHERE session_id IS NOT NULL",
+                "SELECT session_id FROM session_projects",
+                "SELECT session_id FROM session_ownership",
+            ):
+                native.update(
+                    row["session_id"] for row in conn.execute(query)
+                    if self._safe_id(row["session_id"])
+                )
             deleted = {row["session_id"] for row in conn.execute("SELECT session_id FROM deleted_sessions")}
-        return native - deleted
+        visible = native - deleted - filename_aliases
+        # Pi native history is a live, read-only projection. Its cached owner
+        # row must not resurrect a file that has been removed or archived.
+        return {
+            session_id for session_id in visible
+            if not session_id.startswith("pi-native-") or session_id in live_native_ids
+        }
 
     def _project_assignments(self) -> dict[str, str | None]:
         with self.locations.connect() as conn:
@@ -464,7 +685,8 @@ class PrimeSessionService:
         project_catalog = self.projects.list() if self.projects else []
         known_project_ids = {project["id"] for project in project_catalog}
         agent_files = self._agent_files()
-        session_ids = self._ids(agent_files)
+        evidence = self.owner_evidence()
+        session_ids = self._ids(agent_files, evidence)
         # Aggregate ledger metadata once.  Avoid per-session connections and
         # avoid SQLite's variable limit when many native sessions are present.
         metadata: dict[str, sqlite3.Row] = {}
@@ -528,6 +750,7 @@ class PrimeSessionService:
             cwd = cwd or str((row["cwd"] if row else "") or "")
             # Explicit bindings, including NULL and a removed project, suppress
             # cwd inference. A replacement project must not adopt old sessions.
+            project_ambiguous = False
             if session_id in assignments:
                 assigned_project = assignments[session_id]
                 matched_project = (
@@ -536,13 +759,23 @@ class PrimeSessionService:
                     else None
                 )
             else:
-                matched_project = self.projects.project_for_path(cwd, project_catalog) if self.projects else None
+                try:
+                    matched_project = self.projects.project_for_path(cwd, project_catalog) if self.projects else None
+                except ValueError:
+                    # Keep unrelated and ambiguous sessions in the projection.
+                    # Admission still rejects the ambiguity instead of choosing
+                    # one of the competing projects.
+                    matched_project = None
+                    project_ambiguous = True
             if project_id and matched_project != project_id:
                 continue
             title = self._content_title(user_texts)
             preview = next((text.strip() for text in reversed(user_texts) if text.strip()), title)
             origin = "pi-cli" if session_id.startswith("pi-native-") else ("prime" if (self.session_root / session_id).is_dir() else "prime-cli")
-            result.append({"id": session_id, "source": origin, "title": title, "model": str((row["model"] if row else None) or model), "cwd": cwd, "project_id": matched_project, "started_at": started or self._timestamp(header.get("timestamp")), "last_active": active or max((self._timestamp(x.get("timestamp")) for x in native), default=0), "message_count": len(visible_messages), "active": session_id in active_sessions, "preview": preview[:180]})
+            session_row = {"id": session_id, "source": origin, "title": title, "model": str((row["model"] if row else None) or model), "cwd": cwd, "project_id": matched_project, "started_at": started or self._timestamp(header.get("timestamp")), "last_active": active or max((self._timestamp(x.get("timestamp")) for x in native), default=0), "message_count": len(visible_messages), "active": session_id in active_sessions, "preview": preview[:180]}
+            if project_ambiguous:
+                session_row["project_ownership_ambiguous"] = True
+            result.append(session_row)
         result.sort(key=lambda x: x["last_active"], reverse=True)
         return result[:max(1, min(limit, 500))]
 
@@ -553,6 +786,7 @@ class PrimeSessionService:
         native: list[dict[str, Any]] | None = None,
         task_rows: list[sqlite3.Row] | None = None,
     ) -> list[dict[str, Any]]:
+        explicitly_projected = native is not None or task_rows is not None
         native = self._native(session_id) if native is None else native
         result = []
         for item in native:
@@ -605,7 +839,7 @@ class PrimeSessionService:
                     "FROM tasks WHERE session_id=? ORDER BY created_at,id",
                     (session_id,),
                 ).fetchall()
-        if not native and not task_rows:
+        if not native and not task_rows and not explicitly_projected:
             raise KeyError(session_id)
         # Consume matching native records one-for-one. Repeated prompts or
         # replies are valid turns and must not be collapsed across ledger tasks.

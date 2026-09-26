@@ -102,21 +102,47 @@ def test_recovery_stops_previously_started_legacy_quota_queue(tmp_path):
 def test_late_writes_and_cancel_cannot_overwrite_recovery(tmp_path):
     store = TaskStore(Database(tmp_path / "state.db"))
     task = store.submit("unknown outcome", cwd=str(tmp_path))
-    store.mark_running(task["id"])
+    attempt_id = store.mark_running(task["id"])
     store.recover_inflight()
     recovered = store.get(task["id"])
     events = store.events(task["id"])
 
-    store.complete(task["id"], {"text": "late success", "session_id": "late-session"})
-    store.fail(task["id"], "late failure")
-    assert store.cancel(task["id"]) is False
-    store.defer_for_quota(task["id"], 60)
+    assert store.complete(task["id"], {"text": "late success", "session_id": "late-session"}, attempt_id=attempt_id) is False
+    assert store.fail(task["id"], "late failure", attempt_id=attempt_id) is False
+    assert store.cancel(task["id"], attempt_id=attempt_id) is False
+    store.defer_for_quota(task["id"], 60, attempt_id=attempt_id)
     store.mark_running(task["id"])
-    store.set_session(task["id"], "late-session")
+    assert store.set_session(task["id"], "late-session", attempt_id=attempt_id) is False
 
     assert store.get(task["id"]) == recovered
     assert store.events(task["id"]) == events
     assert store.db.session_locations(["late-session"]) == {}
+
+
+def test_recovery_synthesizes_attempt_for_legacy_running_row_once(tmp_path):
+    store = TaskStore(Database(tmp_path / "state.db"))
+    task = store.submit("legacy active", profile="prime", cwd="/workspace")
+    with store.db.transaction() as conn:
+        conn.execute(
+            "UPDATE tasks SET status='running',started_at='legacy-start',current_attempt_id=NULL WHERE id=?",
+            (task["id"],),
+        )
+
+    assert store.recover_inflight() == 1
+    recovered = store.get(task["id"])
+    attempt_id = recovered["current_attempt_id"]
+    with store.db.connect() as conn:
+        attempt = conn.execute("SELECT * FROM task_attempts WHERE id=?", (attempt_id,)).fetchone()
+    assert recovered["status"] == "failed"
+    assert attempt["state"] == "interrupted"
+    assert attempt["started_at"] == "legacy-start"
+    assert (attempt["runtime_id"], attempt["cwd"]) == ("prime", "/workspace")
+    failed = store.events(task["id"])[-1]
+    assert failed["type"] == "task.failed"
+    assert failed["attempt_id"] == attempt_id
+    assert store.recover_inflight() == 0
+    with store.db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM task_attempts WHERE task_id=?", (task["id"],)).fetchone()[0] == 1
 
 
 @pytest.mark.asyncio
