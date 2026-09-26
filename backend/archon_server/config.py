@@ -16,7 +16,9 @@ def _account_home() -> Path:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="ARCHON_DESKTOP_",
-        env_file=".env",
+        # Production configuration is supplied by the service manager's external
+        # EnvironmentFile. Never load a repository-local .env implicitly.
+        env_file=None,
         extra="ignore",
     )
 
@@ -44,11 +46,14 @@ class Settings(BaseSettings):
     prime_bundled_skills_dir: Path = Field(default_factory=lambda: _account_home() / ".local" / "lib" / "node_modules" / "prime-agent" / "dist" / "skills")
     prime_user_skills_dir: Path = Field(default_factory=lambda: _account_home() / ".prime" / "agent" / "skills")
     prime_agent_artifact_dir: Path = Field(default_factory=lambda: _account_home() / ".prime" / "agent" / "session-artifacts")
-    auth_token: str = ""
-    telegram_bot_token: str = ""
+    auth_token: str = Field(default="", repr=False)
+    telegram_bot_token: str = Field(default="", repr=False)
     telegram_allowed_user_id: int | None = None
     bind_host: str = "127.0.0.1"
     bind_port: int = 8787
+    fixture_mode: bool = False
+    remote_access_mode: str = "disabled"
+    remote_base_url: str | None = None
     backup_dir: Path = Field(default_factory=lambda: _account_home() / "backups")
     backup_script: Path = Field(default_factory=lambda: _account_home() / ".hermes" / "scripts" / "archon-backup.sh")
     restore_script: Path = Field(default_factory=lambda: _account_home() / ".hermes" / "scripts" / "archon-restore.sh")

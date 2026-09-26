@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ..child_env import build_child_env
+
 # Board statuses the Hermes kanban kernel uses, in the order a card moves through them.
 COLUMNS = ["triage", "todo", "ready", "running", "blocked", "scheduled", "done"]
 
@@ -113,7 +115,7 @@ class KanbanService:
     def _run(self, args: list[str]) -> dict[str, Any]:
         proc = subprocess.run(  # noqa: S603 -- argv is a fixed list, ids and profiles are validated
             [str(self.hermes), "kanban", *args],
-            capture_output=True, text=True, timeout=90,
+            capture_output=True, text=True, timeout=90, env=build_child_env("operations"),
         )
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or proc.stdout or "kanban command failed").strip()[:600])

@@ -33,6 +33,8 @@ async def test_tmux_sessions_are_namespaced_and_portable(tmp_path):
     assert commands.calls[0][:3] == ["tmux", "has-session", "-t"]
     assert commands.calls[1][:4] == ["tmux", "new-session", "-d", "-s"]
     assert commands.kwargs[1].get("detach_stdio") is True
+    assert commands.kwargs[0].get("environment_scope") == "terminal"
+    assert commands.kwargs[1].get("environment_scope") == "terminal"
     assert sessions[0]["name"] == "archon-desktop-ops"
 
 

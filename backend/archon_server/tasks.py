@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import sqlite3
 import uuid
 import re
 from datetime import datetime, timezone
@@ -108,6 +109,30 @@ class Runner(Protocol):
 class TaskStore:
     def __init__(self, db: Database):
         self.db = db
+
+    def readiness_stats(self) -> dict[str, Any]:
+        """Check the existing DB is readable/writable and return queue aggregates.
+
+        BEGIN IMMEDIATE proves the database can accept a writer without changing
+        task, attempt, event, or queue state. The short timeout keeps a readiness
+        poll bounded when another SQLite writer is active.
+        """
+        with self.db.connect() as conn:
+            conn.execute("PRAGMA busy_timeout=1000")
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """SELECT
+                       SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END) AS queued,
+                       SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) AS running,
+                       MIN(CASE WHEN status='queued' THEN created_at END) AS oldest_queued_at
+                   FROM tasks"""
+            ).fetchone()
+            conn.commit()
+        return {
+            "queued": int(row["queued"] or 0),
+            "running": int(row["running"] or 0),
+            "oldest_queued_at": row["oldest_queued_at"],
+        }
 
     def bind_session_owner(self, conn, session_id: str, runtime_id: str, cwd: str | None) -> bool:
         """Bind a new verified owner, or require an exact verified match.
@@ -768,11 +793,13 @@ class TaskEngine:
         self._stop = asyncio.Event()
         self._recovered = False
 
-    async def run_once(self) -> bool:
+    async def run_once(self, *, worker_id: str | None = None, tracker=None) -> bool:
         task = self.store.claim_next()
         if task is None:
             return False
         attempt_id = task["current_attempt_id"]
+        if worker_id is not None and tracker is not None:
+            tracker.claimed(worker_id, task["id"], attempt_id)
         # This callback is adapter-only ephemeral state. It is never part of a
         # persisted task, event, or result payload.
         task["_attempt_active"] = lambda: self.store.attempt_active(task["id"], attempt_id)
@@ -819,6 +846,9 @@ class TaskEngine:
                 # the row/attempt terminal instead of killing this worker while
                 # leaving its durable attempt marked running.
                 self.store.fail(task["id"], str(exc), attempt_id=attempt_id)
+        finally:
+            if worker_id is not None and tracker is not None:
+                tracker.finished(worker_id)
         return True
 
     def _runner_for(self, task: dict[str, Any]) -> Runner:
@@ -856,18 +886,50 @@ class TaskEngine:
         await cancel(task_id)
         self.store.cancel(task_id, attempt_id=attempt_id)
 
-    async def run_forever(self) -> None:
+    async def run_forever(self, worker_id: str | None = None, tracker=None) -> None:
         # Multiple workers share one engine. Recover only once; repeating this
         # operation lets one worker interrupt tasks already claimed by another.
-        if not self._recovered:
-            self._recovered = True
-            self.store.recover_inflight()
-        while not self._stop.is_set():
-            worked = await self.run_once()
-            if not worked:
+        heartbeat_task = None
+        if worker_id is not None and tracker is not None:
+            from .readiness import worker_heartbeat_task
+
+            tracker.register(worker_id)
+            heartbeat_task = worker_heartbeat_task(
+                worker_id, tracker, asyncio.current_task(),
+                interval=min(1.0, max(0.1, self.poll_seconds)),
+            )
+        try:
+            if not self._recovered:
+                self._recovered = True
+                self.store.recover_inflight()
+            while not self._stop.is_set():
+                worked = await self.run_once(worker_id=worker_id, tracker=tracker)
+                if not worked:
+                    try:
+                        await asyncio.wait_for(self._stop.wait(), timeout=self.poll_seconds)
+                    except TimeoutError:
+                        pass
+        except asyncio.CancelledError:
+            if worker_id is not None and tracker is not None:
+                tracker.stopped(worker_id)
+            raise
+        except sqlite3.Error:
+            if worker_id is not None and tracker is not None:
+                tracker.stopped(worker_id, error_code="worker_storage_failed")
+            raise
+        except Exception:
+            if worker_id is not None and tracker is not None:
+                tracker.stopped(worker_id, error_code="worker_loop_failed")
+            raise
+        else:
+            if worker_id is not None and tracker is not None:
+                tracker.stopped(worker_id)
+        finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
                 try:
-                    await asyncio.wait_for(self._stop.wait(), timeout=self.poll_seconds)
-                except TimeoutError:
+                    await heartbeat_task
+                except asyncio.CancelledError:
                     pass
 
     def stop(self) -> None:

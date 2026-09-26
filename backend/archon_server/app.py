@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -43,9 +42,12 @@ from .services.kanban import KanbanService
 from .services.voice import VoiceService
 from .services.workspace import ProjectService, SessionService, PrimeSessionService
 from .tasks import TaskEngine, TaskStore, hash_request_payload
+from .security import token_authorized, validate_server_security
+from .readiness import WorkerTracker, build_readiness_snapshot
 
 
 logger = logging.getLogger(__name__)
+WEBSOCKET_AUTH_TIMEOUT_SECONDS = 5.0
 
 
 class TaskCreate(BaseModel):
@@ -241,6 +243,7 @@ def _sse_event_batch(store: TaskStore, cursor: int, limit: int = 512) -> tuple[i
 
 def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     settings = settings or Settings()
+    validate_server_security(settings)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     command_runner = CommandRunner()
     agents = AgentService(settings.hermes_home, settings.profile)
@@ -346,7 +349,12 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     terminals = TmuxService(settings.archon_root, command_runner)
     logs = LogService(settings.profile_home / "logs")
     voice = VoiceService(settings.hermes_home / "hermes-agent", settings.profile_home, command_runner)
-    worker_tasks: list[asyncio.Task] = []
+    worker_ids = [f"worker-{index + 1}" for index in range(settings.worker_count)]
+    worker_tracker = WorkerTracker(
+        heartbeat_timeout_seconds=max(5.0, settings.worker_poll_seconds * 4),
+    )
+    worker_tracker.configure(worker_ids)
+    worker_tasks: dict[str, asyncio.Task] = {}
     telegram_bridge: TelegramBridge | None = None
     telegram_task: asyncio.Task | None = None
 
@@ -357,16 +365,37 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         app.state.store = store
         app.state.engine = engine
         app.state.runtimes = registry
+        app.state.worker_tracker = worker_tracker
         app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
         if settings.start_worker:
             # Each worker shares the engine's one-time recovery guard and
             # claims its own row atomically.
             # compare-and-swap (UPDATE ... WHERE id=? AND status='queued', then a
             # rowcount check), so two workers can never take the same task.
-            worker_tasks = [
-                asyncio.create_task(engine.run_forever(), name=f"archon-task-worker-{index}")
-                for index in range(settings.worker_count)
-            ]
+            worker_tasks = {}
+            for worker_id in worker_ids:
+                worker = asyncio.create_task(
+                    engine.run_forever(worker_id=worker_id, tracker=worker_tracker),
+                    name=f"archon-task-{worker_id}",
+                )
+                worker_tasks[worker_id] = worker
+
+                def record_worker_exit(task: asyncio.Task, *, stable_id: str = worker_id) -> None:
+                    if task.cancelled():
+                        worker_tracker.stopped(stable_id)
+                        return
+                    try:
+                        error = task.exception()
+                    except asyncio.CancelledError:
+                        error = None
+                    if error is None:
+                        worker_tracker.stopped(stable_id)
+                    else:
+                        worker_tracker.stopped(stable_id, error_code="worker_loop_failed")
+                        # Keep failure details out of API responses and logs.
+                        logger.error("Task worker %s stopped unexpectedly (worker_loop_failed)", stable_id)
+
+                worker.add_done_callback(record_worker_exit)
         if settings.telegram_enabled:
             telegram_bridge = TelegramBridge(
                 store.db, store, TelegramBotClient(settings.telegram_bot_token),
@@ -393,11 +422,15 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         # Uvicorn exits. Cancelling workers here used to kill the child process
         # mid-session and leave Prime's session lock behind after a restart.
         engine.stop()
-        for worker in worker_tasks:
+        for worker_id, worker in worker_tasks.items():
             try:
                 await worker
             except asyncio.CancelledError:
                 pass
+            except Exception:
+                worker_tracker.stopped(worker_id, error_code="worker_loop_failed")
+                # A dead worker must not prevent cleanup of its siblings.
+                logger.error("Task worker %s failed during shutdown (worker_loop_failed)", worker_id)
 
     app = FastAPI(title="Archon Desktop Server", version="0.2.0", lifespan=lifespan)
     app.add_middleware(
@@ -408,8 +441,12 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     )
 
     def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
-        supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
-        if settings.auth_token and not hmac.compare_digest(supplied, settings.auth_token):
+        supplied = None
+        if isinstance(authorization, str):
+            scheme, separator, value = authorization.partition(" ")
+            if separator and scheme.lower() == "bearer":
+                supplied = value
+        if not token_authorized(settings, supplied):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     protected = [Depends(authorize)]
@@ -443,6 +480,22 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     @app.get("/api/health")
     def health():
         return {"ok": True, "service": "archon-desktop-server", "version": app.version}
+
+    @app.get("/api/readiness", dependencies=protected)
+    def readiness():
+        response = build_readiness_snapshot(
+            store,
+            registry,
+            worker_tracker,
+            worker_tasks,
+            configured_workers=settings.worker_count,
+            workers_enabled=settings.start_worker,
+            remote_access_mode=settings.remote_access_mode,
+        )
+        return JSONResponse(
+            response,
+            status_code=200 if response["dispatch_ready"] else 503,
+        )
 
     @app.post("/api/echo", dependencies=protected)
     def echo(payload: EchoRequest):
@@ -995,9 +1048,18 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     async def terminal_socket(websocket: WebSocket, name: str):
         await websocket.accept()
         try:
-            first = await asyncio.wait_for(websocket.receive_json(), timeout=10)
-            token = str(first.get("token", ""))
-            if settings.auth_token and not hmac.compare_digest(token, settings.auth_token):
+            try:
+                first = await asyncio.wait_for(
+                    websocket.receive_json(), timeout=WEBSOCKET_AUTH_TIMEOUT_SECONDS,
+                )
+            except (TimeoutError, ValueError, json.JSONDecodeError, WebSocketDisconnect):
+                try:
+                    await websocket.close(code=4401)
+                except Exception:
+                    pass
+                return
+            token = first.get("token") if isinstance(first, Mapping) else None
+            if not token_authorized(settings, token):
                 await websocket.close(code=4401)
                 return
             await terminals.bridge(websocket, name)

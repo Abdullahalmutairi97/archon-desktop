@@ -10,14 +10,17 @@ def test_api_rejects_missing_or_wrong_token(tmp_path):
         assert client.get("/api/health").status_code == 200
         assert client.get("/api/tasks").status_code == 401
         assert client.get("/api/tasks", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        assert client.get("/api/tasks", headers={"Authorization": "Bearer correct-token "}).status_code == 401
         assert client.get("/api/tasks", headers={"Authorization": "Bearer correct-token"}).status_code == 200
 
 
-def test_api_allows_requests_without_token_when_auth_is_disabled(tmp_path):
-    app = create_app(Settings(data_dir=tmp_path, auth_token="", start_worker=False))
+def test_isolated_fixture_mode_allows_only_missing_token_requests(tmp_path):
+    app = create_app(Settings(
+        data_dir=tmp_path, auth_token="", fixture_mode=True, start_worker=False,
+    ))
     with TestClient(app) as client:
         assert client.get("/api/tasks").status_code == 200
-        assert client.get("/api/tasks", headers={"Authorization": "Bearer stale-token"}).status_code == 200
+        assert client.get("/api/tasks", headers={"Authorization": "Bearer stale-token"}).status_code == 401
 
 
 def test_cors_only_allows_electron_and_loopback_origins(tmp_path):

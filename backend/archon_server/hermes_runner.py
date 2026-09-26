@@ -9,6 +9,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from .child_env import build_child_env
+
 
 CONTROL_PREFIX = "@@archon "
 MAX_EVENT_TEXT = 4096
@@ -291,10 +293,17 @@ async def terminate_process_tree(
 
 
 class HermesRunner:
-    def __init__(self, executable: Path, profile: str = "archon", default_cwd: Path | None = None):
+    def __init__(
+        self,
+        executable: Path,
+        profile: str = "archon",
+        default_cwd: Path | None = None,
+        hermes_home: Path | None = None,
+    ):
         self.executable = Path(executable)
         self.profile = profile
         self.default_cwd = Path(default_cwd) if default_cwd else Path.home()
+        self.hermes_home = Path(hermes_home).expanduser() if hermes_home else Path.home() / ".hermes"
         self._active: dict[str, asyncio.subprocess.Process] = {}
         self._identities: dict[str, ProcessIdentity] = {}
         self._cancelled: set[str] = set()
@@ -340,9 +349,12 @@ class HermesRunner:
         if skills:
             argv += ["-s", ",".join(skills)]
         cwd = task.get("cwd") or str(self.default_cwd)
-        child_env = os.environ.copy()
-        child_env["ARCHON_DESKTOP_CONTROL_MODULE"] = str(
-            Path(__file__).with_name("hermes_control.py")
+        child_env = build_child_env(
+            "hermes",
+            overrides={
+                "HERMES_HOME": str(self.hermes_home),
+                "ARCHON_DESKTOP_CONTROL_MODULE": str(Path(__file__).with_name("hermes_control.py")),
+            },
         )
         process = await asyncio.create_subprocess_exec(
             *supervised_argv(argv),

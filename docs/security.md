@@ -1,14 +1,15 @@
 # Security model
 
-- The current listener is `100.80.70.23:9700`, selected by the protected `ARCHON_DESKTOP_BIND_HOST` and `ARCHON_DESKTOP_BIND_PORT` environment settings and reachable only inside the tailnet with bearer authentication retained.
-- The service must never bind to `0.0.0.0` or a public interface.
-- The backend token is generated with 256 bits of randomness and stored only in `backend/.env` with mode 0600.
-- Provider credentials, Hermes `.env` values, SSH keys, and backup encryption keys never enter desktop API responses.
-- Electron uses context isolation, a minimal preload bridge, disabled Node integration in the renderer, and `safeStorage` for the connection token when the OS keyring supports it.
-- Filesystem APIs resolve every path beneath the configured account root and block secret-like names.
-- SQL uses parameterized statements.
-- Subprocesses use argument arrays; user input is not executed with `shell=True`.
-- Restore, schedule, cron, service, model, and skill mutations require explicit confirmation and are audit events.
-- CORS permits only local Electron/file origins and loopback development origins.
+The backend requires a configured single-owner bearer credential and a loopback listener. Missing credentials fail before database creation. Anonymous access is allowed only when an isolated fixture explicitly sets `fixture_mode=True`; `/api/health` remains minimal anonymous liveness in ordinary operation. HTTP and terminal WebSocket authentication use the same constant-time comparison, and WebSocket authentication has a bounded timeout before any terminal opens.
 
-The current private endpoint is HTTP inside Tailscale. Traffic is encrypted by Tailscale; no public TLS endpoint or domain is required.
+Generate new credentials with the [operator setup helper](operator-setup.md): at least 256 random bits, written once to a mode-0600 file in a private external directory. Supply every configured scratch/account and registered project root so the helper can reject workspace destinations. The server consumes exported configuration; it does not implicitly read a repository `.env`. Keep provider credentials, SSH keys and backup encryption material out of API responses, Git and logs.
+
+Direct plaintext tailnet/public/private-interface listeners are rejected. Remote operation requires a separately managed private HTTPS proxy forwarding to loopback, bearer authentication and an explicit valid HTTPS configuration. This source validates configuration only: it does not deploy or verify private ingress, TLS, certificate trust or network reachability. Uvicorn does not trust forwarded headers by default.
+
+New child processes receive explicit allowlists for their purpose. Essentials such as PATH, HOME, locale and selected XDG paths survive; coordinator and Telegram tokens, arbitrary provider keys, ambient Python/Node injection settings and shell-startup variables do not. No ambient provider credentials are currently registered. Hermes and voice receive narrowly scoped server-owned overrides. Existing native processes and tmux servers may retain their old environments. All native agents still share their OS account's file access; environment filtering is not a process or filesystem sandbox.
+
+Filesystem APIs canonicalize configured roots and block traversal and secret-like names. SQL uses parameterized statements and subprocesses use argument arrays. Trusted execution may still invoke external tools or modify files with the service account's authority. Destructive operational APIs retain confirmation and audit requirements.
+
+The maintained desktop source/build work in P2 must establish context isolation, a minimal validated preload bridge, disabled renderer Node integration and protected or memory-only connection credentials. Historical source intent and fixture checks do not establish those properties in the missing frozen v0.3.0 ASAR or an installed client. Native credential storage and onboarding remain qualification gates.
+
+Authenticated readiness distinguishes storage/worker/executable dispatch eligibility from provider credentials, successful execution and native conformance. It reports those verification flags as false until separate evidence exists. Worker heartbeats are process-local event-loop observations, not proof of agent progress or exactly-once effects.

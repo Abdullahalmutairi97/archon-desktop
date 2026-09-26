@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from ..child_env import build_child_env
+
 
 class AgentResourceService:
     """Read-only, per-runtime global inventory using installed native skill parsers.
@@ -24,7 +26,7 @@ class AgentResourceService:
         result = subprocess.run(
             [self.node, str(Path(__file__).with_name('resource_probe.mjs'))],
             input=json.dumps({'runtime': runtime, **spec}), text=True,
-            capture_output=True, timeout=15, check=True,
+            capture_output=True, timeout=15, check=True, env=build_child_env("resources"),
         )
         if len(result.stdout) > 5_000_000:
             raise ValueError('Inventory is too large')

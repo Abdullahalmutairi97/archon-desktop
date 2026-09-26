@@ -64,6 +64,7 @@ async def test_voice_service_uses_the_local_hermes_runtime_for_stt_and_tts(tmp_p
     assert transcript_commands.calls[0][0][0] == str(python)
     assert transcript_commands.calls[0][1]['cwd'] == hermes_root
     assert transcript_commands.calls[0][1]['env']['HERMES_HOME'] == str(profile_home)
+    assert transcript_commands.calls[0][1]['environment_scope'] == 'voice'
 
     speech_commands = FakeCommands({
         'returncode': 0,

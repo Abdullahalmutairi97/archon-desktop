@@ -15,14 +15,14 @@ python3 -m venv backend/.venv
 backend/.venv/bin/python -m pip install -e './backend[dev]'
 ```
 
-For a new development configuration only, copy `backend/.env.example` to `backend/.env` if it does not already exist. Review every path and bind setting; examples are not a production configuration. Set a strong, non-empty `ARCHON_DESKTOP_AUTH_TOKEN` locally. Never paste it into issues, logs, or chat.
+Provision a non-empty bearer credential in a private external service environment file using the [operator setup guide](../docs/operator-setup.md). `backend/.env.example` documents setting names; the server no longer loads a working-directory `.env` automatically. Review every path and bind setting. Never paste credentials into issues, logs, chat or command-line arguments. The manual entrypoint below expects configuration already exported by the service manager or a protected local launcher.
 
 ```bash
 cd backend
 .venv/bin/python -m archon_server.main
 ```
 
-The real entrypoint is **`archon_server.main`**, not `hermes.main`. Settings read `.env` from the working directory and environment variables prefixed `ARCHON_DESKTOP_`. Source defaults are loopback port 8787. Data defaults to the OS account's `~/.local/share/archon-desktop/`, independent of an agent's overridden `$HOME`.
+The real entrypoint is **`archon_server.main`**, not `hermes.main`. Settings read exported environment variables prefixed `ARCHON_DESKTOP_`; implicit `.env` loading is disabled. Source defaults are loopback port 8787. Data defaults to the OS account's `~/.local/share/archon-desktop/`, independent of an agent's overridden `$HOME`.
 
 For a truly isolated development server, configure a separate data directory, agent history/artifact directories, resource roots, and workspace root. Starting the server with default paths is not a fixture test.
 
@@ -56,7 +56,10 @@ Tests cover authentication, API operations, runtime selection, native histories,
 - Every claim records a durable attempt. Runner events, session attachment and terminal transitions require the captured current attempt identity; stale or missing tokens cannot mutate another attempt. Running cancellation records intent before teardown, and native prelaunch gates check both local cancellation and durable attempt eligibility. A teardown error retains intent for investigation/retry instead of claiming the process stopped.
 - Tasks snapshot canonical runtime and project identity at admission. Session reconciliation uses all relevant evidence; ambiguous historical aliases, conflicting native headers or runtime/cwd disagreement require review before execution. Existing sessions keep their runtime across alias changes, and historical task project snapshots survive idle session reassignment. See [Phase 1C.2 behavior and limits](../docs/releases/phase-1c2-durable-attempts.md).
 - Prime/Pi histories have different continuation and deletion rules; check runtime-specific API responses rather than treating them as interchangeable.
-- Blank configured authentication currently disables the shared-token check; use it only in isolated fixtures. Phase 1A does not add team identities or complete the planned admission/authentication hardening.
+- Missing or whitespace-only credentials refuse startup before database creation. Anonymous fixture access requires explicit `fixture_mode=True` and a loopback listener. HTTP and terminal WebSocket authentication share the same constant-time token policy. This remains a single-owner bearer credential, not team identity.
+- Backend listeners bind only to loopback. Remote use requires `remote_access_mode="private_tls_proxy"` plus a valid HTTPS `remote_base_url` and an operator-managed private ingress. URL validation does not verify the proxy or TLS deployment; Uvicorn ignores forwarded headers by default.
+- `/api/health` is anonymous process liveness. Authenticated `/api/readiness` returns 200 only when storage, configured workers and at least one registered runtime executable are available, otherwise 503. Worker heartbeats describe process-local event-loop responsiveness. Credentials, native conformance and actual execution remain explicitly unverified.
+- New children receive explicit purpose-scoped environment dictionaries. Ambient coordinator/Telegram/provider secrets and shell-injection variables are excluded. No ambient provider keys are currently allowlisted; supported native authentication remains file/profile based. Voice and Hermes receive only their server-constructed special overrides. This does not restrict OS-account file access or change preexisting tmux/native environments.
 - Optional Telegram needs private bot configuration. Tests use fake clients; do not invoke a live bot for unit verification.
 
 See the root [README](../README.md), [version policy](../docs/versions.md), and [release checklist](../docs/releases.md).

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
+
+from ..child_env import build_child_env
 
 
 class CommandRunner:
@@ -14,6 +15,7 @@ class CommandRunner:
         timeout: float = 300,
         detach_stdio: bool = False,
         env: dict[str, str] | None = None,
+        environment_scope: str = "operations",
     ) -> dict:
         output = asyncio.subprocess.DEVNULL if detach_stdio else asyncio.subprocess.PIPE
         process = await asyncio.create_subprocess_exec(
@@ -22,7 +24,7 @@ class CommandRunner:
             stdin=asyncio.subprocess.DEVNULL if detach_stdio else None,
             stdout=output,
             stderr=output if detach_stdio else asyncio.subprocess.PIPE,
-            env={**os.environ, **env} if env else None,
+            env=build_child_env(environment_scope, overrides=env),
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)

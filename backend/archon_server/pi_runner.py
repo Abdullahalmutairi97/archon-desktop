@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from pathlib import Path
 from typing import Any, Callable
 
+from .child_env import build_child_env
 from .runtimes import execution_cwd, validate_execution_mode
 
 from .hermes_runner import RunnerCancelled, ProcessIdentity, capture_process_identity, release_supervised_target, abort_supervised_start, abort_uncaptured_process, supervised_argv, terminate_process_tree
@@ -109,7 +109,7 @@ class PiRunner:
                 raise RunnerCancelled(task_id)
 
             process = await asyncio.create_subprocess_exec(
-                *supervised_argv(argv), cwd=str(cwd), env=os.environ.copy(),
+                *supervised_argv(argv), cwd=str(cwd), env=build_child_env("pi"),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 stdin=asyncio.subprocess.PIPE, start_new_session=True,
             )

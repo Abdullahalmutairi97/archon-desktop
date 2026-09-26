@@ -4,7 +4,6 @@ import base64
 import binascii
 import json
 import mimetypes
-import os
 import tempfile
 from pathlib import Path
 
@@ -101,6 +100,7 @@ class VoiceService:
                 [str(self.python), "-c", _TRANSCRIBE_SCRIPT, str(audio_path)],
                 cwd=self.hermes_root,
                 env=self._environment(),
+                environment_scope="voice",
                 timeout=300,
             )
             payload = self._parse_result(result)
@@ -125,6 +125,7 @@ class VoiceService:
                 [str(self.python), "-c", _SPEAK_SCRIPT, str(text_path), str(output_path)],
                 cwd=self.hermes_root,
                 env=self._environment(),
+                environment_scope="voice",
                 timeout=300,
             )
             payload = self._parse_result(result)

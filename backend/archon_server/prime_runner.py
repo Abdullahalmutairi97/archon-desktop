@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+from .child_env import build_child_env
 from .runtimes import execution_cwd, validate_execution_mode
 from .hermes_runner import (
     MAX_EVENT_TEXT,
@@ -282,7 +283,7 @@ class PrimeRunner:
             self._consume_cancellation(task_id, attempt_key)
             raise RunnerCancelled(task_id)
         process = await asyncio.create_subprocess_exec(
-            *supervised_argv(argv), cwd=str(cwd), env=os.environ.copy(), stdin=asyncio.subprocess.PIPE,
+            *supervised_argv(argv), cwd=str(cwd), env=build_child_env("prime"), stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True,
             # The supervisor keeps the lease if the backend is killed. The
             # native CLI is launched by the supervisor with close_fds=True.

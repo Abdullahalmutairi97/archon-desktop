@@ -1,7 +1,15 @@
+import json
+from pathlib import Path
+
 import pytest
 
+from archon_server.hermes_runner import HermesRunner
 from archon_server.prime_runner import PrimeRunner
 from archon_server.pi_runner import PiRunner
+
+
+async def _ignore_event(*_):
+    return None
 
 
 @pytest.mark.asyncio
@@ -90,6 +98,86 @@ async def test_prime_rechecks_preflight_after_waiting_for_session_lease(tmp_path
         if not running.done():
             running.cancel()
             await asyncio.gather(running, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('runner_type', [PrimeRunner, PiRunner])
+async def test_native_runtime_children_receive_only_their_scoped_environment(tmp_path, monkeypatch, runner_type):
+    marker = tmp_path / 'environment-presence.json'
+    keys = [
+        'PATH', 'HOME', 'ARCHON_DESKTOP_AUTH_TOKEN', 'TELEGRAM_BOT_TOKEN',
+        'OPENAI_API_KEY', 'PYTHONPATH', 'NODE_OPTIONS',
+    ]
+    executable = tmp_path / 'fake-native'
+    executable.write_text(
+        '#!/usr/bin/env python3\n'
+        'import json, os\n'
+        f'with open({str(marker)!r}, "w") as handle:\n'
+        f'    json.dump({{key: key in os.environ for key in {keys!r}}}, handle)\n'
+        'print(json.dumps({"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}), flush=True)\n'
+    )
+    executable.chmod(0o700)
+    monkeypatch.setenv('ARCHON_DESKTOP_AUTH_TOKEN', 'coordinator-sentinel')
+    monkeypatch.setenv('TELEGRAM_BOT_TOKEN', 'telegram-sentinel')
+    monkeypatch.setenv('OPENAI_API_KEY', 'provider-sentinel')
+    monkeypatch.setenv('PYTHONPATH', '/ambient/pythonpath')
+    monkeypatch.setenv('NODE_OPTIONS', '--require=/ambient/hook.js')
+    runner = runner_type(executable, tmp_path / f'{runner_type.__name__}-sessions', tmp_path)
+
+    result = await runner.run(
+        {'id': 'env-check', 'prompt': 'fixture only', 'approval_mode': 'auto'},
+        _ignore_event,
+    )
+
+    assert result['text'] == 'ok'
+    assert json.loads(marker.read_text()) == {
+        'PATH': True,
+        'HOME': True,
+        'ARCHON_DESKTOP_AUTH_TOKEN': False,
+        'TELEGRAM_BOT_TOKEN': False,
+        'OPENAI_API_KEY': False,
+        'PYTHONPATH': False,
+        'NODE_OPTIONS': False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_hermes_child_gets_configured_home_and_no_ambient_secrets(tmp_path, monkeypatch):
+    marker = tmp_path / 'hermes-environment-presence.json'
+    configured_home = tmp_path / 'configured-hermes'
+    control_module = str(Path(__file__).parents[1] / 'archon_server' / 'hermes_control.py')
+    executable = tmp_path / 'fake-hermes'
+    executable.write_text(
+        '#!/usr/bin/env python3\n'
+        'import json, os\n'
+        f'with open({str(marker)!r}, "w") as handle:\n'
+        f'    json.dump({{"home_is_configured": os.environ.get("HERMES_HOME") == {str(configured_home)!r}, '
+        f'"control_module_is_server_path": os.environ.get("ARCHON_DESKTOP_CONTROL_MODULE") == {control_module!r}, '
+        '"auth_token": "ARCHON_DESKTOP_AUTH_TOKEN" in os.environ, '
+        '"provider_key": "OPENAI_API_KEY" in os.environ, '
+        '"pythonpath": "PYTHONPATH" in os.environ}, handle)\n'
+        'print("fixture response", flush=True)\n'
+    )
+    executable.chmod(0o700)
+    monkeypatch.setenv('HERMES_HOME', '/ambient/hermes')
+    monkeypatch.setenv('ARCHON_DESKTOP_AUTH_TOKEN', 'coordinator-sentinel')
+    monkeypatch.setenv('OPENAI_API_KEY', 'provider-sentinel')
+    monkeypatch.setenv('PYTHONPATH', '/ambient/pythonpath')
+    runner = HermesRunner(executable, default_cwd=tmp_path, hermes_home=configured_home)
+
+    result = await runner.run(
+        {'id': 'hermes-env-check', 'prompt': 'fixture only', 'skills': []},
+        _ignore_event,
+    )
+
+    assert result['text'] == 'fixture response'
+    assert json.loads(marker.read_text()) == {
+        'home_is_configured': True,
+        'control_module_is_server_path': True,
+        'auth_token': False,
+        'provider_key': False,
+        'pythonpath': False,
+    }
 
 
 @pytest.mark.parametrize('runner_type', [PrimeRunner, PiRunner])

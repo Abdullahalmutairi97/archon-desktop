@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import WebSocket
 
+from ..child_env import build_child_env
 from .commands import CommandRunner
 
 
@@ -51,20 +52,26 @@ class TmuxService:
     async def create(self, label: str, cwd: str = ".") -> dict:
         name = self.normalize(label)
         path = self._cwd(cwd)
-        existing = await self.commands.run(["tmux", "has-session", "-t", name], timeout=5)
+        existing = await self.commands.run(
+            ["tmux", "has-session", "-t", name], timeout=5, environment_scope="terminal"
+        )
         if existing["returncode"] == 0:
             return {"name": name, "cwd": str(path), "persistent": True}
         result = await self.commands.run(
             ["tmux", "new-session", "-d", "-s", name, "-c", str(path)],
             detach_stdio=True,
             timeout=10,
+            environment_scope="terminal",
         )
         if result["returncode"] and "duplicate session" not in result["stderr"].lower():
             raise RuntimeError(result["stderr"] or "Could not create terminal session")
         return {"name": name, "cwd": str(path), "persistent": True}
 
     async def list(self) -> list[dict]:
-        result = await self.commands.run(["tmux", "list-sessions", "-F", "#{session_name}|#{session_windows}|#{session_created}"])
+        result = await self.commands.run(
+            ["tmux", "list-sessions", "-F", "#{session_name}|#{session_windows}|#{session_created}"],
+            environment_scope="terminal",
+        )
         if result["returncode"]:
             return []
         sessions = []
@@ -87,14 +94,16 @@ class TmuxService:
         if not confirm:
             raise PermissionError("Explicit confirmation is required")
         name = self.validate(name)
-        result = await self.commands.run(["tmux", "kill-session", "-t", name])
+        result = await self.commands.run(
+            ["tmux", "kill-session", "-t", name], environment_scope="terminal"
+        )
         if result["returncode"]:
             raise RuntimeError(result["stderr"] or "Could not stop terminal session")
 
     async def bridge(self, websocket: WebSocket, name: str) -> None:
         name = self.validate(name)
         master, slave = pty.openpty()
-        env = {**os.environ, "TERM": "xterm-256color"}
+        env = build_child_env("terminal", overrides={"TERM": "xterm-256color"})
         process = subprocess.Popen(
             ["tmux", "attach-session", "-t", name], stdin=slave, stdout=slave, stderr=slave,
             start_new_session=True, close_fds=True, env=env,

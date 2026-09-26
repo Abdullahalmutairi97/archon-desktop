@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from ..child_env import build_child_env
 from ..db import Database
 
 
@@ -906,7 +907,7 @@ class PrimeSessionService:
         try:
             listed = subprocess.run(
                 [str(self.prime_executable), "list", "--json"],
-                capture_output=True, text=True, timeout=15, check=True,
+                capture_output=True, text=True, timeout=15, check=True, env=build_child_env("prime"),
             )
             sessions = json.loads(listed.stdout).get("sessions", [])
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
@@ -918,7 +919,7 @@ class PrimeSessionService:
                 continue
             stopped = subprocess.run(
                 [str(self.prime_executable), "stop", str(agent.get("id")), "--json"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=15, env=build_child_env("prime"),
             )
             if stopped.returncode:
                 raise RuntimeError(f"Could not stop attached Prime agent {agent.get('id')}")

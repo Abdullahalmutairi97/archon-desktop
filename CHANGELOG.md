@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 1D credentials and readiness
+
+- Require server credentials before database initialization, share HTTP/WebSocket authorization, and restrict listeners to loopback with explicit private HTTPS proxy configuration for remote use. Implicit repository `.env` loading is disabled.
+- Provision credentials once into a private external mode-0600 service environment file outside all declared workspace roots; retain existing external configuration without silent rotation.
+- Filter every newly launched child environment by purpose, excluding coordinator tokens, unrelated secrets and ambient shell/runtime injection settings.
+- Add authenticated storage, worker, queue and runtime readiness while keeping anonymous health minimal. Dispatch eligibility does not certify native execution or provider credentials.
+
 ## Unreleased — Phase 1C.2 durable execution attempts
 
 - Record an execution attempt with every claim and require its identity for runner events, results, errors and cancellation. Stale callbacks cannot mutate a newer attempt or attach a session.

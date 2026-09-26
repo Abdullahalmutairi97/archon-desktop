@@ -1,19 +1,18 @@
 [Unit]
 Description=Archon Desktop private backend
-Documentation=file://@PROJECT_ROOT@/README.md
-Wants=network-online.target tailscale-online.target
-After=network-online.target tailscale-online.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
 User=@SERVICE_USER@
 Group=@SERVICE_USER@
-WorkingDirectory=@PROJECT_ROOT@/backend
+WorkingDirectory=@WORKING_DIRECTORY@
 Environment=HOME=@SERVICE_HOME@
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=@PROJECT_ROOT@/backend/.env
-ExecStart=@PROJECT_ROOT@/backend/.venv/bin/python -m archon_server.main
-Restart=always
+EnvironmentFile=@ENV_FILE@
+ExecStart=@PYTHON@ -m archon_server.main
+Restart=on-failure
 RestartSec=3
 TimeoutStopSec=45
 KillSignal=SIGINT
