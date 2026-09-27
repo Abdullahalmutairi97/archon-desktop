@@ -1359,6 +1359,62 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         response.headers["cache-control"] = "no-store"
         return response
 
+    preview_origin = settings.local_server_url.rstrip("/")
+
+    @app.websocket("/api/local/preview/{ticket}")
+    @app.websocket("/api/local/preview/{ticket}/{path:path}")
+    async def local_workspace_preview_socket(websocket: WebSocket, ticket: str, path: str = ""):
+        gateway = local_workspace_preview
+        if gateway is None:
+            await websocket.close(code=1011)
+            return
+        try:
+            target = gateway.websocket_target(ticket, path=path, query=websocket.url.query)
+        except WorkspaceGatewayTicketUnavailable:
+            await websocket.close(code=1008)
+            return
+        origin = websocket.headers.get("origin")
+        if origin is not None and origin.rstrip("/") != preview_origin:
+            await websocket.close(code=1008)
+            return
+        await websocket.accept()
+        try:
+            import websockets
+            async with websockets.connect(target, max_size=2 * 1024 * 1024, open_timeout=10) as upstream:
+                async def client_to_upstream() -> None:
+                    try:
+                        while True:
+                            message = await websocket.receive()
+                            if message.get("text") is not None:
+                                await upstream.send(message["text"])
+                            elif message.get("bytes") is not None:
+                                await upstream.send(message["bytes"])
+                    except Exception:
+                        return
+
+                async def upstream_to_client() -> None:
+                    try:
+                        async for message in upstream:
+                            if isinstance(message, (bytes, bytearray)):
+                                await websocket.send_bytes(bytes(message))
+                            else:
+                                await websocket.send_text(message)
+                    except Exception:
+                        return
+
+                tasks = {asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())}
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+        except Exception:
+            pass
+        finally:
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+
     async def local_codex_call(method: str, params: dict[str, Any]):
         if local_codex_worker is None:
             raise HTTPException(status_code=503, detail="Local Codex is disabled")

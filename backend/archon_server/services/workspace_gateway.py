@@ -151,6 +151,15 @@ class WorkspacePreviewGateway:
             if session["workspaceId"] != workspace_id
         }
 
+    def websocket_target(self, ticket: str, *, path: str, query: str) -> str:
+        """Resolve a ticket to the declared port's loopback WebSocket URL."""
+        session = self.resolve(ticket)
+        target_path = "/" + path if path else "/"
+        url = f"ws://127.0.0.1:{session['port']}{target_path}"
+        if query:
+            url += "?" + query
+        return url
+
     async def proxy(
         self,
         ticket: str,

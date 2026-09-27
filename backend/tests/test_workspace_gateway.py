@@ -196,6 +196,92 @@ async def test_revoke_workspace_drops_sessions(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_preview_ticket_expires(tmp_path):
+    manager = _manager(tmp_path)
+    await manager.define(WORKSPACE_ID, {
+        "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
+    })
+    gateway = WorkspacePreviewGateway(manager, ttl_seconds=0.05, forward=_unused_forward)
+    preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    await asyncio.sleep(0.12)
+    with pytest.raises(WorkspaceGatewayTicketUnavailable):
+        gateway.resolve(preview["ticket"])
+
+
+@pytest.mark.asyncio
+async def test_preview_requires_a_single_port_or_a_named_choice(tmp_path):
+    manager = _manager(tmp_path)
+    await manager.define(WORKSPACE_ID, {
+        "name": "web", "argv": ["/bin/echo"],
+        "ports": [{"name": "http", "port": 4173}, {"name": "ws", "port": 4174}],
+    })
+    gateway = WorkspacePreviewGateway(manager, forward=_unused_forward)
+    with pytest.raises(WorkspaceServiceConflict):
+        await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    chosen = await gateway.open(WORKSPACE_ID, "web", expected_generation=1, port_name="ws")
+    calls: list[str] = []
+
+    async def fake_forward(method, url, headers, body, timeout):
+        calls.append(url)
+        return {"status": 200, "headers": {}, "body": b"", "truncated": False, "location": None}
+
+    gateway._forward = fake_forward
+    await gateway.proxy(chosen["ticket"], method="GET", path="x", query="", headers={}, body=b"")
+    assert calls and calls[0] == "http://127.0.0.1:4174/x"
+
+
+@pytest.mark.asyncio
+async def test_truncated_response_is_flagged(tmp_path):
+    manager = _manager(tmp_path)
+    await manager.define(WORKSPACE_ID, {
+        "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
+    })
+
+    async def fake_forward(*_args, **_kwargs):
+        return {"status": 200, "headers": {}, "body": b"x", "truncated": True, "location": None}
+
+    gateway = WorkspacePreviewGateway(manager, forward=fake_forward)
+    preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    result = await gateway.proxy(preview["ticket"], method="GET", path="", query="", headers={}, body=b"")
+    assert result["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_websocket_target_uses_the_declared_loopback_port(tmp_path):
+    manager = _manager(tmp_path)
+    await manager.define(WORKSPACE_ID, {
+        "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
+    })
+    gateway = WorkspacePreviewGateway(manager, forward=_unused_forward)
+    preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    assert gateway.websocket_target(preview["ticket"], path="hmr", query="a=1") == "ws://127.0.0.1:4173/hmr?a=1"
+    with pytest.raises(WorkspaceGatewayTicketUnavailable):
+        gateway.websocket_target("wprev-" + "0" * 32, path="", query="")
+
+
+def test_preview_websocket_route_rejects_an_invalid_ticket(tmp_path):
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    from archon_server.app import create_app
+    from archon_server.config import Settings
+
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect("/api/local/preview/wprev-" + "0" * 32 + "/"):
+                pass
+        assert exc.value.code == 1008
+
+
+@pytest.mark.asyncio
 async def test_default_forward_reaches_a_real_loopback_service(tmp_path):
     server, _thread, port = _serve()
     try:

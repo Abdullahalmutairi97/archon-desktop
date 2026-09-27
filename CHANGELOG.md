@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — preview WebSocket forwarding
+
+- Forward preview WebSockets (HTTP/HMR) through the ticket-gated gateway on the same declared loopback port with a 2 MiB frame cap and an Origin check that rejects a WebSocket whose Origin is not the local server origin; an invalid ticket closes with 1008.
+
 ## Unreleased — sandboxed native service preview
 
 - Add a main-process `WebContentsView` preview with its own storage partition, no Node integration, no Archon preload, window-open denied and same-preview navigation enforced. The renderer never builds a preview URL: main resolves a read-only ticket and the loopback URL from the backend.
