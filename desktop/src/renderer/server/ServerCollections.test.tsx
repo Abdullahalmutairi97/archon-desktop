@@ -155,7 +155,8 @@ describe('ServerCollections', () => {
       root: '/srv/archon/workspaces/server-root',
       project_id: 'project-1',
     }]), registerWorkspace)
-    const { container } = render(<ServerCollections bridge={bridge} connection={connection(true, 1, true)} />)
+    const onLocalCodexProjectRegistered = vi.fn()
+    const { container } = render(<ServerCollections bridge={bridge} connection={connection(true, 1, true)} onLocalCodexProjectRegistered={onLocalCodexProjectRegistered} />)
 
     const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
     const button = within(section).getByRole('button', { name: 'Add to Local Codex' })
@@ -167,8 +168,10 @@ describe('ServerCollections', () => {
     expect(startTurn).not.toHaveBeenCalled()
     expect(apiInvoke.mock.calls.some(([operation]) => operation === 'workspaces.provision')).toBe(false)
 
-    pendingRegistration.resolve({ id: 'local-project-1', name: 'Local checkout', rootPath: localRoot })
-    expect(await within(section).findByText('Added to Local Codex. Open the Local Codex view to start a task.')).toBeInTheDocument()
+    const project = { id: 'local-project-1', name: 'Local checkout', rootPath: localRoot }
+    pendingRegistration.resolve(project)
+    expect(await within(section).findByText('Added to Local Codex. You can enter a prompt now.')).toBeInTheDocument()
+    expect(onLocalCodexProjectRegistered).toHaveBeenCalledWith(project)
     expect(container.textContent).not.toContain(localRoot)
     expect(registerWorkspace.mock.calls).toEqual([[{ workspaceId }]])
     expect(startTurn).not.toHaveBeenCalled()

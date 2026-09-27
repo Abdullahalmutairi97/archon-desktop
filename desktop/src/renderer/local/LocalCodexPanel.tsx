@@ -84,7 +84,15 @@ function ApprovalDialog({ approval, answer }: { approval: LocalCodexApprovalDto;
   )
 }
 
-export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; active: boolean }) {
+export function LocalCodexPanel({
+  bridge,
+  active,
+  selectionRequest,
+}: {
+  bridge?: DesktopBridge
+  active: boolean
+  selectionRequest?: { requestId: number; projectId: string }
+}) {
   const [projects, setProjects] = useState<readonly LocalCodexProjectDto[]>([])
   const [sessions, setSessions] = useState<readonly LocalCodexSessionDto[]>([])
   const [projectId, setProjectId] = useState('')
@@ -101,17 +109,33 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
   const projectRetryTimer = useRef<number | undefined>(undefined)
   const sessionsRetryTimer = useRef<number | undefined>(undefined)
   const sessionsLoadRequest = useRef(0)
+  const consumedSelectionRequest = useRef<number | null>(null)
+  const projectLoadRequest = useRef(0)
+  const pendingProjectSelection = useRef<{ requestId: number; projectId: string } | null>(null)
   const wasActive = useRef(active)
   const formId = useId()
   const api = bridge?.localCodex
   const isCurrent = (current: Session) => current.alive && session.current === current
 
   async function loadProjects(current: Session, retryOnce = false) {
+    const request = ++projectLoadRequest.current
     try {
       const items = await current.api.listProjects()
-      if (!isCurrent(current)) return
+      if (!isCurrent(current) || request !== projectLoadRequest.current) return
       setProjects(items)
-      setProjectId((previous) => items.some((item) => item.id === previous) ? previous : items[0]?.id ?? '')
+      const selection = pendingProjectSelection.current
+      if (selection) {
+        pendingProjectSelection.current = null
+        if (items.some((item) => item.id === selection.projectId)) {
+          setProjectId(selection.projectId)
+          setView((previous) => previous.message === 'This workspace is no longer available in Local Codex.' ? { ...previous, message: '' } : previous)
+        } else {
+          setProjectId((previous) => items.some((item) => item.id === previous) ? previous : items[0]?.id ?? '')
+          setView((previous) => ({ ...previous, message: 'This workspace is no longer available in Local Codex.' }))
+        }
+      } else {
+        setProjectId((previous) => items.some((item) => item.id === previous) ? previous : items[0]?.id ?? '')
+      }
       setProjectsLoadFailed(false)
       setView((previous) => previous.message === 'Could not load local projects.' ? { ...previous, message: '' } : previous)
     } catch {
@@ -238,9 +262,14 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
   useEffect(() => {
     const becameActive = active && !wasActive.current
     wasActive.current = active
+    const isNewSelection = selectionRequest !== undefined && consumedSelectionRequest.current !== selectionRequest.requestId
+    if (isNewSelection && selectionRequest) {
+      consumedSelectionRequest.current = selectionRequest.requestId
+      pendingProjectSelection.current = selectionRequest
+    }
     const current = session.current
-    if (becameActive && current?.ready) void loadProjects(current)
-  }, [active, api])
+    if ((becameActive || isNewSelection) && current?.ready) void loadProjects(current, true)
+  }, [active, api, selectionRequest])
 
   useEffect(() => {
     setSessions([])

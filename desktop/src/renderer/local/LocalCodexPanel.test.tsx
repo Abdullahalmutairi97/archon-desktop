@@ -92,6 +92,27 @@ describe('LocalCodexPanel', () => {
     expect(fake.localCodex.subscribe).toHaveBeenCalledTimes(1)
   })
 
+  it('selects a requested project from the refreshed list once and keeps later manual selection', async () => {
+    const fake = fakeBridge()
+    const workspaceProject = { id: 'codex-project:workspace', name: 'Workspace checkout', rootPath: '/work/checkouts/one' }
+    let items = [project]
+    fake.localCodex.listProjects.mockImplementation(async () => items)
+    const view = render(<LocalCodexPanel bridge={fake.bridge} active />)
+    await screen.findByRole('option', { name: 'Example project' })
+
+    view.rerender(<LocalCodexPanel bridge={fake.bridge} active={false} />)
+    items = [project, workspaceProject]
+    const selectionRequest = { requestId: 1, projectId: workspaceProject.id }
+    view.rerender(<LocalCodexPanel bridge={fake.bridge} active selectionRequest={selectionRequest} />)
+
+    await waitFor(() => expect(screen.getByLabelText('Local project')).toHaveValue(workspaceProject.id))
+    expect(fake.localCodex.startTurn).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Local project'), { target: { value: project.id } })
+    view.rerender(<LocalCodexPanel bridge={fake.bridge} active selectionRequest={selectionRequest} />)
+    expect(screen.getByLabelText('Local project')).toHaveValue(project.id)
+    expect(screen.getByText(project.rootPath)).toBeInTheDocument()
+  })
+
   it('preserves completion received before the start response', async () => {
     const fake = fakeBridge()
     const pending = deferred<LocalCodexTurnDto>()

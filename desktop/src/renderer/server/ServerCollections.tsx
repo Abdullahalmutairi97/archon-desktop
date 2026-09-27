@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import type { ConnectionDescription, DesktopBridge, JsonRecord } from '../../shared/bridge/types'
+import type { ConnectionDescription, DesktopBridge, JsonRecord, LocalCodexProjectDto } from '../../shared/bridge/types'
 import { PrimeTaskPanel } from './PrimeTaskPanel'
 import { WorkspaceFileBrowser, type WorkspaceReadOnlyFilePort } from './WorkspaceFileBrowser'
 import './ServerCollections.css'
@@ -129,6 +129,7 @@ function WorkspaceSection({
   projects,
   projectsLoading,
   localCodexPairingAvailable,
+  onLocalCodexProjectRegistered,
 }: {
   bridge: DesktopBridge
   state: 'loading' | 'ready' | 'unavailable'
@@ -138,6 +139,7 @@ function WorkspaceSection({
   projects: readonly JsonRecord[] | null
   projectsLoading: boolean
   localCodexPairingAvailable: boolean
+  onLocalCodexProjectRegistered?: (project: LocalCodexProjectDto) => void
 }) {
   const choices = workspaceProjectChoices(projects ?? [])
   const [projectId, setProjectId] = useState('')
@@ -214,12 +216,13 @@ function WorkspaceSection({
     setLocalCodexPendingWorkspaceId(workspaceId)
     setLocalCodexFeedback(null)
     try {
-      await bridge.localCodex.registerWorkspace({ workspaceId })
+      const project = await bridge.localCodex.registerWorkspace({ workspaceId })
       setLocalCodexFeedback({
         workspaceId,
         kind: 'success',
-        text: 'Added to Local Codex. Open the Local Codex view to start a task.',
+        text: 'Added to Local Codex. You can enter a prompt now.',
       })
+      onLocalCodexProjectRegistered?.(project)
     } catch {
       setLocalCodexFeedback({
         workspaceId,
@@ -327,9 +330,11 @@ function WorkspaceSection({
 export function ServerCollections({
   bridge,
   connection,
+  onLocalCodexProjectRegistered,
 }: {
   bridge?: DesktopBridge
   connection: ConnectionDescription | null
+  onLocalCodexProjectRegistered?: (project: LocalCodexProjectDto) => void
 }) {
   const serial = useRef(0)
   const workspaceSerial = useRef(0)
@@ -465,6 +470,7 @@ export function ServerCollections({
         projects={data?.projects ?? null}
         projectsLoading={state === 'loading'}
         localCodexPairingAvailable={configured && connection?.localPairingAvailable === true}
+        onLocalCodexProjectRegistered={onLocalCodexProjectRegistered}
       />}
     </div>}
     {(data || currentWorkspaceLoadState?.state === 'ready') && <p className="server-collections-note">Counts show rows returned; the server may cap session, task and workspace lists.</p>}

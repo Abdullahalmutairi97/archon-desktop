@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { buildMetadata } from '../../shared/buildMetadata'
 import { AppearanceStudio } from '../appearance/AppearanceStudio'
 import { ConnectionPanel } from '../connection/ConnectionPanel'
 import { LocalCodexPanel } from '../local/LocalCodexPanel'
 import { ServerCollectionsView } from '../server/ServerCollectionsView'
+import type { LocalCodexProjectDto } from '../../shared/bridge/types'
 import { readShellPreferences, saveShellPreferences, type ShellPreferences } from '../appearance/themes'
 import { FIXTURE_PROJECTS, FIXTURE_SESSIONS, FIXTURE_TASKS, runtimeLabel, sessionForId } from './fixtures'
 import { Icon } from './Icon'
@@ -20,6 +21,8 @@ export function App() {
   const [view, setView] = useState<WorkspaceView>('codex')
   const [selectedSessionId, setSelectedSessionId] = useState(DEFAULT_SESSION_ID)
   const [selectedProjectId, setSelectedProjectId] = useState(FIXTURE_PROJECTS[0].id)
+  const [localCodexSelectionRequest, setLocalCodexSelectionRequest] = useState<{ requestId: number; projectId: string } | undefined>()
+  const localCodexSelectionSerial = useRef(0)
   const [activeBench, setActiveBench] = useState<BenchId>('activity')
   const [benchOpen, setBenchOpen] = useState(true)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
@@ -32,6 +35,10 @@ export function App() {
   useEffect(() => { saveShellPreferences(preferences) }, [preferences])
 
   const openLocalCodex = useCallback(() => setView('codex'), [])
+  const openRegisteredLocalCodexProject = useCallback((project: LocalCodexProjectDto) => {
+    setLocalCodexSelectionRequest({ requestId: ++localCodexSelectionSerial.current, projectId: project.id })
+    setView('codex')
+  }, [])
   const openDemoBench = useCallback((bench: BenchId) => {
     setView((current) => isPreviewView(current) ? current : 'chat')
     setActiveBench(bench)
@@ -128,8 +135,8 @@ export function App() {
         {view === 'tasks' && <TasksView />}
         {view === 'projects' && <ProjectsView selectedProjectId={selectedProjectId} onSelectSession={selectSession} onViewChat={() => setView('chat')} />}
         {view === 'connection' && <ConnectionPanel bridge={window.archon} />}
-        {view === 'server' && <ServerCollectionsView bridge={window.archon} />}
-        <div className="local-codex-route" hidden={view !== 'codex'}><LocalCodexPanel bridge={window.archon} active={view === 'codex'} /></div>
+        {view === 'server' && <ServerCollectionsView bridge={window.archon} onLocalCodexProjectRegistered={openRegisteredLocalCodexProject} />}
+        <div className="local-codex-route" hidden={view !== 'codex'}><LocalCodexPanel bridge={window.archon} active={view === 'codex'} selectionRequest={localCodexSelectionRequest} /></div>
       </main>
       {preview && <WorkspaceBench active={activeBench} open={benchOpen} scope={currentSession.scope} onSelect={setActiveBench} onClose={() => setBenchOpen(false)} />}
     </div>
