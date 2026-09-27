@@ -287,6 +287,28 @@ class WorkspaceServiceManager:
                 "state": state,
             }
 
+    async def resource_summary(self, workspace_id: str) -> dict[str, Any]:
+        """Report registered/running services and the reserved memory budget."""
+        async with self._lock:
+            workspace = self._resolve_workspace(workspace_id)
+            record = self._load(workspace)
+            running = 0
+            reserved = 0
+            for item in record["services"]:
+                runtime = self._runtime.get((workspace_id, item["name"]))
+                if runtime is not None and runtime["state"] in {"starting", "running"}:
+                    running += 1
+                    if item.get("memoryLimitMb") is not None:
+                        reserved += item["memoryLimitMb"]
+            return {
+                "services": {
+                    "registered": len(record["services"]),
+                    "running": running,
+                    "reservedMemoryMb": reserved,
+                    "maxTotalMemoryMb": self.max_total_memory_mb,
+                },
+            }
+
     async def logs(self, workspace_id: str, name: str, *, lines: int = 200) -> dict[str, Any]:
         """Return a bounded tail of the captured stdout/stderr stream."""
         if isinstance(lines, bool) or not isinstance(lines, int) or not 1 <= lines <= 400:

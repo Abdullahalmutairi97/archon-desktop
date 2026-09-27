@@ -321,6 +321,50 @@ async def test_declared_memory_budget_fails_closed_when_unenforced(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_resource_summary_counts_running_reserved_memory(tmp_path):
+    class FakeStream:
+        async def read(self, _size: int) -> bytes:
+            return b""
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = None
+            self.stdout = FakeStream()
+
+        async def wait(self) -> int:
+            while self.returncode is None:
+                await asyncio.sleep(0.01)
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+        def kill(self) -> None:
+            self.returncode = 0
+
+    async def fake_spawn(*_argv, **_kwargs):
+        return FakeProcess()
+
+    manager = _manager(tmp_path, memory_enforcement=True)
+    manager._spawn = fake_spawn
+    await manager.define(WORKSPACE_ID, _definition(name="a", argv=["/bin/sleep", "5"], memoryLimitMb=128))
+    empty = await manager.resource_summary(WORKSPACE_ID)
+    assert empty["services"] == {"registered": 1, "running": 0, "reservedMemoryMb": 0, "maxTotalMemoryMb": 4096}
+    await manager.start(WORKSPACE_ID, "a")
+    running = await manager.resource_summary(WORKSPACE_ID)
+    assert running["services"]["running"] == 1
+    assert running["services"]["reservedMemoryMb"] == 128
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_resource_summary_rejects_unknown_workspace(tmp_path):
+    manager = _manager(tmp_path)
+    with pytest.raises(KeyError):
+        await manager.resource_summary("workspace-" + "0" * 32)
+
+
+@pytest.mark.asyncio
 async def test_failing_service_reports_failed_without_restart(tmp_path):
     manager = _manager(tmp_path)
     await manager.define(WORKSPACE_ID, _definition(name="bad", argv=["/bin/sh", "-c", "exit 3"]))
@@ -397,3 +441,10 @@ def test_local_owner_workspace_service_api_contract(tmp_path):
         removed = client.request("DELETE", f"{collection}/web", headers=headers, json={"confirm": True})
         assert removed.status_code == 200
         assert client.get(collection, headers=headers).json() == {"services": []}
+
+        resources = client.get(f"/api/local/workspaces/{workspace_id}/resources", headers=headers)
+        assert resources.status_code == 200
+        assert resources.headers["cache-control"] == "no-store"
+        body = resources.json()
+        assert body["services"] == {"registered": 0, "running": 0, "reservedMemoryMb": 0, "maxTotalMemoryMb": 4096}
+        assert body["terminals"] == {"count": 0, "max": 16}

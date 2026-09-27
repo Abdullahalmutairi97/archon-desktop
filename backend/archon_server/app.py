@@ -1230,6 +1230,15 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         current_owner_workspace(workspace_id)
         return {"services": await workspace_service_manager().list(workspace_id)}
 
+    @app.get("/api/local/workspaces/{workspace_id}/resources", dependencies=[Depends(require_local_owner)])
+    async def local_workspace_resources(workspace_id: str):
+        current_owner_workspace(workspace_id)
+        summary = await workspace_service_manager().resource_summary(workspace_id)
+        terminal_service = workspace_terminal_service()
+        terminals = await terminal_service.list(workspace_id)
+        summary["terminals"] = {"count": len(terminals), "max": terminal_service.max_sessions}
+        return JSONResponse(content=summary, headers={"Cache-Control": "no-store"})
+
     @app.put(
         "/api/local/workspaces/{workspace_id}/services/{name}",
         dependencies=[Depends(require_local_owner)],

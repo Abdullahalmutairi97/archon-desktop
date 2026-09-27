@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — aggregate workspace resource summary
+
+- Add an owner-only `GET /api/local/workspaces/{id}/resources` summary reporting registered/running services, the reserved memory budget against its cap, and the terminal session count against its limit.
+
 ## Unreleased — remote runner claim/ack transport
 
 - Add a durable per-runner outbox: the coordinator enqueues work for an enrolled runner (owner-only, deduplicated by event key), and the runner claims unacknowledged entries over its own authenticated channel and acknowledges them by sequence. Entries are generation-fenced, bounded, and survive a restart on either side until acknowledged.
