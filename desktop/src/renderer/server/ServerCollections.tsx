@@ -389,18 +389,18 @@ function WorkspaceSection({
       : state === 'ready' && <ul>
         {records.map((record, index) => {
           const id = exactTextField(record, 'workspace_id') ?? `workspace-${index + 1}`
-          const projectId = exactTextField(record, 'project_id') ?? 'Not recorded'
-          const baseRevision = exactTextField(record, 'base_revision') ?? 'Not recorded'
-          const headRevision = exactTextField(record, 'head_revision') ?? 'Not recorded'
+          const projectId = exactTextField(record, 'project_id') ?? 'Unavailable'
+          const baseRevision = exactTextField(record, 'base_revision') ?? 'Unavailable'
+          const headRevision = exactTextField(record, 'head_revision') ?? 'Unavailable'
           const root = exactTextField(record, 'root') ?? 'Unavailable'
           const generation = typeof record.generation === 'number' && Number.isSafeInteger(record.generation)
             ? String(record.generation)
-            : 'Unknown'
+            : 'Unavailable'
           return <li className="server-collection-row server-workspace-row" key={id}>
             <strong>{id}</strong>
-            <span>Project: {projectId} · Generation: {generation}</span>
-            <span>Base revision: {baseRevision}</span>
-            <span>Head revision: {headRevision}</span>
+            <span>Authority: server-managed checkout · Generation: {generation}</span>
+            <span>Source project: {projectId} · Owner: unavailable · Branch: unavailable</span>
+            <span>Revisions: base {baseRevision} · head {headRevision}</span>
             <code>Authoritative root: {root}</code>
             {/^workspace-[0-9a-f]{32}$/u.test(id) && <button type="button" className="server-workspace-browse" aria-pressed={activeWorkspaceId === id} onClick={() => setSelectedWorkspaceId(activeWorkspaceId === id ? null : id)}>
               {activeWorkspaceId === id ? 'Close files' : 'Browse files'}

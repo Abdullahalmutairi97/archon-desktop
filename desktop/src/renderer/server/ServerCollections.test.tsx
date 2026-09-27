@@ -182,6 +182,9 @@ describe('ServerCollections', () => {
       base_revision: 'a'.repeat(40),
       head_revision: 'b'.repeat(40),
       generation: 3,
+      owner_id: 'owner-from-unvalidated-field',
+      branch_name: 'branch-from-unvalidated-field',
+      isolation_profile: 'profile-from-unvalidated-field',
     }
     const { bridge } = fakeBridge(collections([], [], [], [workspace]))
 
@@ -189,11 +192,14 @@ describe('ServerCollections', () => {
 
     const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
     expect(within(section).getByText('workspace-123')).toBeInTheDocument()
-    expect(within(section).getByText('Project: project-1 · Generation: 3')).toBeInTheDocument()
-    expect(within(section).getByText(`Base revision: ${'a'.repeat(40)}`)).toBeInTheDocument()
-    expect(within(section).getByText(`Head revision: ${'b'.repeat(40)}`)).toBeInTheDocument()
+    expect(within(section).getByText('Authority: server-managed checkout · Generation: 3')).toBeInTheDocument()
+    expect(within(section).getByText('Source project: project-1 · Owner: unavailable · Branch: unavailable')).toBeInTheDocument()
+    expect(within(section).getByText(`Revisions: base ${'a'.repeat(40)} · head ${'b'.repeat(40)}`)).toBeInTheDocument()
     expect(within(section).getByText(`Authoritative root: ${workspace.root}`)).toBeInTheDocument()
     expect(within(section).getByText('Server Git checkout; Local Codex remains Electron-owned and native execution isolation is not enabled.')).toBeInTheDocument()
+    expect(section.textContent).not.toContain('owner-from-unvalidated-field')
+    expect(section.textContent).not.toContain('branch-from-unvalidated-field')
+    expect(section.textContent).not.toContain('profile-from-unvalidated-field')
   })
 
   it('offers local Codex registration only for valid workspaces on an active local pairing', async () => {
