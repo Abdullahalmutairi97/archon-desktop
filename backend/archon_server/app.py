@@ -21,7 +21,12 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .config import Settings
-from .admission import SessionWorkspace, admit_workspace, revalidate_workspace
+from .admission import (
+    SessionWorkspace,
+    admit_provisioned_workspace,
+    admit_workspace,
+    revalidate_workspace,
+)
 from .ownership import SessionOwnershipService
 from .runtimes import RuntimeRegistry
 from .db import Database
@@ -185,6 +190,14 @@ class WorkspaceProvisionRequest(BaseModel):
 
     project_id: str = Field(min_length=1, max_length=200)
     revision: str = Field(pattern=r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
+
+
+class WorkspaceTaskCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(pattern=r"^workspace-[0-9a-f]{32}$", max_length=200)
+    workspace_generation: int = Field(strict=True, ge=1)
+    prompt: str = Field(min_length=1, max_length=100_000)
 
 
 class WorkspaceFileWriteRequest(BaseModel):
@@ -566,6 +579,26 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             raise ValueError("Task project identity changed since it was queued")
         if task.get('project_id') is not None and not projects.contains(task['project_id']):
             raise ValueError("Task project is no longer active")
+        if task.get('workspace_id') is not None:
+            if task.get('workspace_generation') is None:
+                raise ValueError("Task is missing its durable workspace generation")
+            workspace = current_owner_workspace(task['workspace_id'])
+            admitted = admit_provisioned_workspace(
+                workspace=workspace,
+                workspace_root=settings.data_dir.expanduser() / "workspaces",
+                expected_owner_id=workspace_owner_id(),
+                expected_generation=task['workspace_generation'],
+            )
+            if admitted.workspace_id != task['workspace_id']:
+                raise ValueError("Task workspace identity changed since it was queued")
+            if admitted.project_id != task.get('project_id'):
+                raise ValueError("Task project identity changed since it was queued")
+            if admitted.cwd != task.get('cwd'):
+                raise ValueError("Task workspace root changed since it was queued")
+            task['cwd'] = revalidate_workspace(task.get('cwd'), admitted.authorized_roots)
+            return
+        if task.get('workspace_generation') is not None:
+            raise ValueError("Task has an incomplete workspace binding")
         admitted = admit_workspace(scratch_root=settings.task_scratch_root or settings.archon_root,
                                    projects=catalog, cwd=task.get('cwd'), session=session)
         task['cwd'] = revalidate_workspace(task.get('cwd'), admitted.authorized_roots)
@@ -983,6 +1016,52 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 payload.session_id, payload.approval_mode, payload.chat_only,
                 task_runtime, project_id=admitted.project_id, runtime_id=task_runtime,
                 request_id=idempotency_key, request_hash=request_hash,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"task": task}
+
+    @app.post("/api/workspace-tasks", status_code=202, dependencies=protected)
+    def create_workspace_task(
+        payload: WorkspaceTaskCreate,
+        idempotency_key: Annotated[str | None, Header()] = None,
+    ):
+        # Keep this on a distinct route: older servers ignore unknown fields on
+        # /api/tasks, which could otherwise accept this request in the source
+        # project's cwd rather than the provisioned checkout.
+        workspace = current_owner_workspace(payload.workspace_id)
+        request_hash = hash_request_payload(payload.model_dump()) if idempotency_key is not None else None
+        if idempotency_key is not None:
+            try:
+                existing = store.lookup_request(idempotency_key, request_hash)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if existing is not None:
+                return {"task": existing}
+
+        try:
+            if workspace.get("project_id") is None or not projects.contains(workspace["project_id"]):
+                raise ValueError("Workspace project is no longer active")
+            admitted = admit_provisioned_workspace(
+                workspace=workspace,
+                workspace_root=settings.data_dir.expanduser() / "workspaces",
+                expected_owner_id=workspace_owner_id(),
+                expected_generation=payload.workspace_generation,
+            )
+            registry.validate({"runtime_id": "prime", "approval_mode": "auto", "chat_only": False})
+            task = store.submit(
+                payload.prompt,
+                admitted.cwd,
+                profile="prime",
+                approval_mode="auto",
+                chat_only=False,
+                project_id=admitted.project_id,
+                runtime_id="prime",
+                request_id=idempotency_key,
+                request_hash=request_hash,
+                workspace_id=admitted.workspace_id,
+                workspace_generation=admitted.workspace_generation,
+                workspace_owner_id=workspace_owner_id(),
             )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

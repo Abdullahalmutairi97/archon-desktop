@@ -4,6 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from archon_server.app import create_app
@@ -167,6 +168,90 @@ def test_workspace_provision_api_rejects_unregistered_project(tmp_path):
 
     assert response.status_code == 400
     assert "registered project" in response.json()["detail"]
+
+
+def test_workspace_task_is_bound_to_the_provisioned_checkout_and_attempt(tmp_path):
+    settings = _settings(tmp_path)
+    project, revision, _source = _registered_git_project(tmp_path, settings)
+    headers = {"Authorization": "Bearer workspace-api-token"}
+
+    with TestClient(create_app(settings, runner=object())) as client:
+        provision = client.post(
+            "/api/workspaces", headers=headers,
+            json={"project_id": project["id"], "revision": revision},
+        )
+        workspace = provision.json()["workspace"]
+        submitted = client.post(
+            "/api/workspace-tasks", headers=headers,
+            json={
+                "workspace_id": workspace["workspace_id"],
+                "workspace_generation": workspace["generation"],
+                "prompt": "Inspect the checkout and summarize its README.",
+            },
+        )
+        assert submitted.status_code == 202, submitted.text
+        task = submitted.json()["task"]
+        assert task["cwd"] == workspace["root"]
+        assert task["project_id"] == project["id"]
+        assert task["runtime_id"] == "prime"
+        assert task["profile"] == "prime"
+        assert task["approval_mode"] == "auto"
+        assert task["workspace_id"] == workspace["workspace_id"]
+        assert task["workspace_generation"] == workspace["generation"]
+        assert task["session_id"]
+
+        # The same owner/project/root/generation checks run immediately before
+        # dispatch; then the attempt durably snapshots the workspace identity.
+        client.app.state.engine.preflight(task)
+        claimed = client.app.state.store.claim_next()
+        assert claimed["id"] == task["id"]
+        with client.app.state.store.db.connect() as conn:
+            attempt = conn.execute(
+                "SELECT workspace_id,workspace_generation FROM task_attempts WHERE task_id=?",
+                (task["id"],),
+            ).fetchone()
+        assert tuple(attempt) == (workspace["workspace_id"], workspace["generation"])
+        with client.app.state.store.db.transaction() as conn:
+            conn.execute(
+                "UPDATE workspaces SET generation=generation+1 WHERE workspace_id=?",
+                (workspace["workspace_id"],),
+            )
+        with pytest.raises(ValueError, match="generation"):
+            client.app.state.engine.preflight(claimed)
+
+
+def test_workspace_task_rejects_stale_generation_and_client_paths(tmp_path):
+    settings = _settings(tmp_path)
+    project, revision, _source = _registered_git_project(tmp_path, settings)
+    headers = {"Authorization": "Bearer workspace-api-token"}
+
+    with TestClient(create_app(settings)) as client:
+        provision = client.post(
+            "/api/workspaces", headers=headers,
+            json={"project_id": project["id"], "revision": revision},
+        )
+        workspace = provision.json()["workspace"]
+        body = {
+            "workspace_id": workspace["workspace_id"],
+            "workspace_generation": workspace["generation"],
+            "prompt": "Run in the selected checkout.",
+        }
+        stale = client.post(
+            "/api/workspace-tasks", headers=headers,
+            json={**body, "workspace_generation": workspace["generation"] + 1},
+        )
+        client_cwd = client.post(
+            "/api/workspace-tasks", headers=headers,
+            json={**body, "cwd": str(tmp_path)},
+        )
+        client_session = client.post(
+            "/api/workspace-tasks", headers=headers,
+            json={**body, "session_id": "attacker-selected"},
+        )
+
+    assert stale.status_code == 409
+    assert client_cwd.status_code == 422
+    assert client_session.status_code == 422
 
 
 def test_project_head_api_returns_safe_registered_full_commit_without_checkout(tmp_path):

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 
@@ -24,6 +25,8 @@ class AdmittedWorkspace:
     cwd: str
     project_id: str | None
     authorized_roots: tuple[str, ...]
+    workspace_id: str | None = None
+    workspace_generation: int | None = None
 
 
 def _directory(value: str | Path, label: str, *, canonical: bool = False) -> Path:
@@ -116,6 +119,48 @@ def admit_workspace(
         cwd=str(resolved),
         project_id=project_id,
         authorized_roots=tuple(str(root) for root in roots),
+    )
+
+
+def admit_provisioned_workspace(
+    *,
+    workspace: Mapping[str, Any],
+    workspace_root: str | Path,
+    expected_owner_id: str,
+    expected_generation: int,
+) -> AdmittedWorkspace:
+    """Admit a server-resolved provisioned checkout without a renderer path.
+
+    This is an initial-cwd check, not a filesystem sandbox. The workspace
+    record supplies identity; callers must re-resolve and compare it before
+    dispatch so queued work cannot outlive its owner or generation.
+    """
+    workspace_id = workspace.get("workspace_id")
+    if not isinstance(workspace_id, str) or not re.fullmatch(r"workspace-[0-9a-f]{32}", workspace_id):
+        raise ValueError("Workspace identity is invalid")
+    owner_id = workspace.get("owner_id")
+    if owner_id != expected_owner_id:
+        raise ValueError("Workspace is not owned by the current user")
+    generation = workspace.get("generation")
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+        raise ValueError("Workspace generation is invalid")
+    if generation != expected_generation:
+        raise ValueError("Workspace generation changed; refresh before submitting")
+    if workspace.get("isolation_profile") != "git-checkout":
+        raise ValueError("Workspace is not an admitted Git checkout")
+    project_id = workspace.get("project_id")
+    if not isinstance(project_id, str) or not project_id or project_id != project_id.strip():
+        raise ValueError("Workspace has no active project binding")
+
+    base = _directory(workspace_root, "Provisioned workspace root")
+    root_value = workspace.get("root")
+    root = _directory(root_value, "Provisioned workspace directory", canonical=True)
+    expected_root = base / workspace_id
+    if root != expected_root:
+        raise ValueError("Workspace directory no longer matches its server-owned identity")
+    return AdmittedWorkspace(
+        cwd=str(root), project_id=project_id, authorized_roots=(str(root),),
+        workspace_id=workspace_id, workspace_generation=generation,
     )
 
 

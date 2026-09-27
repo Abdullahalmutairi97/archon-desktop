@@ -271,7 +271,9 @@ class TaskStore:
                session_id: str | None = None, approval_mode: str = "approve",
                chat_only: bool = False, profile: str | None = None,
                request_id: str | None = None, project_id: str | None | object = _PROJECT_UNSET,
-               request_hash: str | None = None, runtime_id: str | None = None) -> dict[str, Any]:
+               request_hash: str | None = None, runtime_id: str | None = None,
+               workspace_id: str | None = None, workspace_generation: int | None = None,
+               workspace_owner_id: str | None = None) -> dict[str, Any]:
         explicit_runtime_id = runtime_id is not None
         if runtime_id is None and profile in {"prime", "pi"}:
             # Internal callers that already use a canonical profile get the
@@ -281,6 +283,20 @@ class TaskStore:
             raise ValueError("Runtime id must be canonical: prime or pi")
         if explicit_runtime_id and profile in {"prime", "pi"} and runtime_id != profile:
             raise ValueError("Explicit runtime id must match the canonical profile")
+        if (workspace_id is None) != (workspace_generation is None):
+            raise ValueError("Workspace id and generation must be provided together")
+        if workspace_id is not None:
+            if not isinstance(workspace_id, str) or not re.fullmatch(r"workspace-[0-9a-f]{32}", workspace_id):
+                raise ValueError("Workspace id is invalid")
+            if (isinstance(workspace_generation, bool) or not isinstance(workspace_generation, int)
+                    or workspace_generation < 1):
+                raise ValueError("Workspace generation must be a positive integer")
+            if not isinstance(workspace_owner_id, str) or not workspace_owner_id.strip():
+                raise ValueError("Workspace owner must be server supplied")
+            if runtime_id != "prime" or profile != "prime" or project_id is _PROJECT_UNSET:
+                raise ValueError("Workspace tasks require Prime runtime and an explicit project binding")
+            if request_id is not None and request_hash is None:
+                raise ValueError("Workspace task retries require a request hash")
         if request_id is None:
             if request_hash is not None:
                 raise ValueError('A task request hash requires an explicit request id')
@@ -329,12 +345,25 @@ class TaskStore:
                 ).fetchone()
                 project_snapshot = (project_id if project_id is not _PROJECT_UNSET else
                                     current_binding["project_id"] if current_binding else None)
+                if workspace_id is not None:
+                    workspace = conn.execute(
+                        """SELECT root,owner_id,project_id,generation,isolation_profile
+                           FROM workspaces WHERE workspace_id=?""",
+                        (workspace_id,),
+                    ).fetchone()
+                    if (workspace is None or workspace["owner_id"] != workspace_owner_id
+                            or workspace["generation"] != workspace_generation
+                            or workspace["root"] != cwd
+                            or workspace["project_id"] != project_snapshot
+                            or workspace["isolation_profile"] != "git-checkout"):
+                        raise ValueError("Workspace identity changed during task admission; refresh before retrying")
                 conn.execute(
                     """INSERT INTO tasks
-                       (id,prompt,cwd,model,provider,session_id,profile,runtime_id,project_id,approval_mode,chat_only,skills_json,status,created_at,updated_at,request_hash)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?)""",
+                       (id,prompt,cwd,model,provider,session_id,profile,runtime_id,project_id,approval_mode,chat_only,skills_json,status,created_at,updated_at,request_hash,workspace_id,workspace_generation)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?,?)""",
                     (task_id, prompt, cwd, model, provider, session_id, profile, runtime_id, project_snapshot,
-                     approval_mode, int(chat_only), json.dumps(skills or []), now, now, request_hash),
+                     approval_mode, int(chat_only), json.dumps(skills or []), now, now, request_hash,
+                     workspace_id, workspace_generation),
                 )
                 self._append_event(conn, task_id, "task.queued", {"status": "queued"})
                 if runtime_id is not None:
@@ -878,10 +907,11 @@ class TaskStore:
         ).fetchone()[0]
         conn.execute(
             """INSERT INTO task_attempts
-               (id,task_id,ordinal,state,claimed_at,started_at,runtime_id,session_id,cwd,project_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+               (id,task_id,ordinal,state,claimed_at,started_at,runtime_id,session_id,cwd,project_id,workspace_id,workspace_generation)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (attempt_id, task["id"], ordinal, state, now, started_at, task["runtime_id"],
-             task["session_id"], task["cwd"], task["project_id"]),
+             task["session_id"], task["cwd"], task["project_id"], task["workspace_id"],
+             task["workspace_generation"]),
         )
         return attempt_id
 

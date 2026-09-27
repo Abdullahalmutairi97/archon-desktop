@@ -62,7 +62,9 @@ const sourceInputs = [
   resolve(desktopRoot, 'THIRD-PARTY-LICENSES.md'),
   resolve(desktopRoot, 'scripts/check-toolchain.mjs'),
   resolve(desktopRoot, 'scripts/license-inventory.mjs'),
+  resolve(desktopRoot, 'scripts/package-portable-linux.mjs'),
   resolve(desktopRoot, 'scripts/write-build-manifest.mjs'),
+  resolve(desktopRoot, 'PORTABLE-PACKAGE.md'),
   ...walkFiles(resolve(desktopRoot, 'src')),
 ]
 const inputs = [...new Set(sourceInputs)]

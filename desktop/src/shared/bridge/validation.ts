@@ -370,11 +370,18 @@ function validTaskId(value: unknown): value is string {
 }
 
 function parseTaskSubmitPayload(value: unknown): TaskSubmitPayload {
-  const record = readOwnDataRecord(value, ['projectId', 'prompt'])
-  if (Object.keys(record).length !== 2) return fail()
+  const record = readOwnDataRecord(value, ['projectId', 'prompt', 'workspaceId', 'workspaceGeneration'])
+  const hasWorkspace = Object.hasOwn(record, 'workspaceId')
+  if (Object.keys(record).length !== (hasWorkspace ? 4 : 2) ||
+      hasWorkspace !== Object.hasOwn(record, 'workspaceGeneration')) return fail()
   if (!boundedString(record.projectId, MAX_PROJECT_ID_LENGTH)) return fail()
   if (!boundedString(record.prompt, MAX_TASK_PROMPT_LENGTH) || !record.prompt.trim()) return fail()
-  return Object.freeze({ projectId: record.projectId, prompt: record.prompt })
+  if (hasWorkspace && (!workspaceFileId(record.workspaceId) ||
+      typeof record.workspaceGeneration !== 'number' || !Number.isSafeInteger(record.workspaceGeneration) ||
+      record.workspaceGeneration < 1)) return fail()
+  return Object.freeze({ projectId: record.projectId, prompt: record.prompt,
+    ...(hasWorkspace ? { workspaceId: record.workspaceId as string, workspaceGeneration: record.workspaceGeneration as number } : {}),
+  })
 }
 
 function parseTaskByIdPayload(value: unknown): TaskByIdPayload {

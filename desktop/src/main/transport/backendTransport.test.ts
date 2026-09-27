@@ -127,7 +127,7 @@ describe('backend transport', () => {
     }
     const fetcher = vi.fn<BackendFetch>(async (url, init) => {
       if (url.pathname.endsWith('/api/runtimes')) return response({ runtimes: [runtime] })
-      if (url.pathname.endsWith('/api/tasks') && init?.method === 'POST') {
+      if ((url.pathname.endsWith('/api/tasks') || url.pathname.endsWith('/api/workspace-tasks')) && init?.method === 'POST') {
         return response({ task }, 202)
       }
       if (url.pathname.endsWith(`/api/tasks/${taskId}/events`)) return response({ events: [event] })
@@ -177,6 +177,16 @@ describe('backend transport', () => {
     expect(eventsUrl.searchParams.get('after')).toBe('12')
     expect(String(fetcher.mock.calls[4][0])).toBe(`http://127.0.0.1:8000/api/tasks/${taskId}/cancel`)
     expect(fetcher.mock.calls[4][1]?.method).toBe('POST')
+
+    await transport.invoke('tasks.submit', {
+      projectId: 'project-1', prompt: 'Inspect this checkout',
+      workspaceId: `workspace-${'a'.repeat(32)}`, workspaceGeneration: 1,
+    })
+    expect(String(fetcher.mock.calls.at(-1)?.[0])).toBe('http://127.0.0.1:8000/api/workspace-tasks')
+    expect(JSON.parse(String(fetcher.mock.calls.at(-1)?.[1]?.body))).toEqual({
+      prompt: 'Inspect this checkout',
+      workspace_id: `workspace-${'a'.repeat(32)}`, workspace_generation: 1,
+    })
   })
 
   it('rejects unsafe task inputs before fetch', async () => {

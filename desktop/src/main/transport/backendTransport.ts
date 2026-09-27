@@ -324,7 +324,11 @@ function operationUrl(
   payload: OperationMap[OperationName]['payload'],
 ): URL {
   let path = `${basePath}${OPERATION_PATHS[operation]}`
-  if (operation === 'projects.head') {
+  if (operation === 'tasks.submit' && (payload as OperationMap['tasks.submit']['payload']).workspaceId !== undefined) {
+    // An older backend must reject this route rather than silently ignoring
+    // workspace fields and running against the registered project source.
+    path = `${basePath}/api/workspace-tasks`
+  } else if (operation === 'projects.head') {
     const headPayload = payload as OperationMap['projects.head']['payload']
     path += `/${encodeURIComponent(headPayload.projectId)}/head`
   } else if (operation === 'tasks.get' || operation === 'tasks.events' || operation === 'tasks.cancel') {
@@ -497,6 +501,13 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
   }
   if (operation === 'tasks.submit') {
     const submitPayload = payload as OperationMap['tasks.submit']['payload']
+    if (submitPayload.workspaceId !== undefined) {
+      return JSON.stringify({
+        prompt: submitPayload.prompt,
+        workspace_id: submitPayload.workspaceId,
+        workspace_generation: submitPayload.workspaceGeneration,
+      })
+    }
     return JSON.stringify({
       prompt: submitPayload.prompt,
       project_id: submitPayload.projectId,

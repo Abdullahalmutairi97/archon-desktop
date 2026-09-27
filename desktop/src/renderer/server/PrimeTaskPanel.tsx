@@ -8,9 +8,10 @@ const MAX_OUTPUT_LENGTH = 30_000
 const MAX_RECENT_TASKS = 8
 
 type ProjectChoice = { id: string; name: string; primaryPath: string }
+type WorkspaceChoice = { id: string; projectId: string; root: string; generation: number }
 type PrimeTaskSummary = { id: string; status: string }
-type Draft = { bridge: DesktopBridge; generation: number; projectId: string; prompt: string }
-type Confirmation = Draft & { project: ProjectChoice }
+type Draft = { bridge: DesktopBridge; generation: number; projectId: string; prompt: string; workspaceId?: string }
+type Confirmation = Draft & { project: ProjectChoice; workspace?: WorkspaceChoice }
 type TaskProgress = {
   id: string
   status: string
@@ -63,6 +64,20 @@ function projectChoices(projects: readonly JsonRecord[]): ProjectChoice[] {
     return id && name && primaryPath ? [{ id, name, primaryPath }] : []
   })
 }
+
+function workspaceChoices(workspaces: readonly JsonRecord[]): WorkspaceChoice[] {
+  return workspaces.flatMap((record) => {
+    const id = nonEmptyString(record.workspace_id)
+    const projectId = nonEmptyString(record.project_id)
+    const root = nonEmptyString(record.root)
+    const generation = record.generation
+    if (!id || !/^workspace-[0-9a-f]{32}$/u.test(id) || !projectId || !root?.startsWith('/') ||
+        typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation < 1) return []
+    return [{ id, projectId, root, generation }]
+  })
+}
+
+const NO_WORKSPACES: readonly JsonRecord[] = []
 
 function primeTaskSummaries(tasks: readonly JsonRecord[]): PrimeTaskSummary[] {
   const seen = new Set<string>()
@@ -124,14 +139,17 @@ export function PrimeTaskPanel({
   connection,
   projects,
   tasks,
+  workspaces = NO_WORKSPACES,
 }: {
   bridge: DesktopBridge
   connection: ConnectionDescription
   projects: readonly JsonRecord[]
   tasks: readonly JsonRecord[]
+  workspaces?: readonly JsonRecord[]
 }) {
   const generation = connection.generation
   const choices = useMemo(() => projectChoices(projects), [projects])
+  const checkoutChoices = useMemo(() => workspaceChoices(workspaces), [workspaces])
   const primeTasks = useMemo(() => primeTaskSummaries(tasks), [tasks])
   const scopeSerial = useRef(0)
   const taskCheckVersion = useRef(0)
@@ -157,6 +175,9 @@ export function PrimeTaskPanel({
   const submission = sameScope(submissionValue, bridge, generation) ? submissionValue : null
   const taskOpen = sameScope(taskOpenValue, bridge, generation) ? taskOpenValue : null
   const selectedProject = choices.find((project) => project.id === scopeDraft.projectId) ?? null
+  const selectedWorkspace = scopeDraft.workspaceId
+    ? checkoutChoices.find((workspace) => workspace.id === scopeDraft.workspaceId && workspace.projectId === selectedProject?.id) ?? null
+    : null
   const locked = !!submission || !!confirmation || !!taskOpen?.taskId
 
   useEffect(() => {
@@ -256,8 +277,10 @@ export function PrimeTaskPanel({
   }, [bridge, generation, submission])
 
   async function reviewSubmission(): Promise<void> {
-    if (!selectedProject || !scopeDraft.prompt.trim() || scopeDraft.prompt.length > 8_000 || currentCapability?.state !== 'ready' || submission || confirmation || openLock.current || taskOpen?.taskId) return
-    setConfirmationValue({ ...scopeDraft, project: selectedProject })
+    if (!selectedProject || (scopeDraft.workspaceId && !selectedWorkspace) || !scopeDraft.prompt.trim() || scopeDraft.prompt.length > 8_000 || currentCapability?.state !== 'ready' || submission || confirmation || openLock.current || taskOpen?.taskId) return
+    setConfirmationValue({ ...scopeDraft, project: selectedProject,
+      ...(selectedWorkspace ? { workspace: selectedWorkspace } : {}),
+    })
   }
 
   async function openExistingTask(taskId: string): Promise<void> {
@@ -317,6 +340,9 @@ export function PrimeTaskPanel({
       const result = await bridge.api.invoke('tasks.submit', {
         projectId: frozen.project.id,
         prompt: frozen.prompt,
+        ...(frozen.workspace ? {
+          workspaceId: frozen.workspace.id, workspaceGeneration: frozen.workspace.generation,
+        } : {}),
       })
       if (scopeSerial.current !== requestId) return
       const output = detailText(result.task)
@@ -516,11 +542,23 @@ export function PrimeTaskPanel({
         </select>
         {!choices.length && <p className="prime-task-hint">No returned project has a usable primary path, so task submission is unavailable.</p>}
 
+        <label htmlFor="prime-task-workspace">Execution location</label>
+        <select
+          id="prime-task-workspace"
+          value={scopeDraft.workspaceId ?? ''}
+          onChange={(event) => setDraftValue({ ...scopeDraft, workspaceId: event.currentTarget.value || undefined })}
+          disabled={locked || !selectedProject}
+        >
+          <option value="">Registered project source</option>
+          {checkoutChoices.filter((workspace) => workspace.projectId === selectedProject?.id).map((workspace) =>
+            <option key={workspace.id} value={workspace.id}>Checkout {workspace.id.slice(-8)} · Generation {workspace.generation} · {workspace.root}</option>)}
+        </select>
+
         <label htmlFor="prime-task-prompt">Prompt</label>
         <textarea
           id="prime-task-prompt"
           value={scopeDraft.prompt}
-          onChange={(event) => setDraftValue({ bridge, generation, projectId: scopeDraft.projectId, prompt: event.currentTarget.value })}
+          onChange={(event) => setDraftValue({ ...scopeDraft, prompt: event.currentTarget.value })}
           maxLength={8_000}
           rows={5}
           placeholder="Describe the work for Prime…"
@@ -528,7 +566,7 @@ export function PrimeTaskPanel({
         />
         <div className="prime-task-form-footer">
           <span>{scopeDraft.prompt.length.toLocaleString()} / 8,000 characters</span>
-          <button type="submit" disabled={locked || !selectedProject || !scopeDraft.prompt.trim()}>Review task</button>
+          <button type="submit" disabled={locked || !selectedProject || (scopeDraft.workspaceId !== undefined && !selectedWorkspace) || !scopeDraft.prompt.trim()}>Review task</button>
         </div>
       </form>
     </>}
@@ -539,10 +577,11 @@ export function PrimeTaskPanel({
         <dl>
           <dt>Server</dt><dd>{connection.serverUrl ?? 'Server URL unavailable'}</dd>
           <dt>Project</dt><dd>{confirmation.project.name}</dd>
-          <dt>Project path at last load</dt><dd className="prime-task-path">{confirmation.project.primaryPath}</dd>
+          <dt>Execution location</dt><dd>{confirmation.workspace ? `Checkout ${confirmation.workspace.id} · Generation ${confirmation.workspace.generation}` : 'Registered project source'}</dd>
+          <dt>Path at last load</dt><dd className="prime-task-path">{confirmation.workspace?.root ?? confirmation.project.primaryPath}</dd>
           <dt>Prompt</dt><dd className="prime-task-confirm-prompt">{confirmation.prompt}</dd>
         </dl>
-        <p className="prime-task-warning">Trusted execution is unsandboxed and may edit files or run commands in this project. The server selects its current registered project path when accepting the task; the path above is a snapshot. Provider credentials and native conformance are unverified.</p>
+        <p className="prime-task-warning">Trusted execution is unsandboxed and may edit files or run commands in this {confirmation.workspace ? 'checkout' : 'project'}. The server rechecks the selected location when accepting and starting the task; the path above is a snapshot. Provider credentials and native conformance are unverified.</p>
         <div className="prime-task-confirm-actions">
           <button type="button" onClick={() => setConfirmationValue(null)}>Go back</button>
           <button className="prime-task-run" type="button" onClick={() => { void runConfirmedTask() }}>Run with Trusted execution</button>

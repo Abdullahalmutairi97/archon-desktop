@@ -49,6 +49,28 @@ function defaults(operation: string): unknown {
 }
 
 describe('PrimeTaskPanel', () => {
+  it('pins a confirmed Prime task to the selected checkout generation', async () => {
+    const { bridge, invoke } = fakeBridge(defaults)
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    render(<PrimeTaskPanel bridge={bridge} connection={connection} projects={projects} tasks={[]} workspaces={[{
+      workspace_id: workspaceId, root: '/work/checkouts/one', project_id: 'project-1',
+      generation: 1, base_revision: 'a'.repeat(40), head_revision: 'a'.repeat(40),
+    }]} />)
+
+    fireEvent.change(await screen.findByLabelText('Execution location'), { target: { value: workspaceId } })
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Inspect the checkout.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Review task' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('/work/checkouts/one')
+    expect(dialog).toHaveTextContent('Generation 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Run with Trusted execution' }))
+    await screen.findByText('Finished')
+    expect(invoke.mock.calls.find(([operation]) => operation === 'tasks.submit')).toEqual([
+      'tasks.submit', { projectId: 'project-1', prompt: 'Inspect the checkout.',
+        workspaceId, workspaceGeneration: 1 },
+    ])
+  })
+
   it('shows a frozen task confirmation and submits only after explicit Trusted execution confirmation', async () => {
     const { bridge, invoke } = fakeBridge(defaults)
     render(<PrimeTaskPanel bridge={bridge} connection={connection} projects={projects} tasks={[]} />)

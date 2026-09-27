@@ -13,18 +13,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .migrations import v001, v002, v003, v004
+from .migrations import v001, v002, v003, v004, v005
 
 SCHEMA = v001.SCHEMA
-MIGRATION_VERSION = 4
+MIGRATION_VERSION = 5
 MIGRATION_CHECKSUM = hashlib.sha256(Path(v001.__file__).read_bytes()).hexdigest()
 MIGRATION_CHECKSUMS = {
     1: MIGRATION_CHECKSUM,
     2: hashlib.sha256(Path(v002.__file__).read_bytes()).hexdigest(),
     3: hashlib.sha256(Path(v003.__file__).read_bytes()).hexdigest(),
     4: hashlib.sha256(Path(v004.__file__).read_bytes()).hexdigest(),
+    5: hashlib.sha256(Path(v005.__file__).read_bytes()).hexdigest(),
 }
-MIGRATIONS = {1: v001, 2: v002, 3: v003, 4: v004}
+MIGRATIONS = {1: v001, 2: v002, 3: v003, 4: v004, 5: v005}
 MIGRATION_LOCK_TIMEOUT = 30.0
 SNAPSHOT_TIMEOUT = 30.0
 
@@ -233,9 +234,12 @@ def _validate_schema_shape(conn: sqlite3.Connection, version: int) -> None:
             raise RuntimeError("Database schema differs from its migration ledger: missing task attempt ordinal uniqueness")
         _require_table_primary_key(conn, "task_attempts", ("id",))
         _require_table_primary_key(conn, "session_ownership", ("session_id",))
-        if _foreign_keys(conn, "task_attempts") != {
+        expected_attempt_fks = {
             ("tasks", "task_id", "id", "NO ACTION", "CASCADE"),
-        }:
+        }
+        if version >= 5:
+            expected_attempt_fks.add(("workspaces", "workspace_id", "workspace_id", "NO ACTION", "RESTRICT"))
+        if _foreign_keys(conn, "task_attempts") != expected_attempt_fks:
             raise RuntimeError("Database schema differs from its migration ledger: malformed task attempt relationship")
         if _foreign_keys(conn, "events") != {
             ("tasks", "task_id", "id", "NO ACTION", "CASCADE"),
@@ -384,6 +388,31 @@ def _validate_schema_shape(conn: sqlite3.Connection, version: int) -> None:
         )
         _require_trigger(
             conn, "workspace_native_session_immutable", v004.WORKSPACE_SESSION_IMMUTABLE_TRIGGER_SQL,
+        )
+
+    if version >= 5:
+        _validate_columns(conn, "tasks", {"workspace_id", "workspace_generation"})
+        _validate_columns(conn, "task_attempts", {"workspace_id", "workspace_generation"})
+        task_sql = _sql_tokens(_table_sql(conn, "tasks"))
+        attempt_sql = _sql_tokens(_table_sql(conn, "task_attempts"))
+        if _sql_tokens("CHECK(workspace_generation IS NULL OR workspace_generation > 0)") not in task_sql:
+            raise RuntimeError("Database schema differs from its migration ledger: malformed task workspace generation")
+        if _sql_tokens("CHECK(workspace_generation IS NULL OR workspace_generation > 0)") not in attempt_sql:
+            raise RuntimeError("Database schema differs from its migration ledger: malformed attempt workspace generation")
+        workspace_fk = ("workspaces", "workspace_id", "workspace_id", "NO ACTION", "RESTRICT")
+        if _foreign_keys(conn, "tasks") != {workspace_fk} or workspace_fk not in _foreign_keys(conn, "task_attempts"):
+            raise RuntimeError("Database schema differs from its migration ledger: missing task workspace relationship")
+        _require_trigger(
+            conn, "task_workspace_binding_immutable", v005.TASK_WORKSPACE_IMMUTABLE_TRIGGER_SQL,
+        )
+        _require_trigger(
+            conn, "task_workspace_binding_valid", v005.TASK_WORKSPACE_INSERT_TRIGGER_SQL,
+        )
+        _require_trigger(
+            conn, "task_attempt_workspace_binding_immutable", v005.ATTEMPT_WORKSPACE_IMMUTABLE_TRIGGER_SQL,
+        )
+        _require_trigger(
+            conn, "task_attempt_workspace_binding_valid", v005.ATTEMPT_WORKSPACE_INSERT_TRIGGER_SQL,
         )
 
 

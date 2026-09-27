@@ -1,6 +1,6 @@
 # P3 — Unified workspaces and persistent runner
 
-**Status:** in progress. Protected same-user pairing, versioned workspace identity, a durable local runner outbox, revision-pinned checkout provisioning, and an opt-in backend-owned Local Codex worker with bounded durable event replay are implemented. Native execution isolation, safe generation recovery, durable accepted-turn state, and a proven live-provider UI-close turn remain open. **Dependencies:** P1; P2 before desktop UI delivery. **Outcome:** a fresh solo installation authenticates locally and accepted work belongs to a runner instead of the desktop.
+**Status:** in progress. Protected same-user pairing, versioned workspace identity, a durable local runner outbox, revision-pinned checkout provisioning, workspace-bound Prime task admission, and an opt-in backend-owned Local Codex worker with bounded durable event replay are implemented. Native execution isolation, safe generation recovery, durable accepted-turn state, and a proven live-provider UI-close turn remain open. **Dependencies:** P1; P2 before desktop UI delivery. **Outcome:** a fresh solo installation authenticates locally and accepted work belongs to a runner instead of the desktop.
 
 ## Scope
 
@@ -11,6 +11,7 @@ Use the same coordinator/runner contracts for local solo and private remote work
 - [x] Create the local owner/single-owner principal and protected local-socket pairing. Verify OS peer/permissions, challenge audience/nonce/expiry and replay denial; require no online login or team infrastructure.
 - [ ] Store credentials through the protected OS store; unavailable keyring means memory-only session, not silent insecure persistence. Expire and retire M1's legacy credential migration path.
 - [x] Add versioned workspace/session records and mappings with explicit ownership. Reject cross-runtime/cwd resume and unknown client-supplied roots.
+- [x] Admit a Prime task by provisioned workspace ID and generation through a distinct endpoint. Resolve its project/root on the server, snapshot the binding in the task and attempt, and reject changed ownership or generation before dispatch. This does not supply native process isolation.
 - [ ] Add runner enrollment, authenticated local/remote channels, supervisor and durable attempt/outbox journal. Journal before acknowledgment; deduplicate dispatch and events.
 - [ ] Deduplicate runner events by `(runner_id, journal_generation, runner_seq)`. After journal loss/restore, reconcile attempts and register a new generation; stale generations cannot mutate live state.
 - [ ] Implement attempts, leases, fencing, per-session serialization and deterministic reconciling/interrupted states. UI closure does not stop accepted work.

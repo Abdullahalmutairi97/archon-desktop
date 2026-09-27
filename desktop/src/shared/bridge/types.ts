@@ -104,6 +104,8 @@ export type WorkspaceRecord = JsonRecord & {
 export interface TaskSubmitPayload {
   projectId: string
   prompt: string
+  workspaceId?: string
+  workspaceGeneration?: number
 }
 
 export interface TaskByIdPayload {

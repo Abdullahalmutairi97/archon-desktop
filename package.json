@@ -12,6 +12,7 @@
     "desktop:setup": "npm ci --prefix desktop",
     "desktop:dev": "npm run dev --prefix desktop",
     "desktop:start": "npm run build --prefix desktop && npm start --prefix desktop",
+    "desktop:package:portable": "npm run package:portable --prefix desktop",
     "desktop:typecheck": "npm run typecheck --prefix desktop",
     "desktop:test": "npm run test --prefix desktop",
     "desktop:build": "npm run build --prefix desktop",

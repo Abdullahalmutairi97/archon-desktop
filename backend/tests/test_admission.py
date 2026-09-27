@@ -4,6 +4,7 @@ import pytest
 
 from archon_server.admission import (
     SessionWorkspace,
+    admit_provisioned_workspace,
     admit_workspace,
     revalidate_workspace,
 )
@@ -115,6 +116,61 @@ def test_unknown_and_duplicate_project_ids_are_rejected(tmp_path):
     for projects in ([], [project(tmp_path), project(tmp_path)]):
         with pytest.raises(ValueError):
             admit_workspace(scratch_root=tmp_path, projects=projects, project_id="p1")
+
+
+def test_provisioned_checkout_admission_uses_only_current_server_identity(tmp_path):
+    base = tmp_path / "workspaces"
+    root = base / ("workspace-" + "a" * 32)
+    root.mkdir(parents=True)
+    identity = {
+        "workspace_id": root.name,
+        "root": str(root),
+        "owner_id": "local-uid:1000",
+        "project_id": "project-1",
+        "generation": 3,
+        "isolation_profile": "git-checkout",
+    }
+    admitted = admit_provisioned_workspace(
+        workspace=identity, workspace_root=base,
+        expected_owner_id="local-uid:1000", expected_generation=3,
+    )
+    assert admitted.cwd == str(root)
+    assert admitted.project_id == "project-1"
+    assert admitted.authorized_roots == (str(root),)
+    assert admitted.workspace_id == root.name
+    assert admitted.workspace_generation == 3
+
+
+@pytest.mark.parametrize(
+    "changes,owner,generation",
+    [
+        ({"root": "/tmp/attacker"}, "local-uid:1000", 3),
+        ({}, "local-uid:2000", 3),
+        ({}, "local-uid:1000", 4),
+        ({"isolation_profile": "sandboxed"}, "local-uid:1000", 3),
+    ],
+)
+def test_provisioned_checkout_admission_rejects_mismatched_identity(
+    tmp_path, changes, owner, generation,
+):
+    base = tmp_path / "workspaces"
+    workspace_id = "workspace-" + "b" * 32
+    root = base / workspace_id
+    root.mkdir(parents=True)
+    identity = {
+        "workspace_id": workspace_id,
+        "root": str(root),
+        "owner_id": "local-uid:1000",
+        "project_id": "project-1",
+        "generation": 3,
+        "isolation_profile": "git-checkout",
+        **changes,
+    }
+    with pytest.raises(ValueError):
+        admit_provisioned_workspace(
+            workspace=identity, workspace_root=base,
+            expected_owner_id=owner, expected_generation=generation,
+        )
 
 
 def test_project_without_unambiguous_default_requires_cwd(tmp_path):

@@ -575,6 +575,6 @@ export function ServerCollections({
       />}
     </div>}
     {(data || currentWorkspaceLoadState?.state === 'ready') && <p className="server-collections-note">Counts show rows returned; the server may cap session, task and workspace lists.</p>}
-    {data && bridge && connection && <PrimeTaskPanel key={generation} bridge={bridge} connection={connection} projects={data.projects} tasks={data.tasks} />}
+    {data && bridge && connection && <PrimeTaskPanel key={generation} bridge={bridge} connection={connection} projects={data.projects} tasks={data.tasks} workspaces={workspaceRecords} />}
   </section>
 }

@@ -282,6 +282,13 @@ describe('finite desktop bridge validation', () => {
     expect(parseOperationRequest('tasks.submit', { projectId: 'project-1', prompt: 'Inspect this project' })).toEqual([
       'tasks.submit', { projectId: 'project-1', prompt: 'Inspect this project' },
     ])
+    expect(parseOperationRequest('tasks.submit', {
+      projectId: 'project-1', prompt: 'Inspect this checkout',
+      workspaceId: `workspace-${'a'.repeat(32)}`, workspaceGeneration: 1,
+    })).toEqual(['tasks.submit', {
+      projectId: 'project-1', prompt: 'Inspect this checkout',
+      workspaceId: `workspace-${'a'.repeat(32)}`, workspaceGeneration: 1,
+    }])
     expect(parseOperationRequest('tasks.get', { taskId: 'task_123-ab' })).toEqual([
       'tasks.get', { taskId: 'task_123-ab' },
     ])
@@ -299,6 +306,10 @@ describe('finite desktop bridge validation', () => {
       ['tasks.submit', { projectId: '', prompt: 'work' }],
       ['tasks.submit', { projectId: 'project-1', prompt: '' }],
       ['tasks.submit', { projectId: 'project-1', prompt: 'x'.repeat(8_001) }],
+      ['tasks.submit', { projectId: 'project-1', prompt: 'work', workspaceId: `workspace-${'a'.repeat(32)}` }],
+      ['tasks.submit', { projectId: 'project-1', prompt: 'work', workspaceGeneration: 1 }],
+      ['tasks.submit', { projectId: 'project-1', prompt: 'work', workspaceId: '../other', workspaceGeneration: 1 }],
+      ['tasks.submit', { projectId: 'project-1', prompt: 'work', workspaceId: `workspace-${'a'.repeat(32)}`, workspaceGeneration: 0 }],
       ['tasks.get', { taskId: '../outside' }],
       ['tasks.cancel', { taskId: 'task?id=outside' }],
       ['tasks.events', { taskId: 'task_1', after: -1 }],
