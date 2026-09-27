@@ -23,6 +23,7 @@ export const READ_ONLY_OPERATIONS: readonly OperationName[] = Object.freeze([
   'workspaces.get',
   'workspaces.files.list',
   'workspaces.files.read',
+  'workspaces.files.search',
 ])
 
 export const TASK_OPERATIONS: readonly OperationName[] = Object.freeze([
@@ -54,6 +55,7 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'workspaces.provision': 'POST',
   'workspaces.files.list': 'GET',
   'workspaces.files.read': 'GET',
+  'workspaces.files.search': 'GET',
 })
 
 export const MAX_BACKEND_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -84,6 +86,7 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'workspaces.provision': '/api/workspaces',
   'workspaces.files.list': '/api/workspaces',
   'workspaces.files.read': '/api/workspaces',
+  'workspaces.files.search': '/api/workspaces',
 })
 
 const SAFE_MESSAGES = Object.freeze({
@@ -320,6 +323,9 @@ function operationUrl(
     const workspacePayload = payload as OperationMap['workspaces.files.list']['payload']
     path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files`
     if (operation === 'workspaces.files.read') path += '/read'
+  } else if (operation === 'workspaces.files.search') {
+    const workspacePayload = payload as OperationMap['workspaces.files.search']['payload']
+    path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files/search`
   }
   const url = new URL(path, origin)
   if (operation === 'sessions.list') {
@@ -340,6 +346,9 @@ function operationUrl(
     const filePayload = payload as OperationMap['workspaces.files.read']['payload']
     url.searchParams.set('path', filePayload.path)
     url.searchParams.set('max_bytes', String(filePayload.maxBytes))
+  } else if (operation === 'workspaces.files.search') {
+    const searchPayload = payload as OperationMap['workspaces.files.search']['payload']
+    url.searchParams.set('q', searchPayload.query)
   }
   return url
 }
@@ -352,7 +361,7 @@ function isSupportedResult(
   if (!isBoundedIpcPayload(value, RESPONSE_PAYLOAD_LIMITS) || !isRecord(value)) return false
   if (operation === 'readiness') return isReadinessResponse(value)
   try {
-    parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, value, operation)
+    const parsed = parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, value, operation)
     if (operation === 'tasks.get') {
       const requestedTaskId = (payload as OperationMap['tasks.get']['payload']).taskId
       return isRecord(value.task) && value.task.id === requestedTaskId
@@ -379,6 +388,13 @@ function isSupportedResult(
       const requested = payload as OperationMap['workspaces.files.read']['payload']
       return value.path === requested.path && typeof value.content === 'string' &&
         new TextEncoder().encode(value.content).byteLength <= requested.maxBytes
+    }
+    if (operation === 'workspaces.files.search') {
+      if (!isRecord(parsed)) return false
+      const result = parsed as Record<string, unknown>
+      if (!Array.isArray(result.hits) || typeof result.files_scanned !== 'number' ||
+          typeof result.bytes_scanned !== 'number') return false
+      return result.hits.length <= 100 && result.files_scanned <= 200 && result.bytes_scanned <= 1024 * 1024
     }
     return true
   } catch {

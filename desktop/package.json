@@ -12,6 +12,7 @@
   "scripts": {
     "preinstall": "node scripts/check-toolchain.mjs",
     "dev": "electron-vite dev",
+    "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "build": "electron-vite build && node scripts/write-build-manifest.mjs",

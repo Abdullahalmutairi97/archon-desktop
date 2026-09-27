@@ -215,6 +215,80 @@ def test_workspace_file_api_never_follows_tree_or_root_symlinks(tmp_path):
     assert "must not be returned" not in replaced_root.text
 
 
+def test_workspace_search_is_owner_scoped_text_only_and_hides_protected_entries(tmp_path):
+    settings = _settings(tmp_path)
+    root = _register_workspace(settings)
+    (root / "README.md").write_text("An agent wrote this.\n", encoding="utf-8")
+    source = root / "src"
+    source.mkdir()
+    (source / "agent.py").write_text("def run_agent():\n    return 'ready'\n", encoding="utf-8")
+    (root / "credentials.json").write_text('{"agent": "private"}', encoding="utf-8")
+    (source / "binary.bin").write_bytes(b"agent\x00binary")
+    foreign_root = settings.data_dir / "workspaces" / "foreign-search"
+    foreign_root.mkdir()
+    Database(settings.database_path).create_workspace(
+        workspace_id="workspace-search-foreign",
+        root=str(foreign_root),
+        owner_id="different-server-owner",
+        project_id="project-test",
+        base_revision="b" * 40,
+        head_revision="b" * 40,
+        generation=1,
+        isolation_profile="git-checkout",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        found = client.get("/api/workspaces/workspace-files-test/files/search?q=agent", headers=HEADERS)
+        anonymous = client.get("/api/workspaces/workspace-files-test/files/search?q=agent")
+        foreign = client.get("/api/workspaces/workspace-search-foreign/files/search?q=agent", headers=HEADERS)
+        blank = client.get("/api/workspaces/workspace-files-test/files/search?q=%20%20", headers=HEADERS)
+
+    assert found.status_code == 200
+    result = found.json()
+    assert result["hits"] == [
+        {"path": "README.md", "line": 1},
+        {"path": "src/agent.py", "line": 1},
+    ]
+    assert result["files_scanned"] == 3
+    assert result["bytes_scanned"] == len((root / "README.md").read_bytes()) + len((source / "agent.py").read_bytes())
+    assert result["truncated"] is False
+    assert "content" not in result["hits"][0]
+    assert anonymous.status_code == 401
+    assert foreign.status_code == 404
+    assert blank.status_code == 400
+
+
+def test_workspace_search_stops_at_global_file_cap_without_returning_source_text(tmp_path, monkeypatch):
+    service = workspace_files.WorkspaceFileService()
+    entries = [
+        {"name": f"file-{index}.py", "path": f"file-{index}.py", "kind": "file", "size": 20}
+        for index in range(3)
+    ]
+    reads = []
+    monkeypatch.setattr(workspace_files, "MAX_SEARCH_FILES", 2)
+    monkeypatch.setattr(service, "list_directory", lambda _root, _path, _limit: {
+        "path": "", "entries": entries, "truncated": False,
+    })
+
+    def read_text(_root, path, _max_bytes):
+        reads.append(path)
+        return {"path": path, "content": "agent result", "truncated": False}
+
+    monkeypatch.setattr(service, "read_text", read_text)
+    result = service.search_text("/unused-in-this-test", "agent")
+
+    assert reads == ["file-0.py", "file-1.py"]
+    assert result == {
+        "hits": [
+            {"path": "file-0.py", "line": 1},
+            {"path": "file-1.py", "line": 1},
+        ],
+        "files_scanned": 2,
+        "bytes_scanned": len("agent result") * 2,
+        "truncated": True,
+    }
+
+
 def test_workspace_file_api_rejects_workspace_root_that_is_not_private(tmp_path):
     settings = _settings(tmp_path)
     root = _register_workspace(settings)

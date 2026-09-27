@@ -52,6 +52,9 @@ describe('finite desktop bridge validation', () => {
     expect(parseOperationRequest('workspaces.provision', {
       projectId: 'project-1', revision: 'a'.repeat(40),
     })).toEqual(['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(40) }])
+    expect(parseOperationRequest('workspaces.files.search', {
+      workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent',
+    })).toEqual(['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent' }])
     for (const [operation, payload] of [
       ['not-an-operation', {}],
       ['readiness', { url: 'http://localhost' }],
@@ -66,9 +69,33 @@ describe('finite desktop bridge validation', () => {
       ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(65) }],
       ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(40), root: '/tmp' }],
       ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(64), ownerId: 'someone' }],
+      ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: '  ' }],
+      ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'q'.repeat(129) }],
+      ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent\nsecret' }],
     ] as const) {
       expect(() => parseOperationRequest(operation, payload)).toThrow(TypeError)
     }
+  })
+
+  it('accepts only bounded, credential-name-safe workspace search hits', () => {
+    const result = {
+      hits: [{ path: 'src/main.ts', line: 9 }],
+      files_scanned: 12,
+      bytes_scanned: 8192,
+      truncated: false,
+    }
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, result, 'workspaces.files.search')).toEqual(result)
+    for (const path of ['.env', '.git/config', 'nested/.aws/credentials', 'terraform.tfstate.backup']) {
+      expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+        ...result, hits: [{ path, line: 1 }],
+      }, 'workspaces.files.search')).toThrow(TypeError)
+    }
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      ...result, hits: [{ path: 'src/main.ts', line: 0 }],
+    }, 'workspaces.files.search')).toThrow(TypeError)
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      ...result, bytes_scanned: 1024 * 1024 + 1,
+    }, 'workspaces.files.search')).toThrow(TypeError)
   })
 
   it('rejects accessors and non-plain objects instead of invoking caller code', () => {

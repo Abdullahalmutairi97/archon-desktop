@@ -13,14 +13,17 @@ npm run desktop:setup
 npm run desktop:typecheck
 npm run desktop:test
 npm run desktop:build
+npm run desktop:start
 npm run desktop:preview
 ```
 
 `desktop:setup` installs the checked-in lockfile. `desktop:preview` serves only the compiled renderer at `http://127.0.0.1:4173` for a browser; it does not launch Electron or start an agent. The source-build CI job uses pinned dependencies and an immutable container image.
 
-P2A provides a synthetic reference shell and pure typed models for runtime identity, queue state, scoped IDE documents/artifacts and read-only snapshots. The interface uses fake projects, sessions and messages. Its controls demonstrate local UI behavior; they do not access a server, workspace filesystem, native terminal, real browser session, provider or credential store.
+`desktop:start` rebuilds the authored app, then opens that compiled build in Electron without starting the Vite development server. The launch uses Electron's normal per-user app-data path under the separate `archon-desktop-reconstruction-dev` profile and may connect to the configured same-user backend; it does not install or start backend services. `desktop:start` requires the desktop dependencies (run `desktop:setup` once) and an available graphical session.
 
-P2B.1 adds a finite preload bridge and main-process backend transport for five read-only operations. The token stays in main-process memory, and the current renderer still shows synthetic data. The bridge is exercised with fake services; no real backend or local Codex agent is started. See [the P2B.1 scope](../docs/releases/phase-2b1-trusted-connection.md).
+P2A provides a synthetic reference shell and pure typed models for runtime identity, queue state, scoped IDE documents/artifacts and read-only snapshots. The Local Codex view now uses the local Codex app-server and the Server data route reads the configured backend in Electron; other reference workspace views remain synthetic.
+
+P2B.1 added a finite preload bridge and main-process backend transport for five read-only operations. The token stays in main-process memory. At that phase, the renderer still showed synthetic data; the bridge was exercised with fake services and did not start a real backend or local Codex agent. See [the P2B.1 scope](../docs/releases/phase-2b1-trusted-connection.md).
 
 P2C.1 adds an explicit Connection view. In Electron it can show authenticated backend readiness, returned read-only project/session/task rows and event cursor; session/task lists are capped and do not represent totals. The rest of the workspace remains synthetic. In the browser preview the bridge is absent, so connection controls are disabled. The token input clears after submission and is not written to renderer preferences or local storage. The native security and keyring gates are still unverified. See [the P2C.1 scope](../docs/releases/phase-2c1-connection-view.md).
 

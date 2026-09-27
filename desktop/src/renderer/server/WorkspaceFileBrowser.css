@@ -85,6 +85,84 @@
   min-width: 0;
 }
 
+.workspace-file-search {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line, #343230);
+  border-radius: var(--radius, 5px);
+  background: var(--surface-2, #292929);
+}
+
+.workspace-file-search-form {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted, #96928c);
+  font-size: calc(9px * var(--font-scale, 1));
+}
+
+.workspace-file-search-form input {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong, #484541);
+  border-radius: var(--radius, 5px);
+  background: var(--surface, #212121);
+  color: var(--text, #e8e5e0);
+  font: inherit;
+}
+
+.workspace-file-search-form button,
+.workspace-file-search-hit {
+  border: 1px solid var(--line-strong, #484541);
+  border-radius: var(--radius, 5px);
+  background: var(--surface, #212121);
+  color: var(--text, #e8e5e0);
+  cursor: pointer;
+  font: inherit;
+}
+
+.workspace-file-search-form button { padding: 6px 10px; }
+.workspace-file-search-form button:hover,
+.workspace-file-search-hit:hover { border-color: #78bd98; }
+
+.workspace-file-search-summary,
+.workspace-file-search-line {
+  margin: 0;
+  padding: 5px 2px;
+  color: var(--muted, #96928c);
+  font-size: calc(9px * var(--font-scale, 1));
+}
+
+.workspace-file-search-hit-list {
+  display: grid;
+  gap: 4px;
+  max-height: 200px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.workspace-file-search-hit-list li { min-width: 0; }
+
+.workspace-file-search-hit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.workspace-file-search-hit span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-file-search-hit small { flex: none; color: var(--muted, #96928c); }
+
 .workspace-file-browser-grid {
   display: grid;
   grid-template-columns: minmax(190px, .72fr) minmax(0, 1.28fr);

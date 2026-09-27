@@ -67,6 +67,7 @@ describe('backend transport', () => {
       'workspaces.get',
       'workspaces.files.list',
       'workspaces.files.read',
+      'workspaces.files.search',
     ])
     expect(TASK_OPERATIONS).toEqual([
       'runtimes.list', 'tasks.submit', 'tasks.get', 'tasks.events', 'tasks.cancel',
@@ -410,6 +411,32 @@ describe('backend transport', () => {
       expect(init?.body).toBeUndefined()
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
     }
+  })
+
+  it('maps bounded workspace search to a fixed owner-scoped GET route and validates hits', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const result = {
+      hits: [{ path: 'src/main.ts', line: 12 }],
+      files_scanned: 4,
+      bytes_scanned: 1234,
+      truncated: false,
+    }
+    const fetcher = vi.fn<BackendFetch>(async () => response(result))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.files.search', { workspaceId, query: 'agent' })).resolves.toEqual(result)
+    const requestUrl = new URL(String(fetcher.mock.calls[0][0]))
+    expect(requestUrl.pathname).toBe(`/api/workspaces/${workspaceId}/files/search`)
+    expect(requestUrl.searchParams.get('q')).toBe('agent')
+    expect(fetcher.mock.calls[0][1]?.method).toBe('GET')
+    expect(fetcher.mock.calls[0][1]?.body).toBeUndefined()
+
+    const unsafeResponse = new BackendTransport({
+      ...localConnection,
+      fetch: vi.fn(async () => response({ ...result, hits: [{ path: '.env', line: 1 }] })),
+    })
+    await expect(unsafeResponse.invoke('workspaces.files.search', { workspaceId, query: 'agent' }))
+      .rejects.toMatchObject({ code: 'invalid_response' })
   })
 
   it('blocks workspace path escape and mismatched file responses', async () => {

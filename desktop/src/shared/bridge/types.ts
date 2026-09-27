@@ -139,6 +139,11 @@ export interface WorkspaceFileReadPayload {
   maxBytes: number
 }
 
+export interface WorkspaceFileSearchPayload {
+  workspaceId: string
+  query: string
+}
+
 export interface WorkspaceFileEntry {
   name: string
   path: string
@@ -155,6 +160,18 @@ export interface WorkspaceFileListResult {
 export interface WorkspaceFileReadResult {
   path: string
   content: string
+  truncated: boolean
+}
+
+export interface WorkspaceFileSearchHit {
+  path: string
+  line: number
+}
+
+export interface WorkspaceFileSearchResult {
+  hits: readonly WorkspaceFileSearchHit[]
+  files_scanned: number
+  bytes_scanned: number
   truncated: boolean
 }
 
@@ -202,6 +219,10 @@ export interface OperationMap {
   'workspaces.files.read': {
     payload: WorkspaceFileReadPayload
     result: WorkspaceFileReadResult
+  }
+  'workspaces.files.search': {
+    payload: WorkspaceFileSearchPayload
+    result: WorkspaceFileSearchResult
   }
   'runtimes.list': {
     payload: EmptyPayload

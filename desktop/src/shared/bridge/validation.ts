@@ -29,6 +29,7 @@ import type {
   WorkspaceFileEntry,
   WorkspaceFileListPayload,
   WorkspaceFileReadPayload,
+  WorkspaceFileSearchPayload,
 } from './types'
 
 export const BRIDGE_CHANNELS = Object.freeze({
@@ -72,6 +73,7 @@ const operationNames = Object.freeze([
   'workspaces.provision',
   'workspaces.files.list',
   'workspaces.files.read',
+  'workspaces.files.search',
 ] as const satisfies readonly OperationName[])
 
 const channels = new Set<string>(Object.values(BRIDGE_CHANNELS))
@@ -109,6 +111,10 @@ const MAX_LOCAL_PAYLOAD_BYTES = 64 * 1024
 const MAX_WORKSPACE_FILE_PATH_LENGTH = 1_000
 const MAX_WORKSPACE_FILE_LIST_LIMIT = 200
 const MAX_WORKSPACE_FILE_READ_BYTES = 64 * 1024
+const MAX_WORKSPACE_SEARCH_QUERY_BYTES = 128
+const MAX_WORKSPACE_SEARCH_FILES = 200
+const MAX_WORKSPACE_SEARCH_BYTES = 1024 * 1024
+const MAX_WORKSPACE_SEARCH_HITS = 100
 const SENSITIVE_RESPONSE_FIELDS = new Set([
   'token',
   'apitoken',
@@ -256,6 +262,27 @@ function workspaceFileId(value: unknown): value is string {
   return typeof value === 'string' && /^workspace-[0-9a-f]{32}$/u.test(value)
 }
 
+function workspaceSearchQuery(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_WORKSPACE_SEARCH_QUERY_BYTES &&
+    value.trim().length > 0 && !/[\u0000-\u001f\u007f-\u009f]/u.test(value) &&
+    new TextEncoder().encode(value).byteLength <= MAX_WORKSPACE_SEARCH_QUERY_BYTES
+}
+
+function workspaceSearchPath(value: unknown): value is string {
+  if (!workspaceFilePath(value, false)) return false
+  const protectedNames = new Set([
+    '.netrc', '.npmrc', '.pypirc', '.ssh', '.aws', '.gnupg', '.docker', '.kube',
+    'credentials', 'credential', 'secrets', 'secret', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'known_hosts.old',
+  ])
+  return (value as string).split('/').every((component) => {
+    const lowered = component.toLowerCase()
+    return lowered !== '.git' && !lowered.startsWith('.env') && !protectedNames.has(lowered) &&
+      !/\.(?:pem|key|p12|pfx|p7b|p7c|jks|keystore)$/u.test(lowered) &&
+      !/(?:service[-_]account|credentials?[-_]?|secret[-_]?|token[-_]?|private[-_]key)/iu.test(lowered) &&
+      !(lowered === 'terraform.tfstate' || lowered.startsWith('terraform.tfstate.'))
+  })
+}
+
 function parseWorkspaceFileListPayload(value: unknown): WorkspaceFileListPayload {
   const record = exactObject(value, ['workspaceId', 'path', 'limit'])
   if (!workspaceFileId(record.workspaceId) || !workspaceFilePath(record.path, true) ||
@@ -270,6 +297,12 @@ function parseWorkspaceFileReadPayload(value: unknown): WorkspaceFileReadPayload
       typeof record.maxBytes !== 'number' || !Number.isInteger(record.maxBytes) ||
       record.maxBytes < 1 || record.maxBytes > MAX_WORKSPACE_FILE_READ_BYTES) return fail()
   return Object.freeze({ workspaceId: record.workspaceId, path: record.path, maxBytes: record.maxBytes })
+}
+
+function parseWorkspaceFileSearchPayload(value: unknown): WorkspaceFileSearchPayload {
+  const record = exactObject(value, ['workspaceId', 'query'])
+  if (!workspaceFileId(record.workspaceId) || !workspaceSearchQuery(record.query)) return fail()
+  return Object.freeze({ workspaceId: record.workspaceId, query: record.query })
 }
 
 function validTaskId(value: unknown): value is string {
@@ -328,6 +361,8 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseWorkspaceFileListPayload(payload)])
     case 'workspaces.files.read':
       return Object.freeze([operation, parseWorkspaceFileReadPayload(payload)])
+    case 'workspaces.files.search':
+      return Object.freeze([operation, parseWorkspaceFileSearchPayload(payload)])
     case 'sessions.list':
       return Object.freeze([operation, parseSessionsPayload(payload)])
     case 'tasks.list':
@@ -615,6 +650,26 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       if (!workspaceFilePath(record.path, false) || !boundedString(record.content, MAX_WORKSPACE_FILE_READ_BYTES, true) ||
           typeof record.truncated !== 'boolean' || record.content.includes('\0')) return fail()
       return Object.freeze({ path: record.path, content: record.content, truncated: record.truncated })
+    }
+    case 'workspaces.files.search': {
+      const record = exactObject(value, ['hits', 'files_scanned', 'bytes_scanned', 'truncated'])
+      if (!Array.isArray(record.hits) || record.hits.length > MAX_WORKSPACE_SEARCH_HITS ||
+          !Number.isSafeInteger(record.files_scanned) || (record.files_scanned as number) < 0 ||
+          (record.files_scanned as number) > MAX_WORKSPACE_SEARCH_FILES ||
+          !Number.isSafeInteger(record.bytes_scanned) || (record.bytes_scanned as number) < 0 ||
+          (record.bytes_scanned as number) > MAX_WORKSPACE_SEARCH_BYTES || typeof record.truncated !== 'boolean') return fail()
+      const hits = record.hits.map((hit) => {
+        const parsed = exactObject(hit, ['path', 'line'])
+        if (!workspaceSearchPath(parsed.path) || !Number.isSafeInteger(parsed.line) ||
+            (parsed.line as number) < 1) return fail()
+        return Object.freeze({ path: parsed.path, line: parsed.line as number })
+      })
+      return Object.freeze({
+        hits: Object.freeze(hits),
+        files_scanned: record.files_scanned as number,
+        bytes_scanned: record.bytes_scanned as number,
+        truncated: record.truncated,
+      })
     }
     case 'events.cursor': {
       const record = exactObject(value, ['cursor'])

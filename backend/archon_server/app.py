@@ -49,6 +49,7 @@ from .workspace_files import (
     MAX_LIST_LIMIT,
     MAX_READ_BYTES as MAX_WORKSPACE_READ_BYTES,
     MAX_RELATIVE_PATH_LENGTH,
+    MAX_SEARCH_QUERY_BYTES,
     WorkspaceFileService,
     WorkspaceFilesError,
 )
@@ -985,6 +986,17 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         workspace = current_owner_workspace(workspace_id)
         try:
             return workspace_file_service.read_text(workspace["root"], path, max_bytes)
+        except WorkspaceFilesError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    @app.get("/api/workspaces/{workspace_id}/files/search", dependencies=protected)
+    def search_workspace_files(
+        workspace_id: str,
+        q: str = Query(..., min_length=1, max_length=MAX_SEARCH_QUERY_BYTES),
+    ):
+        workspace = current_owner_workspace(workspace_id)
+        try:
+            return workspace_file_service.search_text(workspace["root"], q)
         except WorkspaceFilesError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 

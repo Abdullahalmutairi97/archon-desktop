@@ -25,6 +25,13 @@ MAX_COMPONENT_DEPTH = 64
 DEFAULT_READ_BYTES = 64 * 1024
 MAX_READ_BYTES = 256 * 1024
 MAX_RELATIVE_PATH_LENGTH = 1_000
+MAX_SEARCH_QUERY_BYTES = 128
+MAX_SEARCH_FILES = 200
+MAX_SEARCH_DIRECTORIES = 100
+MAX_SEARCH_ENTRIES = 5_000
+MAX_SEARCH_BYTES = 1024 * 1024
+MAX_SEARCH_FILE_BYTES = 64 * 1024
+MAX_SEARCH_HITS = 100
 
 _SECRET_EXACT_NAMES = frozenset({
     ".netrc", ".npmrc", ".pypirc", ".ssh", ".aws", ".gnupg", ".docker", ".kube",
@@ -219,6 +226,82 @@ class _WorkspaceTraversal:
 
 class WorkspaceFileService:
     """List directories and read bounded UTF-8 text under registered roots."""
+
+    def search_text(self, root: str, query: str) -> dict[str, Any]:
+        """Search a bounded prefix of visible text files under one workspace."""
+        if (not isinstance(query, str) or not query.strip() or len(query) > MAX_SEARCH_QUERY_BYTES or "\x00" in query
+                or any(ord(character) < 32 or 127 <= ord(character) < 160 for character in query)
+                or len(query.encode("utf-8", errors="replace")) > MAX_SEARCH_QUERY_BYTES):
+            raise WorkspaceFilesError(400, "Invalid workspace search query")
+
+        needle = query.casefold()
+        pending_directories = [""]
+        next_directory = 0
+        scheduled_directories = 1
+        entries_scanned = 0
+        files_scanned = 0
+        bytes_scanned = 0
+        hits: list[dict[str, Any]] = []
+        truncated = False
+        stop = False
+
+        while next_directory < len(pending_directories) and not stop:
+            directory = pending_directories[next_directory]
+            next_directory += 1
+            listing = self.list_directory(root, directory, MAX_LIST_LIMIT)
+            truncated = truncated or listing["truncated"]
+            for entry in listing["entries"]:
+                entries_scanned += 1
+                if entries_scanned > MAX_SEARCH_ENTRIES:
+                    truncated = True
+                    stop = True
+                    break
+                if entry["kind"] == "directory":
+                    if scheduled_directories >= MAX_SEARCH_DIRECTORIES:
+                        truncated = True
+                    else:
+                        pending_directories.append(entry["path"])
+                        scheduled_directories += 1
+                    continue
+
+                if files_scanned >= MAX_SEARCH_FILES or bytes_scanned >= MAX_SEARCH_BYTES:
+                    truncated = True
+                    stop = True
+                    break
+
+                files_scanned += 1
+                byte_budget = min(MAX_SEARCH_FILE_BYTES, MAX_SEARCH_BYTES - bytes_scanned)
+                try:
+                    result = self.read_text(root, entry["path"], byte_budget)
+                except WorkspaceFilesError as exc:
+                    if exc.status_code == 415:
+                        # Binary or non-UTF-8 files are outside text search.
+                        continue
+                    raise
+
+                content_bytes = len(result["content"].encode("utf-8"))
+                bytes_scanned += content_bytes
+                truncated = truncated or result["truncated"]
+                for line_number, line in enumerate(result["content"].split("\n"), start=1):
+                    if needle not in line.casefold():
+                        continue
+                    if len(hits) >= MAX_SEARCH_HITS:
+                        truncated = True
+                        stop = True
+                        break
+                    # Source excerpts are deliberately omitted from search results.
+                    hits.append({"path": entry["path"], "line": line_number})
+
+                if stop:
+                    break
+
+        hits.sort(key=lambda hit: (hit["path"].casefold(), hit["path"], hit["line"]))
+        return {
+            "hits": hits,
+            "files_scanned": files_scanned,
+            "bytes_scanned": bytes_scanned,
+            "truncated": truncated,
+        }
 
     def list_directory(self, root: str, path: str, limit: int = DEFAULT_LIST_LIMIT) -> dict[str, Any]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIST_LIMIT:

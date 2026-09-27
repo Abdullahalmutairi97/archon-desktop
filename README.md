@@ -33,6 +33,7 @@ npm run desktop:setup
 npm run desktop:typecheck
 npm run desktop:test
 npm run desktop:build
+npm run desktop:start
 npm run desktop:preview
 ```
 

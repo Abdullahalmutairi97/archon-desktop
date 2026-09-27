@@ -15,11 +15,13 @@ function directory(path: string) {
 function port({
   list = vi.fn(async (_workspaceId: string, path: string) => ({ path, entries: [], truncated: false })),
   read = vi.fn(async (_workspaceId: string, path: string) => ({ path, content: '', truncated: false })),
+  search = vi.fn(async () => ({ hits: [], files_scanned: 0, bytes_scanned: 0, truncated: false })),
 }: {
   list?: WorkspaceReadOnlyFilePort['list']
   read?: WorkspaceReadOnlyFilePort['read']
+  search?: WorkspaceReadOnlyFilePort['search']
 } = {}) {
-  return { list, read }
+  return { list, read, search }
 }
 
 function deferred<T>() {
@@ -131,5 +133,34 @@ describe('WorkspaceFileBrowser', () => {
     fails = false
     fireEvent.click(screen.getByRole('button', { name: 'Retry folder' }))
     expect(await screen.findByRole('button', { name: /available.txt/ })).toBeInTheDocument()
+  })
+
+  it('searches the workspace with bounded path-and-line hits, reports partial results, and opens the exact file', async () => {
+    const filePort = port({
+      read: vi.fn(async (_workspaceId, path) => ({
+        path,
+        content: 'first line\nsecond line\nfunction makeAgent() {}\n',
+        truncated: false,
+      })),
+      search: vi.fn(async (_workspaceId, query) => ({
+        hits: [{ path: 'src/agent.ts', line: 3 }],
+        files_scanned: query === 'agent' ? 17 : 0,
+        bytes_scanned: 4096,
+        truncated: true,
+      })),
+    })
+    render(<WorkspaceFileBrowser workspaceId="workspace-search" readOnlyFilePort={filePort} />)
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Find code' }), { target: { value: 'agent' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+
+    const hit = await screen.findByText('src/agent.ts')
+    expect(filePort.search).toHaveBeenCalledWith('workspace-search', 'agent')
+    expect(screen.getByText(/these results may be incomplete/i)).toBeInTheDocument()
+    fireEvent.click(hit)
+
+    expect(await screen.findByText(/function makeAgent\(\)/u)).toBeInTheDocument()
+    expect(screen.getByText(/Search match on line 3/u)).toBeInTheDocument()
+    expect(filePort.read).toHaveBeenCalledWith('workspace-search', 'src/agent.ts', 64 * 1024)
   })
 })
