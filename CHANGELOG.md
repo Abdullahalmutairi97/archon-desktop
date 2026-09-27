@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — runner enrollment and authenticated channel
+
+- Enroll named task runners into a private (0600) ledger; each enrollment returns a one-time-shown secret stored only as a salted SHA-256 digest and compared in constant time. Owner-only `/api/local/runners` endpoints enroll, list and revoke; `/api/runners/{id}/heartbeat` authenticates an enrolled runner with its own secret, separate from the owner token. The ledger is bounded, schema-validated and rejects tampering.
+
 ## Unreleased — native capture and visual comparison harness
 
 - Add an isolated native capture harness: `capture-app.sh` launches a built app on a throwaway Xvfb display with a remote-debugging port, `capture-cdp.py` captures its real renderer over the Chrome DevTools Protocol at a forced 1440×900 viewport, and `compare-captures.py` reports the differing-pixel ratio against an explicit threshold.

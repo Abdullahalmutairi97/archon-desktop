@@ -96,6 +96,14 @@ from .services.workspace_gateway import (
     WorkspaceGatewayTicketUnavailable,
     WorkspacePreviewGateway,
 )
+from .runner_enrollment import (
+    RunnerAuthenticationError,
+    RunnerEnrollmentCapacity,
+    RunnerEnrollmentError,
+    RunnerEnrollmentService,
+    RunnerEnrollmentUnavailable,
+    RunnerNotFound,
+)
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
 
@@ -309,6 +317,12 @@ class WorkspacePreviewOpenRequest(BaseModel):
 
     expected_generation: int = Field(alias="expectedGeneration", strict=True, ge=1)
     port_name: str | None = Field(default=None, alias="portName", max_length=16)
+
+
+class RunnerEnrollRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=32)
 
 
 class WorkspaceFileWriteRequest(BaseModel):
@@ -556,6 +570,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     local_workspace_terminals: WorkspaceTerminalService | None = None
     local_workspace_services: WorkspaceServiceManager | None = None
     local_workspace_preview: WorkspacePreviewGateway | None = None
+    runner_enrollments: RunnerEnrollmentService | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
         settings.runner_journal_path.lstat()
@@ -745,6 +760,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         nonlocal local_workspace_terminals
         nonlocal local_workspace_services
         nonlocal local_workspace_preview
+        nonlocal runner_enrollments
         runner_ownership.acquire()
         try:
             if pairing_broker is not None:
@@ -766,6 +782,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                     state_root=data_root / "workspace-services",
                 )
                 local_workspace_preview = WorkspacePreviewGateway(local_workspace_services)
+                runner_enrollments = RunnerEnrollmentService(data_root / "runner-enrollments")
             if settings.local_codex_enabled:
                 local_codex_event_journal = LocalCodexEventJournal(
                     settings.runner_journal_path.parent / "local-codex-events.sqlite3"
@@ -795,6 +812,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             app.state.local_workspace_terminals = local_workspace_terminals
             app.state.local_workspace_services = local_workspace_services
             app.state.local_workspace_preview = local_workspace_preview
+            app.state.runner_enrollments = runner_enrollments
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -1414,6 +1432,51 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 await websocket.close()
             except Exception:
                 pass
+
+    def runner_enrollment_service() -> RunnerEnrollmentService:
+        if runner_enrollments is None:
+            raise HTTPException(status_code=503, detail="Runner enrollment is unavailable")
+        return runner_enrollments
+
+    @app.get("/api/local/runners", dependencies=[Depends(require_local_owner)])
+    async def local_runner_list():
+        return {"runners": runner_enrollment_service().list()}
+
+    @app.post("/api/local/runners", status_code=201, dependencies=[Depends(require_local_owner)])
+    async def local_runner_enroll(payload: RunnerEnrollRequest):
+        try:
+            enrolled = runner_enrollment_service().enroll(payload.name)
+        except RunnerEnrollmentCapacity as exc:
+            raise HTTPException(status_code=409, detail="Runner limit reached") from exc
+        except RunnerEnrollmentUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Runner enrollment is unavailable") from exc
+        except (RunnerEnrollmentError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(status_code=201, content={"runner": enrolled}, headers={"Cache-Control": "no-store"})
+
+    @app.delete("/api/local/runners/{runner_id}", dependencies=[Depends(require_local_owner)])
+    async def local_runner_revoke(runner_id: str):
+        try:
+            runner_enrollment_service().revoke(runner_id)
+        except RunnerNotFound as exc:
+            raise HTTPException(status_code=404, detail="Runner is not enrolled") from exc
+        except RunnerEnrollmentUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Runner enrollment is unavailable") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/runners/{runner_id}/heartbeat")
+    async def runner_heartbeat(runner_id: str, authorization: str | None = Header(default=None)):
+        """Authenticated channel for an enrolled runner: a runner secret, not the owner token."""
+        secret = authorization[len("Bearer "):] if authorization and authorization.startswith("Bearer ") else ""
+        try:
+            result = runner_enrollment_service().authenticate(runner_id, secret)
+        except RunnerAuthenticationError as exc:
+            raise HTTPException(status_code=401, detail="Runner credentials are invalid") from exc
+        except RunnerEnrollmentUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Runner enrollment is unavailable") from exc
+        return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
 
     async def local_codex_call(method: str, params: dict[str, Any]):
         if local_codex_worker is None:
