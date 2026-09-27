@@ -308,7 +308,13 @@ export class CodexDesktopService {
     const session = saved.sessions.find((entry) => entry.id === op.binding!.sessionId)
     if (!session || session.cwd !== this.project.cwd || session.projectId !== this.project.id || session.threadId !== op.binding!.threadId) throw new Error('Owned session identity changed.')
     if (session.turns.some((turn) => turn.id === op.dto.taskId || turn.turnId === op.turnId)) throw new Error('Turn identity already exists.')
-    await this.waitFor(op, this.options.metadata.replace({ ...saved, sessions: saved.sessions.map((entry) => entry === session ? { ...entry, turns: [...entry.turns, { id: op.dto.taskId, turnId: op.turnId! }] } : entry) }))
+    const updatedSession = { ...session, turns: [...session.turns, { id: op.dto.taskId, turnId: op.turnId! }] }
+    await this.waitFor(op, this.options.metadata.replace({
+      ...saved,
+      // Move resumed conversations to the end so the newest activity stays at
+      // the front of the Local Codex conversation picker.
+      sessions: [...saved.sessions.filter((entry) => entry.id !== session.id), updatedSession],
+    }))
   }
 
   private interrupt(op: Operation): Promise<void> {

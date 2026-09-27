@@ -84,6 +84,11 @@ describe('finite main-owned Codex turns', () => {
     server.emit('turn/completed', { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed', items: [] } })
     expect(service.snapshot()?.status).toBe('completed')
 
+    state.sessions.push({
+      id: 'codex:other-thread', threadId: 'other-thread', title: 'Another conversation', cwd,
+      projectId: first.projectId, turns: [{ id: 'codex-task:other', turnId: 'other-turn' }],
+    })
+
     const next = await service.startTurn('Continue the work', first.sessionId!)
     expect(next).toMatchObject({ status: 'running', sessionId: first.sessionId })
     expect(server.calls.map((call) => call.method)).toEqual(['thread/start', 'turn/start', 'thread/resume', 'turn/start'])
@@ -94,10 +99,11 @@ describe('finite main-owned Codex turns', () => {
       threadId: 'thread-1', cwd, approvalPolicy: 'untrusted', approvalsReviewer: 'user',
       sandboxPolicy: { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false, excludeSlashTmp: true, excludeTmpdirEnvVar: true },
     })
-    expect(state.sessions[0].turns).toEqual([
+    expect(state.sessions.find((session) => session.threadId === 'thread-1')?.turns).toEqual([
       { id: first.taskId, turnId: 'turn-1' },
       { id: next.taskId, turnId: 'turn-2' },
     ])
+    expect(state.sessions.map((session) => session.threadId)).toEqual(['other-thread', 'thread-1'])
   })
   it.each(['cwd', 'sandbox', 'approvalPolicy'])('rejects a changed thread %s before submitting prompt', async (field) => {
     server.handler = async () => ({ ...server.thread(), [field]: field === 'cwd' ? '/' : field === 'sandbox' ? { type: 'dangerFullAccess' } : 'never' })

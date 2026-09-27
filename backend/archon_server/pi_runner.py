@@ -11,6 +11,24 @@ from .runtimes import execution_cwd, validate_execution_mode
 from .hermes_runner import RunnerCancelled, ProcessIdentity, capture_process_identity, release_supervised_target, abort_supervised_start, abort_uncaptured_process, supervised_argv, terminate_process_tree
 
 VALID_ID = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+_READ_CHUNK_SIZE = 64 * 1024
+MAX_JSONL_RECORD_BYTES = 32 * 1024 * 1024
+
+
+async def _stdout_jsonl_records(stream):
+    """Read bounded JSONL records without asyncio's default 64 KiB line cap."""
+    pending = bytearray()
+    while chunk := await stream.read(_READ_CHUNK_SIZE):
+        pending.extend(chunk)
+        while (newline := pending.find(b"\n")) >= 0:
+            if newline > MAX_JSONL_RECORD_BYTES:
+                raise RuntimeError(f"Pi JSONL record exceeds {MAX_JSONL_RECORD_BYTES} bytes")
+            yield bytes(pending[:newline])
+            del pending[:newline + 1]
+        if len(pending) > MAX_JSONL_RECORD_BYTES:
+            raise RuntimeError(f"Pi JSONL record exceeds {MAX_JSONL_RECORD_BYTES} bytes")
+    if pending:
+        yield bytes(pending)
 
 
 def _content(message: dict[str, Any]) -> str:
@@ -157,10 +175,7 @@ class PiRunner:
             stderr_task = asyncio.create_task(read_stderr())
             try:
                 assert process.stdout is not None
-                while True:
-                    line = await process.stdout.readline()
-                    if not line:
-                        break
+                async for line in _stdout_jsonl_records(process.stdout):
                     try:
                         event = json.loads(line.decode(errors="replace"))
                     except json.JSONDecodeError:
