@@ -38,6 +38,7 @@ _PORT_NAME = re.compile(r"[a-z][a-z0-9-]{0,15}\Z")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _MAX_METADATA_BYTES = 64 * 1024
 _DEFAULT_MAX_SERVICES = 8
+_DEFAULT_MAX_TOTAL_MEMORY_MB = 4096
 _MAX_ARGV = 32
 _MAX_ARG_BYTES = 1024
 _MAX_PORTS = 4
@@ -122,6 +123,7 @@ class WorkspaceServiceManager:
         owner_id: str,
         state_root: str | os.PathLike[str],
         max_services: int = _DEFAULT_MAX_SERVICES,
+        max_total_memory_mb: int = _DEFAULT_MAX_TOTAL_MEMORY_MB,
         spawn: SpawnProcess | None = None,
         health_probe: HealthProbe | None = None,
     ):
@@ -129,10 +131,14 @@ class WorkspaceServiceManager:
             raise ValueError("owner_id is invalid")
         if isinstance(max_services, bool) or not isinstance(max_services, int) or not 1 <= max_services <= 32:
             raise ValueError("max_services must be between 1 and 32")
+        if (isinstance(max_total_memory_mb, bool) or not isinstance(max_total_memory_mb, int)
+                or not 128 <= max_total_memory_mb <= 65536):
+            raise ValueError("max_total_memory_mb must be between 128 and 65536")
         self.database = database
         self.owner_id = owner_id
         self.state_root = _private_directory(state_root, label="workspace service state root")
         self.max_services = max_services
+        self.max_total_memory_mb = max_total_memory_mb
         self._spawn = spawn or asyncio.create_subprocess_exec
         self._health_probe = health_probe or _default_health_probe
         self._lock = asyncio.Lock()
@@ -200,6 +206,16 @@ class WorkspaceServiceManager:
             runtime = self._runtime.get((workspace_id, name))
             if runtime is not None and runtime["state"] in {"starting", "running"}:
                 raise WorkspaceServiceConflict("Service is already running")
+            if entry.get("memoryLimitMb") is not None:
+                reserved = sum(
+                    item["memoryLimitMb"] for item in record["services"]
+                    if item.get("memoryLimitMb") is not None
+                    and (self._runtime.get((workspace_id, item["name"])) or {}).get("state") in {"starting", "running"}
+                )
+                if reserved + entry["memoryLimitMb"] > self.max_total_memory_mb:
+                    raise WorkspaceServiceCapacity(
+                        "Workspace service memory budget would be exceeded"
+                    )
             cwd = self._resolve_cwd(workspace, entry["cwd"])
             await self._launch(workspace, entry, cwd)
             return self._public_entry(workspace_id, entry)

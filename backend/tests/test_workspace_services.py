@@ -14,6 +14,7 @@ from archon_server.app import create_app
 from archon_server.config import Settings
 from archon_server.local_pairing import LOCAL_PAIRING_AUDIENCE
 from archon_server.services.workspace_services import (
+    WorkspaceServiceCapacity,
     WorkspaceServiceConflict,
     WorkspaceServiceManager,
     WorkspaceServiceNotFound,
@@ -24,7 +25,7 @@ OWNER_ID = "local-uid:1000"
 WORKSPACE_ID = "workspace-0123456789abcdef0123456789abcdef"
 
 
-def _manager(tmp_path: Path, *, health_probe=None) -> WorkspaceServiceManager:
+def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 4096) -> WorkspaceServiceManager:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(exist_ok=True)
     database = Database(tmp_path / "database.sqlite3")
@@ -44,6 +45,7 @@ def _manager(tmp_path: Path, *, health_probe=None) -> WorkspaceServiceManager:
         owner_id=OWNER_ID,
         state_root=tmp_path / "private-state",
         health_probe=health_probe,
+        max_total_memory_mb=max_total_memory_mb,
     )
 
 
@@ -264,6 +266,41 @@ async def test_remove_requires_confirmation_and_blocks_dependents(tmp_path):
     await manager.remove(WORKSPACE_ID, "web", confirm=True)
     await manager.remove(WORKSPACE_ID, "db", confirm=True)
     assert await manager.list(WORKSPACE_ID) == []
+
+
+@pytest.mark.asyncio
+async def test_aggregate_memory_budget_is_enforced(tmp_path):
+    class FakeStream:
+        async def read(self, _size: int) -> bytes:
+            return b""
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = None
+            self.stdout = FakeStream()
+
+        async def wait(self) -> int:
+            while self.returncode is None:
+                await asyncio.sleep(0.01)
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+        def kill(self) -> None:
+            self.returncode = 0
+
+    async def fake_spawn(*_argv, **_kwargs):
+        return FakeProcess()
+
+    manager = _manager(tmp_path, max_total_memory_mb=256)
+    manager._spawn = fake_spawn
+    await manager.define(WORKSPACE_ID, _definition(name="a", argv=["/bin/sleep", "5"], memoryLimitMb=200))
+    await manager.define(WORKSPACE_ID, _definition(name="b", argv=["/bin/sleep", "5"], memoryLimitMb=200))
+    await manager.start(WORKSPACE_ID, "a")
+    with pytest.raises(WorkspaceServiceCapacity):
+        await manager.start(WORKSPACE_ID, "b")
+    await manager.shutdown()
 
 
 @pytest.mark.asyncio

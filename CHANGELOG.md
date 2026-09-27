@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — aggregate service memory accounting
+
+- Enforce a workspace-wide memory budget across running services: starting a service whose declared budget would push the aggregate of running services over `max_total_memory_mb` (default 4096) is refused with a capacity error.
+
 ## Unreleased — editor draft recovery
 
 - Persist small-file editor drafts locally and bounded (max 8 drafts, 16 KiB per file, 128 KiB total, oldest-first eviction). Opening a file with a recovered draft that differs from the server content restores it with a visible notice; saving or cancelling clears it. Only file text is stored, never credentials, and storage failures degrade to no persistence.
