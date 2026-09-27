@@ -95,6 +95,11 @@ kbd { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--
 .navigation-right .sidebar { order: 3; border-inline-end: 0; border-inline-start: 1px solid var(--line); }
 .navigation-right .workspace-main { order: 1; }
 .workspace-main { direction: var(--text-direction); min-width: 300px; flex: 1 1 auto; display: flex; flex-direction: column; position: relative; background: var(--canvas); overflow: hidden; }
+.workspace-main-live { min-width: 0; }
+.local-codex-route { min-height: 0; flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.local-codex-route[hidden] { display: none; }
+.workspace-main-live .local-codex-panel { width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+.workspace-main-live .connection-layout { max-width: none; }
 .navigation-right .workspace-bench { order: 2; }
 .sidebar-collapsed { flex-basis: 64px; width: 64px; }
 .sidebar-top { min-height: 0; overflow-y: auto; padding: 17px 12px 12px; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
@@ -102,6 +107,11 @@ kbd { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--
 .sidebar-section-label { display: block; padding: 0 7px 8px; }
 .sidebar-collapsed .sidebar-section-label, .sidebar-collapsed .nav-label, .sidebar-collapsed .nav-item kbd, .sidebar-collapsed .sidebar-section-head .sidebar-section-label, .sidebar-collapsed .project-count, .sidebar-collapsed .project-copy, .sidebar-collapsed .project-chevron, .sidebar-collapsed .recent-copy, .sidebar-collapsed .section-count, .sidebar-collapsed .footer-state, .sidebar-collapsed .profile-copy, .sidebar-collapsed .profile-card > .quiet-icon-button { display: none; }
 .primary-navigation { display: grid; gap: 3px; }
+.preview-navigation { margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--line); }
+.demo-sidebar-content { margin-top: 8px; }
+.demo-sidebar-note { margin: 0 8px 10px; color: var(--quiet); font-size: calc(9px * var(--font-scale)); }
+.demo-navigation .nav-item { font-size: calc(11px * var(--font-scale)); }
+.sidebar-collapsed .demo-sidebar-note { display: none; }
 .nav-item, .project-overview, .project-item, .recent-session { border: 0; background: transparent; cursor: pointer; text-align: start; color: var(--muted); display: flex; align-items: center; border-radius: var(--radius); width: 100%; min-width: 0; transition: background var(--motion-speed), color var(--motion-speed); }
 .nav-item { height: 34px; gap: 10px; padding: 0 9px; font-size: calc(12px * var(--font-scale)); }
 .nav-item > svg { width: 16px; height: 16px; flex: 0 0 auto; }
@@ -162,6 +172,8 @@ kbd { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--
 .runtime-dot { width: 6px; height: 6px; box-shadow: none; flex: 0 0 auto; }
 .view-action-button { width: 27px; height: 27px; border: 1px solid var(--line); }
 .view-action-button svg { width: 14px; height: 14px; }
+.demo-route-notice { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 5px 10px; padding: 10px 24px; border-bottom: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: calc(10px * var(--font-scale)); line-height: 1.5; }
+.demo-route-notice strong { color: var(--text); }
 
 .chat-view { min-height: 0; flex: 1; display: flex; flex-direction: column; padding: 0 24px 16px; overflow: hidden; }
 .chat-context-line { height: 36px; flex: 0 0 36px; display: flex; align-items: center; gap: 7px; color: var(--quiet); font-size: calc(9px * var(--font-scale)); border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent); }
@@ -402,6 +414,8 @@ kbd { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--
   .reconstruction-ribbon { font-size: calc(6px * var(--font-scale)); gap: 5px; letter-spacing: .04em; }
 }
 @media (max-width: 760px) {
+  .sidebar:not(.sidebar-collapsed) .demo-sidebar-note { display: none; }
+  .demo-route-notice { padding-inline: 12px; }
   .sidebar:not(.sidebar-collapsed) { flex-basis: 64px; width: 64px; }
   .sidebar:not(.sidebar-collapsed) .sidebar-section-label, .sidebar:not(.sidebar-collapsed) .nav-label,
   .sidebar:not(.sidebar-collapsed) .nav-item kbd, .sidebar:not(.sidebar-collapsed) .sidebar-section-head .sidebar-section-label,

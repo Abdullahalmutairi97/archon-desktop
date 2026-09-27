@@ -1,6 +1,6 @@
 {
   "name": "archon-desktop-reconstruction",
-  "version": "0.3.0-reconstruction.7",
+  "version": "0.3.0-reconstruction.8",
   "private": true,
   "description": "Isolated authored reconstruction shell; parity with the unavailable v0.3.0 source is unverified.",
   "main": "out/main/index.js",
