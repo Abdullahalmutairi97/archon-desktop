@@ -34,6 +34,8 @@ import type {
   WorkspaceFileReadPayload,
   WorkspaceFileSearchPayload,
   WorkspaceFileWritePayload,
+  WorkspaceConsoleTerminalDto,
+  WorkspaceConsoleScreenDto,
 } from './types'
 
 export const BRIDGE_CHANNELS = Object.freeze({
@@ -57,6 +59,16 @@ export const LOCAL_CODEX_CHANNELS = Object.freeze({
   answerApproval: 'archon:local-codex:approval:answer',
   event: 'archon:local-codex:event',
 } as const)
+
+export const WORKSPACE_CONSOLE_CHANNELS = Object.freeze({
+  list: 'archon:workspace-console:list',
+  create: 'archon:workspace-console:create',
+  screen: 'archon:workspace-console:screen',
+  sendLine: 'archon:workspace-console:send-line',
+  stop: 'archon:workspace-console:stop',
+} as const)
+
+export type WorkspaceConsoleInvokeChannel = (typeof WORKSPACE_CONSOLE_CHANNELS)[keyof typeof WORKSPACE_CONSOLE_CHANNELS]
 
 export type LocalCodexInvokeChannel = Exclude<(typeof LOCAL_CODEX_CHANNELS)[keyof typeof LOCAL_CODEX_CHANNELS], typeof LOCAL_CODEX_CHANNELS.event>
 
@@ -1052,6 +1064,117 @@ function makeLocalCodexRequest(channel: LocalCodexInvokeChannel, args: readonly 
 function boundedLocalResult<T>(value: T): T {
   if (!withinLocalPayloadLimit(value)) return fail()
   return value
+}
+
+const MAX_WORKSPACE_CONSOLE_TERMINALS = 16
+const MAX_WORKSPACE_CONSOLE_SCREEN_BYTES = 24 * 1024
+const MAX_WORKSPACE_CONSOLE_LINE_BYTES = 4096
+
+function parseWorkspaceConsoleTerminal(value: unknown): WorkspaceConsoleTerminalDto {
+  const record = exactObject(value, ['sessionId', 'state', 'createdAt'])
+  if (typeof record.sessionId !== 'string' || !/^wterm-[0-9a-f]{32}$/u.test(record.sessionId)
+    || (record.state !== 'starting' && record.state !== 'running')
+    || typeof record.createdAt !== 'string' || record.createdAt.length > 64
+    || !Number.isFinite(Date.parse(record.createdAt))) return fail()
+  return Object.freeze({ sessionId: record.sessionId, state: record.state, createdAt: record.createdAt })
+}
+
+function workspaceConsoleInput(channel: unknown, value: unknown): Record<string, unknown> {
+  switch (channel) {
+    case WORKSPACE_CONSOLE_CHANNELS.list: {
+      const record = exactObject(value, ['workspaceId'])
+      if (!workspaceFileId(record.workspaceId)) return fail()
+      return { workspaceId: record.workspaceId }
+    }
+    case WORKSPACE_CONSOLE_CHANNELS.create: {
+      const record = exactObject(value, ['workspaceId', 'expectedGeneration'])
+      if (!workspaceFileId(record.workspaceId) || typeof record.expectedGeneration !== 'number'
+        || !Number.isSafeInteger(record.expectedGeneration) || record.expectedGeneration < 1) return fail()
+      return { workspaceId: record.workspaceId, expectedGeneration: record.expectedGeneration }
+    }
+    case WORKSPACE_CONSOLE_CHANNELS.screen:
+    case WORKSPACE_CONSOLE_CHANNELS.stop:
+    case WORKSPACE_CONSOLE_CHANNELS.sendLine: {
+      const allowed = channel === WORKSPACE_CONSOLE_CHANNELS.screen ? ['workspaceId', 'sessionId', 'lines']
+        : channel === WORKSPACE_CONSOLE_CHANNELS.sendLine ? ['workspaceId', 'sessionId', 'line']
+          : ['workspaceId', 'sessionId']
+      const record = exactObject(value, allowed)
+      if (!workspaceFileId(record.workspaceId) || typeof record.sessionId !== 'string'
+        || !/^wterm-[0-9a-f]{32}$/u.test(record.sessionId)) return fail()
+      if (channel === WORKSPACE_CONSOLE_CHANNELS.screen) {
+        if (typeof record.lines !== 'number' || !Number.isInteger(record.lines) || record.lines < 1 || record.lines > 120) return fail()
+        return { workspaceId: record.workspaceId, sessionId: record.sessionId, lines: record.lines }
+      }
+      if (channel === WORKSPACE_CONSOLE_CHANNELS.sendLine) {
+        if (typeof record.line !== 'string' || record.line.length === 0 || /[\u0000-\u001f\u007f]/u.test(record.line)
+          || new TextEncoder().encode(record.line).byteLength > MAX_WORKSPACE_CONSOLE_LINE_BYTES) return fail()
+        return { workspaceId: record.workspaceId, sessionId: record.sessionId, line: record.line }
+      }
+      return { workspaceId: record.workspaceId, sessionId: record.sessionId }
+    }
+    default:
+      return fail()
+  }
+}
+
+/** Validate fixed console IPC input before main forwards it to the owner-only API. */
+export function parseWorkspaceConsoleRequest(channel: unknown, args: readonly unknown[]): Readonly<Record<string, unknown>> {
+  const safeArgs = readLocalArray(args, 1)
+  if (safeArgs.length !== 1 || !Object.values(WORKSPACE_CONSOLE_CHANNELS).includes(channel as WorkspaceConsoleInvokeChannel)) return fail()
+  return Object.freeze(workspaceConsoleInput(channel, safeArgs[0]))
+}
+
+/** Normalize only the documented backend envelopes before they cross into the renderer. */
+export function parseWorkspaceConsoleBackendResponse(channel: unknown, value: unknown): unknown {
+  switch (channel) {
+    case WORKSPACE_CONSOLE_CHANNELS.list: {
+      const record = exactObject(value, ['terminals'])
+      if (!Array.isArray(record.terminals) || record.terminals.length > MAX_WORKSPACE_CONSOLE_TERMINALS) return fail()
+      const terminals = record.terminals.map(parseWorkspaceConsoleTerminal)
+      if (new Set(terminals.map((terminal) => terminal.sessionId)).size !== terminals.length) return fail()
+      return Object.freeze(terminals)
+    }
+    case WORKSPACE_CONSOLE_CHANNELS.create: {
+      const record = exactObject(value, ['terminal'])
+      return parseWorkspaceConsoleTerminal(record.terminal)
+    }
+    case WORKSPACE_CONSOLE_CHANNELS.screen: {
+      const record = exactObject(value, ['text', 'truncated'])
+      if (typeof record.text !== 'string' || new TextEncoder().encode(record.text).byteLength > MAX_WORKSPACE_CONSOLE_SCREEN_BYTES
+        || typeof record.truncated !== 'boolean') return fail()
+      return Object.freeze({ text: record.text, truncated: record.truncated }) satisfies WorkspaceConsoleScreenDto
+    }
+    case WORKSPACE_CONSOLE_CHANNELS.sendLine: {
+      const record = exactObject(value, ['sent'])
+      if (record.sent !== true) return fail()
+      return true
+    }
+    case WORKSPACE_CONSOLE_CHANNELS.stop: {
+      const record = exactObject(value, ['ok'])
+      if (record.ok !== true) return fail()
+      return true
+    }
+    default:
+      return fail()
+  }
+}
+
+/** Validate normalized console results returned by the preload bridge. */
+export function parseWorkspaceConsoleResponse(channel: unknown, value: unknown): unknown {
+  switch (channel) {
+    case WORKSPACE_CONSOLE_CHANNELS.list:
+      return parseWorkspaceConsoleBackendResponse(channel, { terminals: value })
+    case WORKSPACE_CONSOLE_CHANNELS.create:
+      return parseWorkspaceConsoleBackendResponse(channel, { terminal: value })
+    case WORKSPACE_CONSOLE_CHANNELS.screen:
+      return parseWorkspaceConsoleBackendResponse(channel, value)
+    case WORKSPACE_CONSOLE_CHANNELS.sendLine:
+    case WORKSPACE_CONSOLE_CHANNELS.stop:
+      if (value !== true) return fail()
+      return true
+    default:
+      return fail()
+  }
 }
 
 /** Parse only the fixed local Codex invocation channels and canonicalize each payload. */

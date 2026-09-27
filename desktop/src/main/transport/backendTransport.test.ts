@@ -74,6 +74,41 @@ describe('backend transport', () => {
     expect(init?.body).toBe(JSON.stringify({ projectId: result.projectId, prompt: 'inspect' }))
   })
 
+  it('maps trusted workspace console calls to fixed routes without retrying input', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const sessionId = `wterm-${'b'.repeat(32)}`
+    const fetcher = vi.fn<BackendFetch>(async (url, init) => response({ terminals: [] },
+      url.pathname.endsWith('/terminals') && init.method === 'POST' ? 201 : 200))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    const requests = [
+      { operation: 'workspace.terminals.list', workspaceId } as const,
+      { operation: 'workspace.terminals.create', workspaceId, expectedGeneration: 4 } as const,
+      { operation: 'workspace.terminals.screen', workspaceId, sessionId, lines: 80 } as const,
+      { operation: 'workspace.terminals.input', workspaceId, sessionId, line: 'pwd' } as const,
+      { operation: 'workspace.terminals.stop', workspaceId, sessionId } as const,
+    ]
+    for (const request of requests) await transport.invokeLocalCodex(request)
+
+    expect(fetcher.mock.calls.map(([url, init]) => [url.pathname + url.search, init?.method, init?.body])).toEqual([
+      [`/api/local/workspaces/${workspaceId}/terminals`, 'GET', undefined],
+      [`/api/local/workspaces/${workspaceId}/terminals`, 'POST', JSON.stringify({ expectedGeneration: 4 })],
+      [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/screen?lines=80`, 'GET', undefined],
+      [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/input`, 'POST', JSON.stringify({ line: 'pwd' })],
+      [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}`, 'DELETE', JSON.stringify({ confirm: true })],
+    ])
+    expect(fetcher.mock.calls.every(([, init]) => (init?.headers as Record<string, string>).Authorization === `Bearer ${localConnection.token}`)).toBe(true)
+  })
+
+  it('does not retry ambiguous line input', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => { throw new Error('request may have reached server') })
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    await expect(transport.invokeLocalCodex({
+      operation: 'workspace.terminals.input', workspaceId: `workspace-${'a'.repeat(32)}`,
+      sessionId: `wterm-${'b'.repeat(32)}`, line: 'write data',
+    })).rejects.toMatchObject({ code: 'network_error' })
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
+
   it('uses fixed read-only routes to discover and refresh the latest Local Codex turn', async () => {
     const status = {
       taskId: 'codex-task:fixture', projectId: 'codex-project:fixture',

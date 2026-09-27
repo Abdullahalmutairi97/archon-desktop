@@ -212,6 +212,25 @@ export interface WorkspaceFileWriteResult {
   content: string
 }
 
+export interface WorkspaceConsoleTerminalDto {
+  sessionId: string
+  state: 'starting' | 'running'
+  createdAt: string
+}
+
+export interface WorkspaceConsoleScreenDto {
+  text: string
+  truncated: boolean
+}
+
+export interface WorkspaceConsoleBridge {
+  list(input: { workspaceId: string }): Promise<readonly WorkspaceConsoleTerminalDto[]>
+  create(input: { workspaceId: string; expectedGeneration: number }): Promise<WorkspaceConsoleTerminalDto>
+  screen(input: { workspaceId: string; sessionId: string; lines: number }): Promise<WorkspaceConsoleScreenDto>
+  sendLine(input: { workspaceId: string; sessionId: string; line: string }): Promise<boolean>
+  stop(input: { workspaceId: string; sessionId: string }): Promise<boolean>
+}
+
 export interface OperationMap {
   readiness: {
     payload: EmptyPayload
@@ -314,6 +333,7 @@ export interface DesktopBridge {
     invoke<K extends OperationName>(operation: K, payload: OperationPayload<K>): Promise<OperationResult<K>>
   }
   readonly localCodex: LocalCodexBridge
+  readonly workspaceConsole: WorkspaceConsoleBridge
 }
 
 /** Renderer-safe projection of a main-owned project registration. */

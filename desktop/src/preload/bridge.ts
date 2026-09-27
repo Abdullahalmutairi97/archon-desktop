@@ -11,6 +11,7 @@ import type {
 import { BRIDGE_CHANNELS, parseBridgeRequest } from '../shared/bridge/validation'
 import { createLocalCodexBridge } from './localCodexBridge'
 import type { LocalCodexIpcInvoker } from './localCodexBridge'
+import { createWorkspaceConsoleBridge } from './workspaceConsoleBridge'
 
 export interface BridgeIpcInvoker extends LocalCodexIpcInvoker {}
 
@@ -33,5 +34,10 @@ export function createDesktopBridge(ipc: BridgeIpcInvoker): DesktopBridge {
     },
   })
 
-  return Object.freeze({ connection, api, localCodex: createLocalCodexBridge(ipc) })
+  return Object.freeze({
+    connection,
+    api,
+    localCodex: createLocalCodexBridge(ipc),
+    workspaceConsole: createWorkspaceConsoleBridge(ipc),
+  })
 }

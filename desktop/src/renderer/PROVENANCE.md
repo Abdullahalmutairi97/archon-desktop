@@ -1,6 +1,6 @@
 # Renderer provenance
 
-This is a new, authored reconstruction preview. It is not a recovered source release, and visual or behavioral parity with the installed v0.3.0 baseline remains unverified. Chat, normal workspace project/session/task views, files, terminal, editor, and browser rows come from `shell/fixtures.ts`. The separate Connection and Server data routes can read authenticated backend readiness and bounded rows through the finite desktop bridge in Electron; browser preview has no bridge. No workspace view connects to a provider, terminal, or native execution API.
+This is a new, authored reconstruction preview. It is not a recovered source release, and visual or behavioral parity with the installed v0.3.0 baseline remains unverified. Chat and the general workspace project/session/task, editor, browser and terminal workbench views still use `shell/fixtures.ts`. The separate Connection and Server data routes use a finite Electron bridge for authenticated backend data and selected-checkout file, task and same-user line-console operations; the Local Codex route can use a backend-owned provider worker. The browser preview has no native bridge. The line console is scoped to a provisioned checkout and is not the full interactive workbench terminal.
 
 | Renderer area | Reference origin | Transformation in this renderer |
 | --- | --- | --- |

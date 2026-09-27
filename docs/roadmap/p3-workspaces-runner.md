@@ -35,4 +35,6 @@ Known blockers: actual pinned runtimes/accounts, demonstrable host isolation con
 
 A disposable host probe demonstrated cgroup CPU/memory/PID limits and a bubblewrap filesystem/network view for a harmless command; hiding the user bus also blocked a nested `systemd-run --user` escape. This does not qualify Prime/Pi: their executables are absent here, and the probed profile denied provider network and hid native credential/session paths. Automatic runner generation recovery remains disabled.
 
+On 27 September, a disposable local project completed one real backend-owned Codex turn with `codex-cli 0.155.1`: project registration succeeded, start was durably acknowledged, and the private turn ledger reached `completed`. The prompt requested a short reply without commands or file edits. This validates that one native provider path on this laptop, not Electron UI-close/relaunch behavior, native side-effect recovery, or a remote runner.
+
 Publish increments using the [roadmap workflow](README.md), recording fixture versus native results separately.

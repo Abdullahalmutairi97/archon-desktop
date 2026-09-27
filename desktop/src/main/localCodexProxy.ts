@@ -9,6 +9,11 @@ export type LocalCodexProxyRequest =
   | { operation: 'turns.status'; taskId: string }
   | { operation: 'approvals.answer'; approvalId: string; allow: boolean }
   | { operation: 'events.list'; after: number; limit: number }
+  | { operation: 'workspace.terminals.list'; workspaceId: string }
+  | { operation: 'workspace.terminals.create'; workspaceId: string; expectedGeneration: number }
+  | { operation: 'workspace.terminals.screen'; workspaceId: string; sessionId: string; lines: number }
+  | { operation: 'workspace.terminals.input'; workspaceId: string; sessionId: string; line: string }
+  | { operation: 'workspace.terminals.stop'; workspaceId: string; sessionId: string }
 
 export interface LocalCodexProxyEventRecord {
   seq: number

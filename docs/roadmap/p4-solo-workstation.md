@@ -1,6 +1,6 @@
 # P4 — Full solo workstation
 
-**Status:** in progress. The Server data view can register an existing backend-side Git project, provision a checkout, and select that checkout for a Prime task. Registered checkouts can be browsed, searched, created and edited for small text files, with a bounded selected-file Git diff. Prime task details now show recent bounded assistant/tool activity during execution and after reattach. The full IDE, persistent shell, debugger, and in-app service preview remain open. **Dependencies:** P2 and P3. **Outcome:** one person can ask an agent to build, inspect/edit/debug its code, run a persistent shell and use the resulting app within Archon.
+**Status:** in progress. The Server data view can register an existing backend-side Git project, provision a checkout, and select that checkout for a Prime task. Registered checkouts can be browsed, searched, created and edited for small text files, with a bounded selected-file Git diff. Prime task details show recent bounded assistant/tool activity during execution and after reattach. A selected checkout now has a trusted same-user, line-based tmux console with bounded screen readback and explicit session stop. The full IDE, interactive terminal attach, debugger, and in-app service preview remain open. **Dependencies:** P2 and P3. **Outcome:** one person can ask an agent to build, inspect/edit/debug its code, run a persistent shell and use the resulting app within Archon.
 
 ## Scope
 
@@ -31,5 +31,7 @@ Integrate workspace-hosted code-server, persistent tmux and managed application 
 - [ ] A clean Linux solo installation and an isolated remote workspace complete the workflow; backup/restore smoke preserves project/native history.
 
 Known blockers: P2 source/native views, extension compatibility, code-server/gateway WebSocket and HMR behavior, and target-host RAM/CPU capacity. Native execution/network checks cannot be replaced with synthetic frontend previews. Public/external-browser preview sharing is P8.
+
+The line console is an incremental same-user tool, not the full terminal gate: it starts a shell at the persisted checkout under the backend account, with no filesystem/process isolation, attach ticket, shared-view lease or arbitrary interactive key stream. Session names, workspace roots and generations come from the server; output and input are bounded, and an ambiguous line send is never retried automatically. A temporary user-local tmux build passed create, line input, screen capture, backend-service relaunch/list and explicit terminate on this laptop. The host has no system tmux installation; installed-backend qualification remains open.
 
 Follow the [roadmap workflow](README.md); publish PR evidence without claiming an installer release or deployment.

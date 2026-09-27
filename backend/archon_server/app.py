@@ -8,6 +8,7 @@ import os
 import pwd
 import re
 import stat
+import tempfile
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -72,6 +73,11 @@ from .services.local_codex_worker import (
     LocalCodexRequestRejected,
     LocalCodexWorkerClient,
     LocalCodexWorkerError,
+)
+from .services.workspace_terminal import (
+    WorkspaceTerminalCapacity,
+    WorkspaceTerminalInputOutcomeUnknown,
+    WorkspaceTerminalService,
 )
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
@@ -198,6 +204,33 @@ class WorkspaceTaskCreate(BaseModel):
     workspace_id: str = Field(pattern=r"^workspace-[0-9a-f]{32}$", max_length=200)
     workspace_generation: int = Field(strict=True, ge=1)
     prompt: str = Field(min_length=1, max_length=100_000)
+
+
+class WorkspaceTerminalCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_generation: int = Field(alias="expectedGeneration", strict=True, ge=1)
+
+
+class WorkspaceTerminalInputRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    line: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("line")
+    @classmethod
+    def validate_line(cls, value: str) -> str:
+        if len(value.encode("utf-8", errors="strict")) > 4096:
+            raise ValueError("line must be at most 4096 UTF-8 bytes")
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("line must not contain control characters")
+        return value
+
+
+class WorkspaceTerminalDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = Field(strict=True)
 
 
 class WorkspaceFileWriteRequest(BaseModel):
@@ -442,6 +475,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         if pairing_broker is not None else None
     )
     local_codex_worker: LocalCodexWorkerClient | None = None
+    local_workspace_terminals: WorkspaceTerminalService | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
         settings.runner_journal_path.lstat()
@@ -628,8 +662,22 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     async def lifespan(app: FastAPI):
         nonlocal worker_tasks, telegram_bridge, telegram_task
         nonlocal local_codex_event_journal, local_codex_worker
+        nonlocal local_workspace_terminals
         runner_ownership.acquire()
         try:
+            if pairing_broker is not None:
+                data_root = settings.data_dir.expanduser().resolve()
+                socket_key = hashlib.sha256(str(data_root).encode("utf-8")).hexdigest()[:10]
+                local_workspace_terminals = WorkspaceTerminalService(
+                    store.db,
+                    owner_id=f"local-uid:{os.geteuid()}",
+                    metadata_root=data_root / "workspace-terminals",
+                    socket_root=(
+                        Path(tempfile.gettempdir())
+                        / f"archon-wt-{os.geteuid()}-{socket_key}"
+                    ),
+                    tmux_executable="tmux",
+                )
             if settings.local_codex_enabled:
                 local_codex_event_journal = LocalCodexEventJournal(
                     settings.runner_journal_path.parent / "local-codex-events.sqlite3"
@@ -656,7 +704,8 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             app.state.worker_tracker = worker_tracker
             app.state.local_codex_worker = local_codex_worker
             app.state.local_codex_event_journal = local_codex_event_journal
-            app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
+            app.state.local_workspace_terminals = local_workspace_terminals
+            app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
             engine.replay_unacked()
@@ -817,6 +866,90 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     @app.get("/api/local/owner")
     def local_owner(principal=Depends(require_local_owner)):
         return principal
+
+    def workspace_terminal_service() -> WorkspaceTerminalService:
+        if local_workspace_terminals is None:
+            raise HTTPException(status_code=503, detail="Workspace terminals are unavailable")
+        return local_workspace_terminals
+
+    @app.get("/api/local/workspaces/{workspace_id}/terminals", dependencies=[Depends(require_local_owner)])
+    async def local_workspace_terminals_list(workspace_id: str):
+        current_owner_workspace(workspace_id)
+        return {"terminals": await workspace_terminal_service().list(workspace_id)}
+
+    @app.post(
+        "/api/local/workspaces/{workspace_id}/terminals",
+        status_code=201,
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_terminal_create(workspace_id: str, payload: WorkspaceTerminalCreateRequest):
+        current_owner_workspace(workspace_id)
+        try:
+            terminal = await workspace_terminal_service().create(
+                workspace_id,
+                expected_generation=payload.expected_generation,
+            )
+        except WorkspaceTerminalCapacity as exc:
+            raise HTTPException(status_code=409, detail="Workspace terminal limit reached") from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Workspace identity or generation changed; refresh before creating a terminal",
+            ) from exc
+        return {"terminal": terminal}
+
+    @app.get(
+        "/api/local/workspaces/{workspace_id}/terminals/{session_id}/screen",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_terminal_screen(
+        workspace_id: str,
+        session_id: str,
+        lines: int = Query(80, ge=1, le=120),
+    ):
+        current_owner_workspace(workspace_id)
+        result = await workspace_terminal_service().screen(workspace_id, session_id, lines=lines)
+        return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+    @app.post(
+        "/api/local/workspaces/{workspace_id}/terminals/{session_id}/input",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_terminal_input(
+        workspace_id: str,
+        session_id: str,
+        payload: WorkspaceTerminalInputRequest,
+    ):
+        current_owner_workspace(workspace_id)
+        try:
+            await workspace_terminal_service().send_line(workspace_id, session_id, payload.line)
+        except WorkspaceTerminalInputOutcomeUnknown as exc:
+            return JSONResponse(
+                status_code=504,
+                content={
+                    "detail": "Terminal input outcome is unknown; do not retry automatically",
+                    "code": "workspace_terminal_input_outcome_unknown",
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(content={"sent": True}, headers={"Cache-Control": "no-store"})
+
+    @app.delete(
+        "/api/local/workspaces/{workspace_id}/terminals/{session_id}",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_terminal_delete(
+        workspace_id: str,
+        session_id: str,
+        payload: WorkspaceTerminalDeleteRequest,
+    ):
+        current_owner_workspace(workspace_id)
+        await workspace_terminal_service().terminate(
+            workspace_id,
+            session_id,
+            confirm=payload.confirm,
+        )
+        return {"ok": True}
 
     async def local_codex_call(method: str, params: dict[str, Any]):
         if local_codex_worker is None:

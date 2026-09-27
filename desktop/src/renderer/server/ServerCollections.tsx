@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import type { ConnectionDescription, DesktopBridge, JsonRecord, LocalCodexProjectDto } from '../../shared/bridge/types'
 import { PrimeTaskPanel } from './PrimeTaskPanel'
 import { WorkspaceFileBrowser, type WorkspaceReadOnlyFilePort } from './WorkspaceFileBrowser'
+import { WorkspaceConsole } from './WorkspaceConsole'
 import './ServerCollections.css'
 
 type CollectionData = {
@@ -242,6 +243,7 @@ function WorkspaceSection({
   const [localCodexPendingWorkspaceId, setLocalCodexPendingWorkspaceId] = useState<string | null>(null)
   const [localCodexFeedback, setLocalCodexFeedback] = useState<{ workspaceId: string; kind: 'success' | 'error'; text: string } | null>(null)
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
+  const [selectedConsoleWorkspaceId, setSelectedConsoleWorkspaceId] = useState<string | null>(null)
   const provisionLock = useRef(false)
   const headLock = useRef(false)
   const localCodexLock = useRef(false)
@@ -261,6 +263,13 @@ function WorkspaceSection({
   const revisionIsCommit = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(revision)
   const activeWorkspaceId = state === 'ready' && records.some((record) => record.workspace_id === selectedWorkspaceId)
     ? selectedWorkspaceId : null
+  const activeConsoleRecord = state === 'ready'
+    ? records.find((record) => record.workspace_id === selectedConsoleWorkspaceId) : undefined
+  const activeConsoleWorkspaceId = typeof activeConsoleRecord?.workspace_id === 'string'
+    && /^workspace-[0-9a-f]{32}$/u.test(activeConsoleRecord.workspace_id) ? activeConsoleRecord.workspace_id : null
+  const activeConsoleGeneration = typeof activeConsoleRecord?.generation === 'number'
+    && Number.isSafeInteger(activeConsoleRecord.generation) && activeConsoleRecord.generation >= 1
+    ? activeConsoleRecord.generation : null
 
   async function useCurrentHead(): Promise<void> {
     if (headLock.current || provisionLock.current || !selectedProjectId || projects === null) return
@@ -405,6 +414,9 @@ function WorkspaceSection({
             {/^workspace-[0-9a-f]{32}$/u.test(id) && <button type="button" className="server-workspace-browse" aria-pressed={activeWorkspaceId === id} onClick={() => setSelectedWorkspaceId(activeWorkspaceId === id ? null : id)}>
               {activeWorkspaceId === id ? 'Close files' : 'Browse files'}
             </button>}
+            {/^workspace-[0-9a-f]{32}$/u.test(id) && <button type="button" className="server-workspace-browse" aria-pressed={selectedConsoleWorkspaceId === id} onClick={() => setSelectedConsoleWorkspaceId(selectedConsoleWorkspaceId === id ? null : id)}>
+              {selectedConsoleWorkspaceId === id ? 'Close line console' : 'Open line console'}
+            </button>}
             {localCodexPairingAvailable && /^workspace-[0-9a-f]{32}$/u.test(id) && <>
               <button
                 type="button"
@@ -422,6 +434,13 @@ function WorkspaceSection({
         })}
       </ul>}
     {activeWorkspaceId && <WorkspaceFileBrowser key={activeWorkspaceId} workspaceId={activeWorkspaceId} readOnlyFilePort={readOnlyFilePort} />}
+    {activeConsoleWorkspaceId && activeConsoleGeneration !== null && <WorkspaceConsole
+      key={`${activeConsoleWorkspaceId}:${activeConsoleGeneration}`}
+      bridge={bridge.workspaceConsole}
+      workspaceId={activeConsoleWorkspaceId}
+      generation={activeConsoleGeneration}
+      pairingAvailable={localCodexPairingAvailable}
+    />}
   </section>
 }
 

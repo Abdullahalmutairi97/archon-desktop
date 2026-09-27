@@ -610,9 +610,10 @@ function localCodexId(value: unknown, prefix: string, maxLength: number): value 
 }
 
 function localCodexRequestDetails(request: LocalCodexProxyRequest): {
-  method: 'GET' | 'POST'
+  method: 'GET' | 'POST' | 'DELETE'
   path: string
   body?: string
+  expectedStatus?: 201
 } {
   const api = '/api/local/codex'
   switch (request.operation) {
@@ -658,6 +659,29 @@ function localCodexRequestDetails(request: LocalCodexProxyRequest): {
       const params = new URLSearchParams({ after: String(request.after), limit: String(request.limit) })
       return { method: 'GET', path: `${api}/events?${params.toString()}` }
     }
+    case 'workspace.terminals.list':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)) break
+      return { method: 'GET', path: `/api/local/workspaces/${request.workspaceId}/terminals` }
+    case 'workspace.terminals.create':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !Number.isSafeInteger(request.expectedGeneration) || request.expectedGeneration < 1) break
+      return { method: 'POST', path: `/api/local/workspaces/${request.workspaceId}/terminals`, body: JSON.stringify({ expectedGeneration: request.expectedGeneration }), expectedStatus: 201 }
+    case 'workspace.terminals.screen':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)
+        || !Number.isInteger(request.lines) || request.lines < 1 || request.lines > 120) break
+      return { method: 'GET', path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}/screen?lines=${request.lines}` }
+    case 'workspace.terminals.input':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)
+        || typeof request.line !== 'string' || request.line.length === 0
+        || /[\u0000-\u001f\u007f]/u.test(request.line)
+        || new TextEncoder().encode(request.line).byteLength > 4096) break
+      return { method: 'POST', path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}/input`, body: JSON.stringify({ line: request.line }) }
+    case 'workspace.terminals.stop':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)) break
+      return { method: 'DELETE', path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}`, body: JSON.stringify({ confirm: true }) }
   }
   throw new BackendTransportError('invalid_payload')
 }
@@ -825,7 +849,7 @@ export class BackendTransport {
       if (response.status === 401 || response.status === 403) {
         throw new BackendTransportError('unauthorized', response.status)
       }
-      if (response.status !== 200) throw new BackendTransportError('http_error')
+      if (response.status !== 200 && response.status !== details.expectedStatus) throw new BackendTransportError('http_error')
       const bytes = await readBoundedBody(response)
       if (generationChanged(this, connection.generation)) {
         throw new BackendTransportError('connection_changed')

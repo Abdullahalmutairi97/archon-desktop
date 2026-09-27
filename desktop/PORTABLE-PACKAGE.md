@@ -31,4 +31,6 @@ Replace the example with your existing Archon root and every configured scratch 
 
 Prime must also be installed and executable for that service account. The backend defaults to that account's `~/.local/bin/prime-agent`; if Prime is elsewhere, set `ARCHON_DESKTOP_PRIME_EXECUTABLE=/absolute/path/to/prime-agent` in the external `server.env` created by the installer, then restart `archon-desktop-server.service` with `systemctl --user restart archon-desktop-server.service`. The backend readiness check verifies the executable file and permission, but not the Prime version, credentials, provider access, or successful execution.
 
+The selected-checkout line console also needs `tmux` installed on the backend host. It starts a shell at that checkout as the backend account and can access that account's files; it is a trusted same-user console, not a filesystem sandbox or full interactive terminal. Closing the desktop detaches the view without stopping a surviving tmux session. Stop a session explicitly in the console when finished.
+
 The archive contains the pinned Electron runtime, compiled app outputs, runtime package metadata and license notices. It contains no source checkout, node_modules, backend, user profile, token, or settings. Linux x64 is the only package target here; other architectures require their own build and native qualification.
