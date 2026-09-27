@@ -50,6 +50,16 @@ isolated `uv` tool from the `retired-hermes` migration backup
 `hermes-acp`. No Hermes gateway, dashboard, cron or systemd unit was installed
 or started.
 
+## Qualification attempt (2026-09-27)
+
+A bounded behavioral probe was attempted and did **not** qualify any adapter:
+
+- **Codex** 0.154.0 started a bounded `codex exec` turn (workdir `/tmp/rt-qual`, model `gpt-5.6-luna`, provider `openai`) but did not complete within 180s; an MCP transport error (Apify missing/invalid token) was observed during startup.
+- **Pi** 0.87.1 `pi -p --no-session` returned `Codex error: The usage limit has been reached`.
+- **Prime** and **Hermes** were not attempted after the shared provider reported its usage limit reached.
+
+Conclusion: native behavioral qualification is blocked by unavailable provider quota on this account, not by the runtimes' presence or the adapter code. Every adapter remains **unverified** until a provider turn completes in an assigned workspace.
+
 ## Not yet established
 
 - Any runtime completing a real provider turn in an assigned workspace.
