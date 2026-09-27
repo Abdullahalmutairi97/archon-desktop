@@ -58,6 +58,7 @@ from .workspace_files import (
 from .tasks import TaskEngine, TaskStore, hash_request_payload
 from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
 from .runner_ownership import RunnerOwnershipLock
+from .local_codex_event_journal import LocalCodexEventJournal, LocalCodexEventJournalError
 from .local_pairing import LocalPairingBroker, UnixSocketPairingServer
 from .services.local_codex_worker import (
     LocalCodexOutcomeUnknown,
@@ -413,6 +414,10 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     store = TaskStore(Database(settings.database_path))
     _prepare_private_runner_journal_dir(settings.runner_journal_path.parent)
     runner_ownership = RunnerOwnershipLock(settings.runner_journal_path.parent / "server.lock")
+    local_codex_event_journal = (
+        LocalCodexEventJournal(settings.runner_journal_path.parent / "local-codex-events.sqlite3")
+        if settings.local_codex_enabled else None
+    )
     pairing_broker = LocalPairingBroker() if settings.local_owner_mode else None
     pairing_server = (
         UnixSocketPairingServer(
@@ -429,6 +434,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             home_directory=settings.local_codex_home_directory,
             codex_home_directory=settings.local_codex_home,
             codex_executable=settings.local_codex_executable,
+            event_journal=local_codex_event_journal,
             request_timeout_seconds=settings.local_codex_request_timeout_seconds,
             start_timeout_seconds=settings.local_codex_start_timeout_seconds,
         )
@@ -607,6 +613,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             app.state.runtimes = registry
             app.state.worker_tracker = worker_tracker
             app.state.local_codex_worker = local_codex_worker
+            app.state.local_codex_event_journal = local_codex_event_journal
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -843,7 +850,19 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         after: int = Query(0, ge=0, le=9_007_199_254_740_991),
         limit: int = Query(32, ge=1, le=64),
     ):
-        return await local_codex_call("events", {"after": after, "limit": limit})
+        if local_codex_worker is None or local_codex_event_journal is None:
+            return JSONResponse(status_code=503, content={"detail": "Local Codex is disabled"})
+        try:
+            return local_codex_event_journal.read(after, limit)
+        except LocalCodexEventJournalError:
+            # Event replay fails closed; never fall back to ephemeral worker RPC.
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Local Codex events are unavailable",
+                    "code": "local_codex_event_journal_unavailable",
+                },
+            )
 
     @app.get("/api/readiness", dependencies=protected)
     def readiness():

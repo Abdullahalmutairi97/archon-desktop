@@ -225,6 +225,61 @@ for line in sys.stdin:
         }
 
 
+def test_local_codex_event_journal_replays_monotonic_public_sequences_after_worker_restart(tmp_path):
+    script = tmp_path / "worker.py"
+    generation_marker = tmp_path / "worker-generation"
+    _fake_worker(script, '''
+import json, pathlib, sys
+marker = pathlib.Path(MARKER_PATH)
+generation = int(marker.read_text()) + 1 if marker.exists() else 1
+marker.write_text(str(generation))
+for line in sys.stdin:
+    req = json.loads(line)
+    if req["method"] == "listProjects":
+        print(json.dumps({"event": {"seq": 1, "event": {
+            "type": "turn.completed", "taskId": "codex-task:task-1",
+        }}}), flush=True)
+        result = []
+    else:
+        result = {}
+    print(json.dumps({"id": req["id"], "ok": True, "result": result}), flush=True)
+'''.replace("MARKER_PATH", repr(str(generation_marker))))
+    settings = _settings(tmp_path, script)
+
+    with TestClient(create_app(settings)) as first_client:
+        first_token = _pair(settings.local_pairing_socket_path)
+        first_events = first_client.get("/api/local/codex/events", headers={
+            "Authorization": f"Bearer {first_token}",
+        })
+        assert first_events.status_code == 200
+        first_batch = first_events.json()
+        assert first_batch["latest"] == 1
+        assert first_batch["events"] == [{
+            "seq": 1,
+            "event": {"type": "turn.completed", "taskId": "codex-task:task-1"},
+        }]
+
+    # A new backend and new worker both start their worker-local event sequence
+    # at 1. Public cursors come from the durable journal and continue at 2.
+    with TestClient(create_app(settings)) as second_client:
+        second_token = _pair(settings.local_pairing_socket_path)
+        replay = second_client.get("/api/local/codex/events?after=1", headers={
+            "Authorization": f"Bearer {second_token}",
+        })
+        assert replay.status_code == 200
+        assert replay.json() == {
+            "cursor": 2,
+            "latest": 2,
+            "oldest": 1,
+            "reset": False,
+            "events": [{
+                "seq": 2,
+                "event": {"type": "turn.completed", "taskId": "codex-task:task-1"},
+            }],
+        }
+    assert generation_marker.read_text() == "2"
+
+
 def test_local_codex_api_returns_unknown_outcome_on_start_turn_timeout(tmp_path):
     script = tmp_path / "worker.py"
     _fake_worker(script, '''

@@ -1,6 +1,6 @@
 # P3 — Unified workspaces and persistent runner
 
-**Status:** in progress. Protected same-user pairing, versioned workspace identity, a durable local runner outbox, revision-pinned checkout provisioning, and an opt-in backend-owned Local Codex worker are implemented. Native execution isolation, safe generation recovery, durable Codex event replay across backend restarts, and a proven live-provider UI-close turn remain open. **Dependencies:** P1; P2 before desktop UI delivery. **Outcome:** a fresh solo installation authenticates locally and accepted work belongs to a runner instead of the desktop.
+**Status:** in progress. Protected same-user pairing, versioned workspace identity, a durable local runner outbox, revision-pinned checkout provisioning, and an opt-in backend-owned Local Codex worker with bounded durable event replay are implemented. Native execution isolation, safe generation recovery, durable accepted-turn state, and a proven live-provider UI-close turn remain open. **Dependencies:** P1; P2 before desktop UI delivery. **Outcome:** a fresh solo installation authenticates locally and accepted work belongs to a runner instead of the desktop.
 
 ## Scope
 
@@ -17,7 +17,7 @@ Use the same coordinator/runner contracts for local solo and private remote work
 - [ ] Provision trusted worktrees or isolated independent checkouts explicitly. Demonstrate required filesystem/network/CPU/memory/PID controls on the actual host; fail closed when unavailable.
 - [ ] Enforce single-writer handoff over every write-capable process, including kernels, debugger/run tasks, detached tmux children and services. Quiesce or revoke actual write access; otherwise block transfer or allocate another workspace.
 - [ ] Account for aggregate workspace/host resources across agents, kernels, language servers, debugger tasks, persistent shells and services; retain reservations while children remain alive.
-- [ ] Complete Local Codex app-server ownership and durable task/event persistence in the runner. The opt-in backend worker now owns the app-server behind a single-writer metadata lease; its 256-event ring is still memory-only, backend restart stops active work, and live-provider/UI-close recovery remains unverified.
+- [ ] Complete Local Codex app-server ownership and durable task/event persistence in the runner. The opt-in backend worker now owns the app-server behind a single-writer metadata lease. A private, bounded SQLite journal replays committed events across backend restarts, but backend restart still stops active work, accepted turns have no durable outcome record, and live-provider/UI-close recovery remains unverified.
 - [ ] Add workspace source/branch/authority indicators to the existing UI; install local coordinator/runner user services with documented UI-close versus logout behavior.
 - [ ] Support consistent snapshot plus cursor replay, bounded outbox/disk behavior, and explicit interrupted state after uncertain process/host loss.
 

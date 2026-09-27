@@ -14,6 +14,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from ..local_codex_event_journal import LocalCodexEventJournal
+
 
 MAX_WORKER_FRAME_BYTES = 128 * 1024
 MAX_RETAINED_EVENTS = 256
@@ -29,6 +31,9 @@ _METHODS = frozenset({
     "events",
 })
 _SAFE_ERROR_CODE = re.compile(r"^[a-z0-9_:-]{1,64}$")
+_LOCAL_TASK_ID = re.compile(r"^codex-task:[A-Za-z0-9._:-]{1,245}$")
+_LOCAL_PROJECT_ID = re.compile(r"^codex-project:[A-Za-z0-9._:-]{1,242}$")
+_LOCAL_APPROVAL_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 class LocalCodexWorkerError(RuntimeError):
@@ -72,6 +77,7 @@ class LocalCodexWorkerClient:
         home_directory: Path,
         codex_home_directory: Path,
         codex_executable: Path | None = None,
+        event_journal: LocalCodexEventJournal | None = None,
         request_timeout_seconds: float = 15.0,
         start_timeout_seconds: float = 60.0,
     ) -> None:
@@ -81,6 +87,7 @@ class LocalCodexWorkerClient:
         self.home_directory = home_directory.expanduser().resolve()
         self.codex_home_directory = codex_home_directory.expanduser().resolve()
         self.codex_executable = codex_executable.expanduser().resolve() if codex_executable else None
+        self.event_journal = event_journal
         self.request_timeout_seconds = request_timeout_seconds
         self.start_timeout_seconds = start_timeout_seconds
 
@@ -93,6 +100,8 @@ class LocalCodexWorkerClient:
         self._failure: LocalCodexWorkerError | None = None
         self._closed = False
         self._events: deque[dict[str, Any]] = deque(maxlen=MAX_RETAINED_EVENTS)
+        self._last_worker_event_sequence = 0
+        self._last_public_event_sequence = 0
 
     @property
     def pending_request_count(self) -> int:
@@ -288,11 +297,30 @@ class LocalCodexWorkerClient:
             raise LocalCodexWorkerProtocolError()
         if not isinstance(event["event"], dict):
             raise LocalCodexWorkerProtocolError()
-        if self._events and sequence <= self._events[-1]["seq"]:
+        if sequence <= self._last_worker_event_sequence:
             # The event stream is ordered and monotonic. Duplicate delivery or
             # rollback makes cursor semantics unsafe, so retire this worker.
             raise LocalCodexWorkerProtocolError()
-        self._events.append(event)
+        payload = event["event"]
+        if not _valid_local_codex_event(payload):
+            raise LocalCodexWorkerProtocolError()
+        if self.event_journal is None:
+            public_sequence = sequence
+        else:
+            # The durable journal owns public sequence numbers, which continue
+            # across worker restarts even when a fresh worker begins at seq 1.
+            # Do not retain or acknowledge the event until the append commits.
+            public_sequence = self.event_journal.append(payload)
+            if (
+                isinstance(public_sequence, bool)
+                or not isinstance(public_sequence, int)
+                or not 1 <= public_sequence <= MAX_SAFE_REQUEST_ID
+                or public_sequence <= self._last_public_event_sequence
+            ):
+                raise LocalCodexWorkerProtocolError()
+        self._last_worker_event_sequence = sequence
+        self._last_public_event_sequence = public_sequence
+        self._events.append({"seq": public_sequence, "event": payload})
         return True
 
     def _consume_reply(self, message: Any) -> None:
@@ -362,3 +390,121 @@ class LocalCodexWorkerClient:
         env["HOME"] = str(self.home_directory)
         env["CODEX_HOME"] = str(self.codex_home_directory)
         return env
+
+
+def _bounded_text(value: Any, maximum: int, *, allow_empty: bool = False) -> bool:
+    if not isinstance(value, str) or (not allow_empty and not value) or "\x00" in value:
+        return False
+    try:
+        # The renderer validates JavaScript strings by UTF-16 code units.
+        return len(value.encode("utf-16-le")) // 2 <= maximum
+    except UnicodeEncodeError:
+        return False
+
+
+def _canonical_absolute_path(value: Any) -> bool:
+    if not _bounded_text(value, 16_000) or not value.startswith("/"):
+        return False
+    if any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in value):
+        return False
+    if value == "/":
+        return True
+    if value.endswith("/"):
+        return False
+    return all(part not in ("", ".", "..") for part in value[1:].split("/"))
+
+
+def _valid_local_approval(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    required = {"approvalId", "taskId", "projectId", "kind", "reason", "cwd", "paths"}
+    if not required.issubset(value) or set(value) - (required | {"command", "changes"}):
+        return False
+    if (
+        not isinstance(value.get("approvalId"), str)
+        or not _LOCAL_APPROVAL_ID.fullmatch(value["approvalId"])
+        or not isinstance(value.get("taskId"), str)
+        or not _LOCAL_TASK_ID.fullmatch(value["taskId"])
+        or not isinstance(value.get("projectId"), str)
+        or not _LOCAL_PROJECT_ID.fullmatch(value["projectId"])
+        or value.get("kind") not in ("command", "file")
+        or not _bounded_text(value.get("reason"), 4096, allow_empty=True)
+        or not _canonical_absolute_path(value.get("cwd"))
+    ):
+        return False
+    paths = value.get("paths")
+    if not isinstance(paths, list) or len(paths) > 64 or not all(_canonical_absolute_path(path) for path in paths):
+        return False
+    if value["kind"] == "command":
+        return (
+            "changes" not in value
+            and not paths
+            and _bounded_text(value.get("command"), 8000)
+        )
+    if "command" in value or not paths:
+        return False
+    changes = value.get("changes")
+    if not isinstance(changes, list) or not 1 <= len(changes) <= 16:
+        return False
+    changed_paths: list[str] = []
+    for change in changes:
+        if not isinstance(change, dict) or set(change) - {"path", "kind", "diff", "movePath"}:
+            return False
+        if not {"path", "kind", "diff"}.issubset(change):
+            return False
+        if (
+            not _canonical_absolute_path(change.get("path"))
+            or change.get("kind") not in ("add", "delete", "update")
+            or not _bounded_text(change.get("diff"), 16_000)
+        ):
+            return False
+        diff = change["diff"]
+        if any((ord(char) < 0x20 and char not in "\t\n\r") or ord(char) == 0x7F for char in diff):
+            return False
+        move_path = change.get("movePath")
+        if "movePath" in change:
+            if change["kind"] != "update" or not _canonical_absolute_path(move_path):
+                return False
+            changed_paths.extend((change["path"], move_path))
+        else:
+            changed_paths.append(change["path"])
+    if len(set(changed_paths)) != len(changed_paths) or paths != changed_paths:
+        return False
+    try:
+        return len(json.dumps(changes, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) <= 24 * 1024
+    except (TypeError, ValueError, UnicodeEncodeError):
+        return False
+
+
+def _valid_local_codex_event(event: Any) -> bool:
+    if not isinstance(event, dict):
+        return False
+    event_type = event.get("type")
+    if event_type in ("turn.completed", "turn.cancelled"):
+        valid = set(event) == {"type", "taskId"} and isinstance(event.get("taskId"), str) and bool(
+            _LOCAL_TASK_ID.fullmatch(event["taskId"])
+        )
+    elif event_type == "turn.output":
+        valid = (
+            set(event) == {"type", "taskId", "text"}
+            and isinstance(event.get("taskId"), str)
+            and bool(_LOCAL_TASK_ID.fullmatch(event["taskId"]))
+            and _bounded_text(event.get("text"), 8000, allow_empty=True)
+        )
+    elif event_type == "turn.failed":
+        valid = (
+            set(event) == {"type", "taskId", "message"}
+            and isinstance(event.get("taskId"), str)
+            and bool(_LOCAL_TASK_ID.fullmatch(event["taskId"]))
+            and _bounded_text(event.get("message"), 512)
+        )
+    elif event_type == "approval.requested":
+        valid = set(event) == {"type", "approval"} and _valid_local_approval(event.get("approval"))
+    else:
+        return False
+    if not valid:
+        return False
+    try:
+        return len(json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) <= 64 * 1024
+    except (TypeError, ValueError, UnicodeEncodeError):
+        return False
