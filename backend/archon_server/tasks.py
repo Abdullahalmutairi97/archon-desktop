@@ -71,6 +71,48 @@ def _validate_request_hash(request_hash: str) -> str:
     return request_hash.lower()
 
 
+def _default_session_id(task_id: str, request_id: str | None) -> str:
+    """Choose the historical task-derived id when it fits the session API."""
+    if request_id is not None and len(f"prime-{request_id}") > 200:
+        # Keep the task's idempotency identity untouched, but bound its session
+        # identity to the 200-character limit enforced by session APIs.
+        return f"prime-{hashlib.sha256(request_id.encode('ascii')).hexdigest()}"
+    return f"prime-{task_id}"
+
+
+def _session_identity_exists(conn: sqlite3.Connection, session_id: str) -> bool:
+    # Generated ids must not alias a session that is live, tombstoned, or has
+    # only retained ownership/project metadata. The write transaction serializes
+    # this check with another task admission.
+    for table in ("tasks", "session_projects", "session_ownership", "deleted_sessions"):
+        if conn.execute(
+            f"SELECT 1 FROM {table} WHERE session_id=? LIMIT 1", (session_id,),
+        ).fetchone():
+            return True
+    return False
+
+
+def _unique_generated_session_id(
+    conn: sqlite3.Connection, task_id: str, request_id: str | None,
+) -> str:
+    """Preserve the normal id where possible, resolving any stored-id collision."""
+    candidate = _default_session_id(task_id, request_id)
+    if not _session_identity_exists(conn, candidate):
+        return candidate
+
+    # This also handles cross-length collisions: a short request key can equal
+    # the digest suffix chosen for an earlier long key. Never truncate keys or
+    # reuse an identity already present in the task/session ledger.
+    identity = request_id if request_id is not None else task_id
+    attempt = 0
+    while True:
+        material = f"{identity}\0{attempt}"
+        candidate = f"prime-{hashlib.sha256(material.encode('ascii')).hexdigest()}"
+        if not _session_identity_exists(conn, candidate):
+            return candidate
+        attempt += 1
+
+
 def _require_matching_request(row, request_hash: str) -> None:
     if row['request_hash'] is None:
         raise ValueError(
@@ -265,7 +307,8 @@ class TaskStore:
         # Reserve the deterministic Prime session at enqueue time. The runner uses
         # the same id, so the UI can open it immediately instead of waiting for
         # the first worker event to finish creating session metadata.
-        session_id = session_id or f"prime-{task_id}"
+        generated_session_id = not session_id
+        session_id = session_id or _default_session_id(task_id, request_id)
         now = utcnow()
         with self.db.transaction() as conn:
             existing = (conn.execute('SELECT request_hash FROM tasks WHERE id=?', (task_id,)).fetchone()
@@ -275,6 +318,8 @@ class TaskStore:
                 # prevent two concurrent clients from submitting the same key.
                 _require_matching_request(existing, request_hash)
             else:
+                if generated_session_id:
+                    session_id = _unique_generated_session_id(conn, task_id, request_id)
                 if session_id and conn.execute(
                     "SELECT 1 FROM deleted_sessions WHERE session_id=? LIMIT 1", (session_id,)
                 ).fetchone():

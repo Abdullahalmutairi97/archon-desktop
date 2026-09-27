@@ -90,6 +90,24 @@ def test_longest_key_produces_a_resumable_session(api):
     first = submit(client, key='a' * 200)
     assert first.status_code == 202, first.text
     session_id = first.json()['task']['session_id']
+    assert len(session_id) <= 200
+    assert client.get(f'/api/sessions/{session_id}/messages').status_code == 200
+
+    # Distinct keys with a long shared prefix must not alias after bounding the
+    # generated session identity.
+    other = submit(client, key='a' * 199 + 'b')
+    assert other.status_code == 202, other.text
+    assert other.json()['task']['id'] != first.json()['task']['id']
+    assert other.json()['task']['session_id'] != session_id
+
+    # A later short key can equal the long key's hash suffix. It remains its
+    # own task and receives a separate session identity instead of aliasing.
+    short_key = session_id.removeprefix('prime-')
+    short = submit(client, key=short_key)
+    assert short.status_code == 202, short.text
+    assert short.json()['task']['id'] == short_key
+    assert short.json()['task']['session_id'] != session_id
+
     resumed = submit(client, key='follow-up', session_id=session_id)
     assert resumed.status_code == 202, resumed.text
     assert resumed.json()['task']['session_id'] == session_id
