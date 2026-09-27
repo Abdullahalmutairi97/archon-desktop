@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — workspace write lease
+
+- Add an exclusive, expiring single-writer lease per workspace in a private bounded ledger: the owner can acquire, inspect and release it, a second holder is refused while a live lease is held, the current holder may renew, and an expired lease does not block a new holder. This is the coordination primitive a handoff needs before write access moves.
+
 ## Unreleased — workspace code-server template
 
 - Install code-server 4.139.1 and add `POST /api/local/workspaces/{id}/services/code-server`, which registers a loopback-bound code-server (`--auth none`, telemetry disabled, health `/healthz`) as a workspace service so the full IDE can be started on demand and reached through the sandboxed preview gateway. The Workspace services panel exposes a code-server control (port input + one-click register) through a finite `workspaceServices.codeServer` bridge call.

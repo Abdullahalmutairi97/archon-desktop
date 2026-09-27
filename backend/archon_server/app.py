@@ -106,6 +106,12 @@ from .runner_enrollment import (
 )
 from .runner_outbox import RunnerOutbox, RunnerOutboxError, RunnerOutboxUnavailable
 from .runner_results import RunnerResultError, RunnerResultLedger, RunnerResultUnavailable
+from .workspace_write_lease import (
+    WorkspaceWriteLease,
+    WorkspaceWriteLeaseBusy,
+    WorkspaceWriteLeaseNotHolder,
+    WorkspaceWriteLeaseUnavailable,
+)
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
 
@@ -367,6 +373,19 @@ class WorkspaceCodeServerRequest(BaseModel):
     port: int = Field(strict=True, ge=1024, le=65535)
 
 
+class WorkspaceWriteLeaseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    holder: str = Field(min_length=1, max_length=128)
+    ttl_seconds: int | None = Field(default=None, alias="ttlSeconds", strict=True, ge=5, le=3600)
+
+
+class WorkspaceWriteLeaseReleaseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    holder: str = Field(min_length=1, max_length=128)
+
+
 class WorkspaceFileWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -615,6 +634,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     runner_enrollments: RunnerEnrollmentService | None = None
     runner_outbox: RunnerOutbox | None = None
     runner_results: RunnerResultLedger | None = None
+    workspace_write_leases: WorkspaceWriteLease | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
         settings.runner_journal_path.lstat()
@@ -807,6 +827,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         nonlocal runner_enrollments
         nonlocal runner_outbox
         nonlocal runner_results
+        nonlocal workspace_write_leases
         runner_ownership.acquire()
         try:
             if pairing_broker is not None:
@@ -831,6 +852,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 runner_enrollments = RunnerEnrollmentService(data_root / "runner-enrollments")
                 runner_outbox = RunnerOutbox(data_root / "runner-outbox")
                 runner_results = RunnerResultLedger(data_root / "runner-results")
+                workspace_write_leases = WorkspaceWriteLease(data_root / "workspace-write-leases")
             if settings.local_codex_enabled:
                 local_codex_event_journal = LocalCodexEventJournal(
                     settings.runner_journal_path.parent / "local-codex-events.sqlite3"
@@ -863,6 +885,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             app.state.runner_enrollments = runner_enrollments
             app.state.runner_outbox = runner_outbox
             app.state.runner_results = runner_results
+            app.state.workspace_write_leases = workspace_write_leases
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -1283,6 +1306,41 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(status_code=201, content={"service": defined}, headers={"Cache-Control": "no-store"})
+
+    def workspace_write_lease_service() -> WorkspaceWriteLease:
+        if workspace_write_leases is None:
+            raise HTTPException(status_code=503, detail="Workspace write leases are unavailable")
+        return workspace_write_leases
+
+    @app.get("/api/local/workspaces/{workspace_id}/write-lease", dependencies=[Depends(require_local_owner)])
+    async def local_workspace_write_lease_status(workspace_id: str):
+        current_owner_workspace(workspace_id)
+        try:
+            return JSONResponse(content=workspace_write_lease_service().status(workspace_id), headers={"Cache-Control": "no-store"})
+        except (WorkspaceWriteLeaseUnavailable, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/local/workspaces/{workspace_id}/write-lease", dependencies=[Depends(require_local_owner)])
+    async def local_workspace_write_lease_acquire(workspace_id: str, payload: WorkspaceWriteLeaseRequest):
+        current_owner_workspace(workspace_id)
+        try:
+            lease = workspace_write_lease_service().acquire(workspace_id, payload.holder, payload.ttl_seconds)
+        except WorkspaceWriteLeaseBusy as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (WorkspaceWriteLeaseUnavailable, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content={"lease": lease}, headers={"Cache-Control": "no-store"})
+
+    @app.delete("/api/local/workspaces/{workspace_id}/write-lease", dependencies=[Depends(require_local_owner)])
+    async def local_workspace_write_lease_release(workspace_id: str, payload: WorkspaceWriteLeaseReleaseRequest):
+        current_owner_workspace(workspace_id)
+        try:
+            workspace_write_lease_service().release(workspace_id, payload.holder)
+        except WorkspaceWriteLeaseNotHolder as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (WorkspaceWriteLeaseUnavailable, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
 
     def workspace_service_manager() -> WorkspaceServiceManager:
         if local_workspace_services is None:
