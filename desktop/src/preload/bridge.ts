@@ -12,6 +12,7 @@ import { BRIDGE_CHANNELS, parseBridgeRequest } from '../shared/bridge/validation
 import { createLocalCodexBridge } from './localCodexBridge'
 import type { LocalCodexIpcInvoker } from './localCodexBridge'
 import { createWorkspaceConsoleBridge } from './workspaceConsoleBridge'
+import { createWorkspaceServicesBridge } from './workspaceServicesBridge'
 
 export interface BridgeIpcInvoker extends LocalCodexIpcInvoker {}
 
@@ -39,5 +40,6 @@ export function createDesktopBridge(ipc: BridgeIpcInvoker): DesktopBridge {
     api,
     localCodex: createLocalCodexBridge(ipc),
     workspaceConsole: createWorkspaceConsoleBridge(ipc),
+    workspaceServices: createWorkspaceServicesBridge(ipc),
   })
 }

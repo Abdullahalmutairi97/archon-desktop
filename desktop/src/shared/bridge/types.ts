@@ -258,6 +258,48 @@ export interface WorkspaceConsoleBridge {
   detach(input: { workspaceId: string; sessionId: string; attachId: string }): Promise<boolean>
 }
 
+export interface WorkspaceServicePortDto {
+  name: string
+  port: number
+}
+
+export interface WorkspaceServiceDefinitionInput {
+  name: string
+  argv: readonly string[]
+  cwd: string
+  env: readonly string[]
+  ports: readonly WorkspaceServicePortDto[]
+  health: { port: string; path: string } | null
+  dependsOn: readonly string[]
+  restart: 'never' | 'on-failure'
+  memoryLimitMb: number | null
+}
+
+export interface WorkspaceServiceDto {
+  name: string
+  argv: readonly string[]
+  cwd: string
+  ports: readonly WorkspaceServicePortDto[]
+  restart: 'never' | 'on-failure'
+  state: 'registered' | 'starting' | 'running' | 'stopped' | 'exited' | 'failed'
+  exitCode: number | null
+  restarts: number
+}
+
+export interface WorkspaceServiceLogsDto {
+  text: string
+  truncated: boolean
+}
+
+export interface WorkspaceServicesBridge {
+  list(input: { workspaceId: string }): Promise<readonly WorkspaceServiceDto[]>
+  define(input: { workspaceId: string; definition: WorkspaceServiceDefinitionInput }): Promise<WorkspaceServiceDto>
+  remove(input: { workspaceId: string; name: string; confirm: boolean }): Promise<boolean>
+  start(input: { workspaceId: string; name: string }): Promise<WorkspaceServiceDto>
+  stop(input: { workspaceId: string; name: string; confirm: boolean }): Promise<boolean>
+  logs(input: { workspaceId: string; name: string; lines: number }): Promise<WorkspaceServiceLogsDto>
+}
+
 export interface OperationMap {
   readiness: {
     payload: EmptyPayload
@@ -361,6 +403,7 @@ export interface DesktopBridge {
   }
   readonly localCodex: LocalCodexBridge
   readonly workspaceConsole: WorkspaceConsoleBridge
+  readonly workspaceServices: WorkspaceServicesBridge
 }
 
 /** Renderer-safe projection of a main-owned project registration. */

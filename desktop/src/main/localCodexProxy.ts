@@ -1,5 +1,5 @@
 /** Main-process-only operations accepted by the local owner proxy. */
-import type { WorkspaceConsoleKeyEvent } from '../shared/bridge/types'
+import type { WorkspaceConsoleKeyEvent, WorkspaceServiceDefinitionInput } from '../shared/bridge/types'
 
 export type LocalCodexProxyRequest =
   | { operation: 'projects.list' }
@@ -22,6 +22,12 @@ export type LocalCodexProxyRequest =
   | { operation: 'workspace.terminals.attach.screen'; workspaceId: string; sessionId: string; attachId: string; lines: number }
   | { operation: 'workspace.terminals.attach.input'; workspaceId: string; sessionId: string; attachId: string; events: readonly WorkspaceConsoleKeyEvent[] }
   | { operation: 'workspace.terminals.attach.detach'; workspaceId: string; sessionId: string; attachId: string }
+  | { operation: 'workspace.services.list'; workspaceId: string }
+  | { operation: 'workspace.services.define'; workspaceId: string; definition: WorkspaceServiceDefinitionInput }
+  | { operation: 'workspace.services.remove'; workspaceId: string; name: string; confirm: boolean }
+  | { operation: 'workspace.services.start'; workspaceId: string; name: string }
+  | { operation: 'workspace.services.stop'; workspaceId: string; name: string; confirm: boolean }
+  | { operation: 'workspace.services.logs'; workspaceId: string; name: string; lines: number }
 
 export interface LocalCodexProxyEventRecord {
   seq: number

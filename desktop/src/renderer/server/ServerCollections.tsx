@@ -3,6 +3,7 @@ import type { ConnectionDescription, DesktopBridge, JsonRecord, LocalCodexProjec
 import { PrimeTaskPanel } from './PrimeTaskPanel'
 import { WorkspaceFileBrowser, type WorkspaceReadOnlyFilePort } from './WorkspaceFileBrowser'
 import { WorkspaceConsole } from './WorkspaceConsole'
+import { WorkspaceServices } from './WorkspaceServices'
 import './ServerCollections.css'
 
 type CollectionData = {
@@ -437,6 +438,13 @@ function WorkspaceSection({
     {activeConsoleWorkspaceId && activeConsoleGeneration !== null && <WorkspaceConsole
       key={`${activeConsoleWorkspaceId}:${activeConsoleGeneration}`}
       bridge={bridge.workspaceConsole}
+      workspaceId={activeConsoleWorkspaceId}
+      generation={activeConsoleGeneration}
+      pairingAvailable={localCodexPairingAvailable}
+    />}
+    {activeConsoleWorkspaceId && activeConsoleGeneration !== null && <WorkspaceServices
+      key={`services:${activeConsoleWorkspaceId}:${activeConsoleGeneration}`}
+      bridge={bridge.workspaceServices}
       workspaceId={activeConsoleWorkspaceId}
       generation={activeConsoleGeneration}
       pairingAvailable={localCodexPairingAvailable}

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createDesktopBridge } from './bridge'
-import { BRIDGE_CHANNELS, WORKSPACE_CONSOLE_CHANNELS } from '../shared/bridge/validation'
+import { BRIDGE_CHANNELS, WORKSPACE_CONSOLE_CHANNELS, WORKSPACE_SERVICES_CHANNELS } from '../shared/bridge/validation'
 
 describe('preload bridge', () => {
   it('exposes only frozen finite methods and forwards canonical IPC calls', async () => {
@@ -11,7 +11,7 @@ describe('preload bridge', () => {
     expect(Object.isFrozen(bridge.connection)).toBe(true)
     expect(Object.isFrozen(bridge.api)).toBe(true)
     expect(Object.isFrozen(bridge.localCodex)).toBe(true)
-    expect(Object.keys(bridge).sort()).toEqual(['api', 'connection', 'localCodex', 'workspaceConsole'])
+    expect(Object.keys(bridge).sort()).toEqual(['api', 'connection', 'localCodex', 'workspaceConsole', 'workspaceServices'])
     expect(Object.keys(bridge.connection).sort()).toEqual(['describe', 'disconnect', 'probe', 'save'])
     expect(Object.keys(bridge.api)).toEqual(['invoke'])
     expect(Object.isFrozen(bridge.workspaceConsole)).toBe(true)
@@ -85,6 +85,41 @@ describe('preload bridge', () => {
       workspaceId, sessionId, expectedGeneration: 3, mode: 'write' as never,
     })).toThrow(TypeError)
     expect(invoke).toHaveBeenCalledTimes(4)
+  })
+
+  it('exposes fixed workspace service calls and rejects malformed definitions', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const service = {
+      name: 'web', argv: ['/bin/echo', 'hi'], cwd: '.', ports: [{ name: 'http', port: 4173 }],
+      restart: 'never', state: 'registered', exitCode: null, restarts: 0,
+    }
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === WORKSPACE_SERVICES_CHANNELS.list) return [service]
+      if (channel === WORKSPACE_SERVICES_CHANNELS.logs) return { text: 'line', truncated: false }
+      if (channel === WORKSPACE_SERVICES_CHANNELS.define || channel === WORKSPACE_SERVICES_CHANNELS.start) return service
+      return true
+    })
+    const bridge = createDesktopBridge({ invoke })
+    const definition = {
+      name: 'web', argv: ['/bin/echo', 'hi'], cwd: '.', env: [],
+      ports: [{ name: 'http', port: 4173 }], health: null, dependsOn: [], restart: 'never' as const, memoryLimitMb: null,
+    }
+    await expect(bridge.workspaceServices.list({ workspaceId })).resolves.toEqual([service])
+    await expect(bridge.workspaceServices.define({ workspaceId, definition })).resolves.toEqual(service)
+    await expect(bridge.workspaceServices.start({ workspaceId, name: 'web' })).resolves.toEqual(service)
+    await expect(bridge.workspaceServices.logs({ workspaceId, name: 'web', lines: 50 })).resolves.toEqual({ text: 'line', truncated: false })
+    await expect(bridge.workspaceServices.stop({ workspaceId, name: 'web', confirm: true })).resolves.toBe(true)
+    await expect(bridge.workspaceServices.remove({ workspaceId, name: 'web', confirm: true })).resolves.toBe(true)
+
+    expect(() => bridge.workspaceServices.define({
+      workspaceId,
+      definition: { ...definition, argv: ['/bin/echo'] as unknown as readonly string[], name: 'Web' },
+    })).toThrow(TypeError)
+    expect(() => bridge.workspaceServices.define({
+      workspaceId,
+      definition: { ...definition, env: ['ARCHON_TOKEN'] },
+    })).toThrow(TypeError)
+    expect(() => bridge.workspaceServices.logs({ workspaceId, name: 'web', lines: 999 })).toThrow(TypeError)
   })
 
   it('rejects unlisted operations and malformed payloads before IPC', async () => {

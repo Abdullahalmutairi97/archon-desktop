@@ -125,6 +125,34 @@ describe('backend transport', () => {
     expect(fetcher).not.toHaveBeenCalled()
   })
 
+  it('maps workspace service calls to fixed owner-only routes', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const service = { name: 'web', argv: ['/bin/echo'], cwd: '.', ports: [], restart: 'never', state: 'registered', exitCode: null, restarts: 0 }
+    const fetcher = vi.fn<BackendFetch>(async (url, init) => response(
+      url.pathname.endsWith('/logs') ? { text: 'x', truncated: false }
+        : init?.method === 'GET' ? { services: [service] }
+          : url.pathname.endsWith('/start') || init?.method === 'PUT' ? { service } : { ok: true }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    const definition = {
+      name: 'web', argv: ['/bin/echo'], cwd: '.', env: [], ports: [], health: null,
+      dependsOn: [], restart: 'never' as const, memoryLimitMb: null,
+    }
+    await transport.invokeLocalCodex({ operation: 'workspace.services.list', workspaceId })
+    await transport.invokeLocalCodex({ operation: 'workspace.services.define', workspaceId, definition })
+    await transport.invokeLocalCodex({ operation: 'workspace.services.start', workspaceId, name: 'web' })
+    await transport.invokeLocalCodex({ operation: 'workspace.services.stop', workspaceId, name: 'web', confirm: true })
+    await transport.invokeLocalCodex({ operation: 'workspace.services.remove', workspaceId, name: 'web', confirm: true })
+    await transport.invokeLocalCodex({ operation: 'workspace.services.logs', workspaceId, name: 'web', lines: 200 })
+    expect(fetcher.mock.calls.map(([url, init]) => [url.pathname + url.search, init?.method, init?.body])).toEqual([
+      [`/api/local/workspaces/${workspaceId}/services`, 'GET', undefined],
+      [`/api/local/workspaces/${workspaceId}/services/web`, 'PUT', JSON.stringify(definition)],
+      [`/api/local/workspaces/${workspaceId}/services/web/start`, 'POST', undefined],
+      [`/api/local/workspaces/${workspaceId}/services/web/stop`, 'POST', JSON.stringify({ confirm: true })],
+      [`/api/local/workspaces/${workspaceId}/services/web`, 'DELETE', JSON.stringify({ confirm: true })],
+      [`/api/local/workspaces/${workspaceId}/services/web/logs?lines=200`, 'GET', undefined],
+    ])
+  })
+
   it('does not retry ambiguous line input', async () => {
     const fetcher = vi.fn<BackendFetch>(async () => { throw new Error('request may have reached server') })
     const transport = new BackendTransport({ ...localConnection, fetch: fetcher })

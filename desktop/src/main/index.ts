@@ -25,6 +25,7 @@ import {
 } from './localCodexController'
 import { registerLocalCodex } from './registerLocalCodex'
 import { registerWorkspaceConsole } from './registerWorkspaceConsole'
+import { registerWorkspaceServices } from './registerWorkspaceServices'
 import type { LocalCodexIpcController } from './registerLocalCodex'
 import { LocalCodexBackendAdapter } from './localCodexBackendAdapter'
 import { minimizeInsteadOfClosingForActiveWork } from './windowLifecycle'
@@ -41,6 +42,7 @@ let localCodexBackendAdapter: LocalCodexBackendAdapter | undefined
 let localCodexOwnerLease: CodexOwnerLease | undefined
 let unregisterLocalCodex: (() => void) | undefined
 let unregisterWorkspaceConsole: (() => void) | undefined
+let unregisterWorkspaceServices: (() => void) | undefined
 let quitRequested = false
 
 function getRendererDevOrigin(): string | undefined {
@@ -221,6 +223,14 @@ void app.whenReady().then(async () => {
     guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
     invokePairedLocalCodex: connection.invokePairedLocalCodex,
   })
+  unregisterWorkspaceServices = registerWorkspaceServices({
+    ipc: {
+      handle: (channel, handler) => ipcMain.handle(channel, (event, ...args) => handler(event, ...args)),
+      removeHandler: (channel) => ipcMain.removeHandler(channel),
+    },
+    guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
+    invokePairedLocalCodex: connection.invokePairedLocalCodex,
+  })
   registerBridgeHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, (event, ...args) => handler(event, ...args)),
     removeHandler: (channel) => ipcMain.removeHandler(channel),
@@ -243,6 +253,8 @@ app.on('before-quit', () => {
   unregisterLocalCodex = undefined
   unregisterWorkspaceConsole?.()
   unregisterWorkspaceConsole = undefined
+  unregisterWorkspaceServices?.()
+  unregisterWorkspaceServices = undefined
   localCodexBackendAdapter?.close()
   localCodexBackendAdapter = undefined
   localCodexController?.close()

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — desktop service surface
+
+- Add a finite `workspaceServices` preload bridge (list, define, remove, start, stop, logs) with strict input validation of every definition field: argv bounds and control-character rejection, workspace-relative cwd, referenced allowlisted env names, unique named ports, absolute health paths and a bounded dependency list.
+- Map each call to a fixed owner-only route and render a Workspace services panel that registers, starts, stops (confirmed), removes (confirmed) and tails logs, with honest state and no automatic retry of ambiguous actions.
+
 ## Unreleased — P5 runtime availability record
 
 - Record the installed Prime/Pi/Codex/Hermes identities, headless availability, native account material and host facilities on the target workstation, and mark P5 in progress with availability established but no adapter qualified.

@@ -610,7 +610,7 @@ function localCodexId(value: unknown, prefix: string, maxLength: number): value 
 }
 
 function localCodexRequestDetails(request: LocalCodexProxyRequest): {
-  method: 'GET' | 'POST' | 'DELETE'
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE'
   path: string
   body?: string
   expectedStatus?: 201
@@ -740,6 +740,34 @@ function localCodexRequestDetails(request: LocalCodexProxyRequest): {
         || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)
         || !/^watt-[0-9a-f]{32}$/u.test(request.attachId)) break
       return { method: 'DELETE', path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}/attach/${request.attachId}` }
+    case 'workspace.services.list':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)) break
+      return { method: 'GET', path: `/api/local/workspaces/${request.workspaceId}/services` }
+    case 'workspace.services.define':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^[a-z][a-z0-9-]{0,31}$/u.test(request.definition.name)) break
+      return {
+        method: 'PUT',
+        path: `/api/local/workspaces/${request.workspaceId}/services/${request.definition.name}`,
+        body: JSON.stringify(request.definition),
+      }
+    case 'workspace.services.remove':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^[a-z][a-z0-9-]{0,31}$/u.test(request.name)) break
+      return { method: 'DELETE', path: `/api/local/workspaces/${request.workspaceId}/services/${request.name}`, body: JSON.stringify({ confirm: request.confirm }) }
+    case 'workspace.services.start':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^[a-z][a-z0-9-]{0,31}$/u.test(request.name)) break
+      return { method: 'POST', path: `/api/local/workspaces/${request.workspaceId}/services/${request.name}/start` }
+    case 'workspace.services.stop':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^[a-z][a-z0-9-]{0,31}$/u.test(request.name)) break
+      return { method: 'POST', path: `/api/local/workspaces/${request.workspaceId}/services/${request.name}/stop`, body: JSON.stringify({ confirm: request.confirm }) }
+    case 'workspace.services.logs':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^[a-z][a-z0-9-]{0,31}$/u.test(request.name)
+        || !Number.isInteger(request.lines) || request.lines < 1 || request.lines > 400) break
+      return { method: 'GET', path: `/api/local/workspaces/${request.workspaceId}/services/${request.name}/logs?lines=${request.lines}` }
   }
   throw new BackendTransportError('invalid_payload')
 }

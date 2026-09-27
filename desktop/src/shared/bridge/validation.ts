@@ -40,6 +40,8 @@ import type {
   WorkspaceConsoleAttachLeaseDto,
   WorkspaceConsoleKeyEvent,
   WorkspaceConsoleNamedKey,
+  WorkspaceServiceDto,
+  WorkspaceServiceDefinitionInput,
 } from './types'
 
 export const BRIDGE_CHANNELS = Object.freeze({
@@ -79,6 +81,17 @@ export const WORKSPACE_CONSOLE_CHANNELS = Object.freeze({
 } as const)
 
 export type WorkspaceConsoleInvokeChannel = (typeof WORKSPACE_CONSOLE_CHANNELS)[keyof typeof WORKSPACE_CONSOLE_CHANNELS]
+
+export const WORKSPACE_SERVICES_CHANNELS = Object.freeze({
+  list: 'archon:workspace-services:list',
+  define: 'archon:workspace-services:define',
+  remove: 'archon:workspace-services:remove',
+  start: 'archon:workspace-services:start',
+  stop: 'archon:workspace-services:stop',
+  logs: 'archon:workspace-services:logs',
+} as const)
+
+export type WorkspaceServicesInvokeChannel = (typeof WORKSPACE_SERVICES_CHANNELS)[keyof typeof WORKSPACE_SERVICES_CHANNELS]
 
 export type LocalCodexInvokeChannel = Exclude<(typeof LOCAL_CODEX_CHANNELS)[keyof typeof LOCAL_CODEX_CHANNELS], typeof LOCAL_CODEX_CHANNELS.event>
 
@@ -1086,6 +1099,85 @@ const WORKSPACE_CONSOLE_NAMED_KEYS = new Set<string>([
   'BSpace', 'Tab', 'BTab', 'DC', 'IC', 'Escape', 'Enter', 'Space',
   'C-c', 'C-d', 'C-z', 'C-l', 'C-a', 'C-e', 'C-u', 'C-k', 'C-w',
 ])
+const MAX_WORKSPACE_SERVICES = 8
+const MAX_WORKSPACE_SERVICE_ARGV = 32
+const MAX_WORKSPACE_SERVICE_ARG_LENGTH = 1024
+const MAX_WORKSPACE_SERVICE_PORTS = 4
+const MAX_WORKSPACE_SERVICE_ENV = 16
+const MAX_WORKSPACE_SERVICE_DEPENDS = 4
+const MAX_WORKSPACE_SERVICE_LOGS_BYTES = 16 * 1024
+const WORKSPACE_SERVICE_NAME = /^[a-z][a-z0-9-]{0,31}$/u
+const WORKSPACE_SERVICE_PORT_NAME = /^[a-z][a-z0-9-]{0,15}$/u
+const WORKSPACE_SERVICE_ENV_REFS = new Set<string>(['NODE_ENV', 'PYTHONUNBUFFERED'])
+const WORKSPACE_SERVICE_STATES = new Set<string>(['registered', 'starting', 'running', 'stopped', 'exited', 'failed'])
+
+function workspaceServiceName(value: unknown): string {
+  if (typeof value !== 'string' || !WORKSPACE_SERVICE_NAME.test(value)) return fail()
+  return value
+}
+
+function parseWorkspaceServicePorts(value: unknown): readonly { name: string; port: number }[] {
+  if (!Array.isArray(value) || value.length > MAX_WORKSPACE_SERVICE_PORTS) return fail()
+  return Object.freeze(value.map((item) => {
+    const port = exactObject(item, ['name', 'port'])
+    if (typeof port.name !== 'string' || !WORKSPACE_SERVICE_PORT_NAME.test(port.name)
+      || typeof port.port !== 'number' || !Number.isInteger(port.port) || port.port < 1 || port.port > 65535) return fail()
+    return Object.freeze({ name: port.name, port: port.port })
+  }))
+}
+
+function parseWorkspaceServiceDefinition(value: unknown): WorkspaceServiceDefinitionInput {
+  const record = exactObject(value, ['name', 'argv', 'cwd', 'env', 'ports', 'health', 'dependsOn', 'restart', 'memoryLimitMb'])
+  const name = workspaceServiceName(record.name)
+  if (!Array.isArray(record.argv) || record.argv.length < 1 || record.argv.length > MAX_WORKSPACE_SERVICE_ARGV) return fail()
+  const argv = Object.freeze(record.argv.map((item) => {
+    if (typeof item !== 'string' || !item || item.length > MAX_WORKSPACE_SERVICE_ARG_LENGTH || /[\u0000-\u001f\u007f]/u.test(item)) return fail()
+    return item
+  }))
+  if (typeof record.cwd !== 'string' || !record.cwd || record.cwd.length > 512 || record.cwd.startsWith('/')
+    || /[\u0000-\u001f]/u.test(record.cwd)) return fail()
+  if (!Array.isArray(record.env) || record.env.length > MAX_WORKSPACE_SERVICE_ENV) return fail()
+  const env = Object.freeze(record.env.map((item) => {
+    if (typeof item !== 'string' || !WORKSPACE_SERVICE_ENV_REFS.has(item)) return fail()
+    return item
+  }))
+  const ports = parseWorkspaceServicePorts(record.ports)
+  let health: { port: string; path: string } | null = null
+  if (record.health !== null) {
+    const candidate = exactObject(record.health, ['port', 'path'])
+    if (typeof candidate.port !== 'string' || !WORKSPACE_SERVICE_PORT_NAME.test(candidate.port)) return fail()
+    if (typeof candidate.path !== 'string' || !candidate.path.startsWith('/') || candidate.path.length > 256
+      || /[\u0000-\u001f]/u.test(candidate.path)) return fail()
+    health = Object.freeze({ port: candidate.port, path: candidate.path })
+  }
+  if (!Array.isArray(record.dependsOn) || record.dependsOn.length > MAX_WORKSPACE_SERVICE_DEPENDS) return fail()
+  const dependsOn = Object.freeze(record.dependsOn.map((item) => workspaceServiceName(item)))
+  if (record.restart !== 'never' && record.restart !== 'on-failure') return fail()
+  if (record.memoryLimitMb !== null && (typeof record.memoryLimitMb !== 'number'
+    || !Number.isInteger(record.memoryLimitMb) || record.memoryLimitMb < 16 || record.memoryLimitMb > 65536)) return fail()
+  return Object.freeze({
+    name, argv, cwd: record.cwd, env, ports, health, dependsOn,
+    restart: record.restart, memoryLimitMb: record.memoryLimitMb as number | null,
+  })
+}
+
+function parseWorkspaceServiceDto(value: unknown): WorkspaceServiceDto {
+  const record = exactObject(value, ['name', 'argv', 'cwd', 'ports', 'restart', 'state', 'exitCode', 'restarts'])
+  const name = workspaceServiceName(record.name)
+  if (!Array.isArray(record.argv)
+    || record.argv.some((item) => typeof item !== 'string' || item.length > MAX_WORKSPACE_SERVICE_ARG_LENGTH)) return fail()
+  if (typeof record.cwd !== 'string' || record.cwd.length > 512) return fail()
+  const ports = parseWorkspaceServicePorts(record.ports)
+  if (record.restart !== 'never' && record.restart !== 'on-failure') return fail()
+  if (typeof record.state !== 'string' || !WORKSPACE_SERVICE_STATES.has(record.state)) return fail()
+  if (record.exitCode !== null && (typeof record.exitCode !== 'number' || !Number.isInteger(record.exitCode))) return fail()
+  if (typeof record.restarts !== 'number' || !Number.isInteger(record.restarts) || record.restarts < 0) return fail()
+  return Object.freeze({
+    name, argv: Object.freeze(record.argv as string[]), cwd: record.cwd, ports,
+    restart: record.restart, state: record.state as WorkspaceServiceDto['state'],
+    exitCode: record.exitCode as number | null, restarts: record.restarts,
+  })
+}
 
 function parseWorkspaceConsoleTerminal(value: unknown): WorkspaceConsoleTerminalDto {
   const record = exactObject(value, ['sessionId', 'state', 'createdAt'])
@@ -1295,6 +1387,94 @@ export function parseWorkspaceConsoleResponse(channel: unknown, value: unknown):
     case WORKSPACE_CONSOLE_CHANNELS.attachOpen:
     case WORKSPACE_CONSOLE_CHANNELS.attachClaim:
       return parseWorkspaceConsoleBackendResponse(channel, { attachment: value })
+    default:
+      return fail()
+  }
+}
+
+/** Validate fixed service IPC input before main forwards it to the owner-only API. */
+export function parseWorkspaceServicesRequest(channel: unknown, args: readonly unknown[]): Readonly<Record<string, unknown>> {
+  const safeArgs = readLocalArray(args, 1)
+  if (safeArgs.length !== 1 || !Object.values(WORKSPACE_SERVICES_CHANNELS).includes(channel as WorkspaceServicesInvokeChannel)) return fail()
+  const value = safeArgs[0]
+  switch (channel) {
+    case WORKSPACE_SERVICES_CHANNELS.list: {
+      const record = exactObject(value, ['workspaceId'])
+      if (!workspaceFileId(record.workspaceId)) return fail()
+      return Object.freeze({ workspaceId: record.workspaceId })
+    }
+    case WORKSPACE_SERVICES_CHANNELS.define: {
+      const record = exactObject(value, ['workspaceId', 'definition'])
+      if (!workspaceFileId(record.workspaceId)) return fail()
+      return Object.freeze({ workspaceId: record.workspaceId, definition: parseWorkspaceServiceDefinition(record.definition) })
+    }
+    case WORKSPACE_SERVICES_CHANNELS.remove:
+    case WORKSPACE_SERVICES_CHANNELS.stop: {
+      const record = exactObject(value, ['workspaceId', 'name', 'confirm'])
+      if (!workspaceFileId(record.workspaceId) || typeof record.confirm !== 'boolean') return fail()
+      return Object.freeze({ workspaceId: record.workspaceId, name: workspaceServiceName(record.name), confirm: record.confirm })
+    }
+    case WORKSPACE_SERVICES_CHANNELS.start: {
+      const record = exactObject(value, ['workspaceId', 'name'])
+      if (!workspaceFileId(record.workspaceId)) return fail()
+      return Object.freeze({ workspaceId: record.workspaceId, name: workspaceServiceName(record.name) })
+    }
+    case WORKSPACE_SERVICES_CHANNELS.logs: {
+      const record = exactObject(value, ['workspaceId', 'name', 'lines'])
+      if (!workspaceFileId(record.workspaceId) || typeof record.lines !== 'number'
+        || !Number.isInteger(record.lines) || record.lines < 1 || record.lines > 400) return fail()
+      return Object.freeze({ workspaceId: record.workspaceId, name: workspaceServiceName(record.name), lines: record.lines })
+    }
+    default:
+      return fail()
+  }
+}
+
+/** Normalize only the documented service envelopes before they cross into the renderer. */
+export function parseWorkspaceServicesBackendResponse(channel: unknown, value: unknown): unknown {
+  switch (channel) {
+    case WORKSPACE_SERVICES_CHANNELS.list: {
+      const record = exactObject(value, ['services'])
+      if (!Array.isArray(record.services) || record.services.length > MAX_WORKSPACE_SERVICES) return fail()
+      const services = record.services.map(parseWorkspaceServiceDto)
+      if (new Set(services.map((service) => service.name)).size !== services.length) return fail()
+      return Object.freeze(services)
+    }
+    case WORKSPACE_SERVICES_CHANNELS.define:
+    case WORKSPACE_SERVICES_CHANNELS.start:
+      return parseWorkspaceServiceDto(exactObject(value, ['service']).service)
+    case WORKSPACE_SERVICES_CHANNELS.remove:
+    case WORKSPACE_SERVICES_CHANNELS.stop: {
+      const record = exactObject(value, ['ok'])
+      if (record.ok !== true) return fail()
+      return true
+    }
+    case WORKSPACE_SERVICES_CHANNELS.logs: {
+      const record = exactObject(value, ['text', 'truncated'])
+      if (typeof record.text !== 'string'
+        || new TextEncoder().encode(record.text).byteLength > MAX_WORKSPACE_SERVICE_LOGS_BYTES
+        || typeof record.truncated !== 'boolean') return fail()
+      return Object.freeze({ text: record.text, truncated: record.truncated })
+    }
+    default:
+      return fail()
+  }
+}
+
+/** Validate normalized service results returned by the preload bridge. */
+export function parseWorkspaceServicesResponse(channel: unknown, value: unknown): unknown {
+  switch (channel) {
+    case WORKSPACE_SERVICES_CHANNELS.list:
+      return parseWorkspaceServicesBackendResponse(channel, { services: value })
+    case WORKSPACE_SERVICES_CHANNELS.define:
+    case WORKSPACE_SERVICES_CHANNELS.start:
+      return parseWorkspaceServicesBackendResponse(channel, { service: value })
+    case WORKSPACE_SERVICES_CHANNELS.remove:
+    case WORKSPACE_SERVICES_CHANNELS.stop:
+      if (value !== true) return fail()
+      return true
+    case WORKSPACE_SERVICES_CHANNELS.logs:
+      return parseWorkspaceServicesBackendResponse(channel, value)
     default:
       return fail()
   }
