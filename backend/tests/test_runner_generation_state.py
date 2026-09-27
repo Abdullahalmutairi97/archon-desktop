@@ -78,3 +78,52 @@ def test_activation_rejects_generation_state_that_changed_after_inspection(tmp_p
         "active_generation": 1,
         "last_runner_seq": 2,
     }
+
+
+def test_recovery_diagnostic_is_read_only_and_reports_receipt_and_task_state(tmp_path):
+    store = _store(tmp_path)
+    task_id, attempt_id = _running_task(store)
+    _deliver(store, task_id, attempt_id, generation=1, seq=1)
+    before_task = store.get(task_id)
+    before_events = store.events(task_id)
+
+    report = store.runner_generation_recovery_diagnostic(RUNNER_ID)
+
+    assert report == {
+        "runner_id": RUNNER_ID,
+        "coordinator_generation": 1,
+        "coordinator_last_runner_seq": 1,
+        "active_generation_receipt_count": 1,
+        "active_generation_first_runner_seq": 1,
+        "active_generation_last_runner_seq": 1,
+        "receipt_history_consistent": True,
+        "server_wide_uncertain_task_count": 1,
+        "recovery_action": "not_performed",
+    }
+    assert store.runner_generation_state(RUNNER_ID) == {
+        "runner_id": RUNNER_ID,
+        "active_generation": 1,
+        "last_runner_seq": 1,
+    }
+    assert store.get(task_id) == before_task
+    assert store.events(task_id) == before_events
+
+
+def test_recovery_diagnostic_flags_missing_receipt_without_mutating_task(tmp_path):
+    store = _store(tmp_path)
+    task_id, attempt_id = _running_task(store)
+    _deliver(store, task_id, attempt_id, generation=1, seq=1)
+    with store.db.transaction() as conn:
+        conn.execute(
+            "DELETE FROM runner_event_receipts WHERE runner_id=? AND journal_generation=1 AND runner_seq=1",
+            (RUNNER_ID,),
+        )
+
+    report = store.runner_generation_recovery_diagnostic(RUNNER_ID)
+
+    assert report["receipt_history_consistent"] is False
+    assert report["coordinator_generation"] == 1
+    assert report["coordinator_last_runner_seq"] == 1
+    assert report["active_generation_receipt_count"] == 0
+    assert report["server_wide_uncertain_task_count"] == 1
+    assert store.get(task_id)["status"] == "running"

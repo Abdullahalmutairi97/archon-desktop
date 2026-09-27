@@ -491,6 +491,78 @@ class TaskStore:
             "last_runner_seq": int(row["last_runner_seq"]),
         }
 
+    def runner_generation_recovery_diagnostic(self, runner_id: str) -> dict[str, Any]:
+        """Summarize coordinator state relevant to a lost or restored journal.
+
+        This is intentionally read-only. It does not fence a generation or
+        interrupt tasks: the coordinator cannot prove that an old runner and
+        its native children have stopped merely because a journal is missing.
+        """
+        self._validate_runner_id(runner_id)
+        with self.db.connect() as conn:
+            conn.execute("BEGIN")
+            state = conn.execute(
+                """SELECT active_generation,last_runner_seq
+                   FROM runner_generation_state WHERE runner_id=?""",
+                (runner_id,),
+            ).fetchone()
+            if state is None:
+                generation = None
+                last_runner_seq = None
+                active_receipt_count = 0
+                active_first_seq = None
+                active_last_seq = None
+                receipt_history_consistent = conn.execute(
+                    "SELECT COUNT(*) FROM runner_event_receipts WHERE runner_id=?",
+                    (runner_id,),
+                ).fetchone()[0] == 0
+            else:
+                generation = int(state["active_generation"])
+                last_runner_seq = int(state["last_runner_seq"])
+                active = conn.execute(
+                    """SELECT COUNT(*) AS receipt_count,MIN(runner_seq) AS first_seq,
+                              MAX(runner_seq) AS last_seq
+                       FROM runner_event_receipts
+                       WHERE runner_id=? AND journal_generation=?""",
+                    (runner_id, generation),
+                ).fetchone()
+                active_receipt_count = int(active["receipt_count"])
+                active_first_seq = int(active["first_seq"]) if active["first_seq"] is not None else None
+                active_last_seq = int(active["last_seq"]) if active["last_seq"] is not None else None
+                future_receipts = int(conn.execute(
+                    """SELECT COUNT(*) FROM runner_event_receipts
+                       WHERE runner_id=? AND journal_generation>?""",
+                    (runner_id, generation),
+                ).fetchone()[0])
+                active_history_consistent = (
+                    active_receipt_count == last_runner_seq
+                    and (
+                        (last_runner_seq == 0 and active_first_seq is None and active_last_seq is None)
+                        or (last_runner_seq > 0 and active_first_seq == 1 and active_last_seq == last_runner_seq)
+                    )
+                )
+                receipt_history_consistent = active_history_consistent and future_receipts == 0
+
+            # Task attempts are not associated with a runner id in this schema,
+            # so label this count as server-wide instead of implying ownership.
+            uncertain_task_count = int(conn.execute(
+                """SELECT COUNT(*) FROM tasks
+                   WHERE status IN ('running','cancelling')
+                      OR (status='queued' AND started_at IS NOT NULL)"""
+            ).fetchone()[0])
+            conn.commit()
+        return {
+            "runner_id": runner_id,
+            "coordinator_generation": generation,
+            "coordinator_last_runner_seq": last_runner_seq,
+            "active_generation_receipt_count": active_receipt_count,
+            "active_generation_first_runner_seq": active_first_seq,
+            "active_generation_last_runner_seq": active_last_seq,
+            "receipt_history_consistent": receipt_history_consistent,
+            "server_wide_uncertain_task_count": uncertain_task_count,
+            "recovery_action": "not_performed",
+        }
+
     def activate_runner_generation(
         self,
         runner_id: str,

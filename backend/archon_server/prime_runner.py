@@ -290,6 +290,7 @@ class PrimeRunner:
             pass_fds=(lease.fileno(),),
         )
         identity: ProcessIdentity | None = None
+        target_released = False
         try:
             identity = capture_process_identity(process)
             self._active[task_id] = process
@@ -299,6 +300,9 @@ class PrimeRunner:
                 self._consume_cancellation(task_id, attempt_key)
                 raise RunnerCancelled(task_id)
             await release_supervised_target(process)
+            # A failed release can leave byte delivery ambiguous, so only
+            # select normal teardown after the helper has drained and closed it.
+            target_released = True
             if self._active_attempts.get(task_id) == attempt_key:
                 self._released_attempts[task_id] = attempt_key
             if self._cancellation_requested(task, task_id, attempt_key):
@@ -314,7 +318,15 @@ class PrimeRunner:
             try:
                 if identity is not None:
                     try:
-                        await abort_supervised_start(process, identity)
+                        if target_released:
+                            # Once the supervisor has released the native
+                            # process, let it resume after terminating the
+                            # process group so it can reap its child. The
+                            # startup abort path deliberately kills a blocked
+                            # supervisor and is only safe before release.
+                            await terminate_process_tree(process, identity)
+                        else:
+                            await abort_supervised_start(process, identity)
                     finally:
                         identity.close()
                 else:

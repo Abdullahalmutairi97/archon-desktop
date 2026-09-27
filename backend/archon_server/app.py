@@ -122,6 +122,26 @@ def _validate_runner_journal_state(store: TaskStore, journal: RunnerJournal) -> 
         raise RunnerJournalError("local runner journal cannot replay coordinator delivery gap")
 
 
+def _runner_recovery_diagnostic(store: TaskStore, runner_id: str) -> str:
+    """Format bounded read-only state to make a startup failure actionable."""
+    try:
+        report = store.runner_generation_recovery_diagnostic(runner_id)
+    except Exception:
+        # Preserve the original startup error if the diagnostic query also fails.
+        return "read-only recovery diagnostic unavailable; recovery_action=not_performed"
+    return (
+        "read-only recovery diagnostic: "
+        f"coordinator_generation={report['coordinator_generation']}, "
+        f"coordinator_last_runner_seq={report['coordinator_last_runner_seq']}, "
+        f"active_generation_receipts={report['active_generation_receipt_count']}, "
+        f"receipt_history_consistent={str(report['receipt_history_consistent']).lower()}, "
+        f"server_wide_uncertain_tasks={report['server_wide_uncertain_task_count']}, "
+        "recovery_action=not_performed; "
+        "next_step=preserve coordinator and journal copies, then verify the old runner "
+        "and its native children are stopped before manual generation fencing"
+    )
+
+
 class TaskCreate(BaseModel):
     prompt: str = Field(min_length=1, max_length=100_000)
     cwd: str | None = Field(default=None, max_length=1000)
@@ -344,14 +364,21 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     except FileNotFoundError:
         if coordinator_runner_state is not None:
             raise RunnerJournalError(
-                "local runner journal is missing while coordinator delivery state exists"
+                "local runner journal is missing while coordinator delivery state exists; "
+                "no generation was advanced and no task was interrupted; "
+                + _runner_recovery_diagnostic(store, LOCAL_TASK_RUNNER_ID)
             )
-    journal = RunnerJournal(
-        settings.runner_journal_path,
-        LOCAL_TASK_RUNNER_ID,
-        1,
-    )
-    _validate_runner_journal_state(store, journal)
+    try:
+        journal = RunnerJournal(
+            settings.runner_journal_path,
+            LOCAL_TASK_RUNNER_ID,
+            1,
+        )
+        _validate_runner_journal_state(store, journal)
+    except RunnerJournalError as exc:
+        raise RunnerJournalError(
+            f"{exc}; {_runner_recovery_diagnostic(store, LOCAL_TASK_RUNNER_ID)}"
+        ) from exc
     selected_runner = {
         "prime": PrimeRunner(
             settings.prime_executable,

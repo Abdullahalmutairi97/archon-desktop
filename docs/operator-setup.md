@@ -35,7 +35,22 @@ The destination must be new, outside all supplied roots, and inside a directory 
 
 To let the desktop connect locally without entering a bearer, run the backend service under the **same Linux account** as the desktop and set `ARCHON_DESKTOP_LOCAL_OWNER_MODE=true` in its protected external environment file. Keep the listener on loopback and `ARCHON_DESKTOP_REMOTE_ACCESS_MODE=disabled`. If using the installer above, set `--service-user` to the desktop account; the example's separate `archon` account cannot pair with a desktop running as another user. The generated service token may remain configured, but the desktop does not need to display or store it.
 
-The backend creates a private pairing socket at `<ARCHON_DESKTOP_DATA_DIR>/runner-journal/pairing.sock` (default `~/.local/share/archon-desktop/runner-journal/pairing.sock`). With no saved remote connection, the desktop pairs automatically and holds the resulting 24-hour bearer only in main-process memory. A saved remote connection takes precedence; Disconnect disables automatic local pairing until the next desktop startup. The local service and its accepted backend tasks continue after the desktop window closes. Local Codex app-server turns are still desktop-owned and are not yet a headless runner.
+The backend creates a private pairing socket at `<ARCHON_DESKTOP_DATA_DIR>/runner-journal/pairing.sock` (default `~/.local/share/archon-desktop/runner-journal/pairing.sock`). With no saved remote connection, the desktop pairs automatically and holds the resulting 24-hour bearer only in main-process memory. A saved remote connection takes precedence; Disconnect disables automatic local pairing until the next desktop startup.
+
+For a solo Linux desktop installation that should keep the backend task engine available independently of Electron, install its same-user systemd service from the checkout after creating `backend/.venv`:
+
+```bash
+deploy/install-user-server.sh \
+  --workspace-root /home/you/work \
+  --workspace-root /home/you/another-project \
+  --confirm-workspace-roots-complete
+```
+
+Supply every configured scratch and registered project root. The installer creates a private environment file at `$XDG_CONFIG_HOME/archon-desktop/server.env` (or `~/.config/archon-desktop/server.env`), sets loopback-only local owner mode, and installs/enables the user unit. The environment file must be outside every supplied workspace root; use `--env-file /absolute/private/path/server.env` if the default config directory falls inside one. An existing environment file is retained only when its owner, permissions, workspace location, and local-only settings pass validation. Re-running with the same checkout and settings reuses an identical managed unit; an unmanaged or changed unit is left untouched for inspection. The unit points directly to this checkout and its `backend/.venv`; keep both at those paths while the service is installed. Remove the unit with `deploy/uninstall-user-server.sh`; this stops/removes the managed unit and preserves the environment file and backend data. These scripts do not alter the separate system-wide VPS service.
+
+The user service keeps the backend coordinator and its accepted backend tasks running when the app window closes. On Linux, closing the window during an active local Codex turn minimizes it, leaving Electron and the Codex app-server alive; closing an idle window quits Electron. An explicit Quit also closes the Electron-owned local Codex controller/app-server. The backend user service remains available after either app exit, but local Codex app-server turns are not yet headless and are not transferred to it. At logout, systemd stops user services by default; without administrator-enabled lingering the backend stops too. Started backend tasks then follow backend shutdown/recovery handling, and service shutdown does not certify that every native child process stopped cleanly.
+
+This is a source-checkout user service for Linux systems with systemd. It does not install at boot for a fully logged-out user, package the backend, enable lingering, supervise local Codex app-server turns, or provide host-level task isolation.
 
 ## Remote access
 
