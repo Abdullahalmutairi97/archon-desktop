@@ -36,7 +36,7 @@ jobs:
     steps:
       - name: Install Git for source checkout and package provenance
         working-directory: /
-        run: apt-get update && apt-get install -y --no-install-recommends git
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: npm ci
       - run: npm run ci

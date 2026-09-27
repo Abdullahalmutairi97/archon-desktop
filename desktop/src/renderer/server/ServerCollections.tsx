@@ -345,7 +345,7 @@ function WorkspaceSection({
 
   return <section className="server-collection server-workspaces" aria-label="SERVER WORKSPACES">
     <div className="server-collection-heading"><h3>SERVER WORKSPACES</h3><span>{state === 'ready' ? `${records.length} shown` : state === 'loading' ? 'loading' : 'unavailable'}</span></div>
-    <p className="server-workspace-status">Server Git checkout; Local Codex remains Electron-owned and native execution isolation is not enabled.</p>
+    <p className="server-workspace-status">Server Git checkout; Local Codex ownership depends on setup. Native execution isolation is not enabled.</p>
     {state === 'loading' && <p className="server-collection-empty">Loading workspaces from this server…</p>}
     {state === 'unavailable' && <div className="server-workspace-unavailable" role="alert">
       <span>{accessRejected

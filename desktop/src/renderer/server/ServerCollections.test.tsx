@@ -196,7 +196,7 @@ describe('ServerCollections', () => {
     expect(within(section).getByText('Source project: project-1 · Owner: unavailable · Branch: unavailable')).toBeInTheDocument()
     expect(within(section).getByText(`Revisions: base ${'a'.repeat(40)} · head ${'b'.repeat(40)}`)).toBeInTheDocument()
     expect(within(section).getByText(`Authoritative root: ${workspace.root}`)).toBeInTheDocument()
-    expect(within(section).getByText('Server Git checkout; Local Codex remains Electron-owned and native execution isolation is not enabled.')).toBeInTheDocument()
+    expect(within(section).getByText('Server Git checkout; Local Codex ownership depends on setup. Native execution isolation is not enabled.')).toBeInTheDocument()
     expect(section.textContent).not.toContain('owner-from-unvalidated-field')
     expect(section.textContent).not.toContain('branch-from-unvalidated-field')
     expect(section.textContent).not.toContain('profile-from-unvalidated-field')
