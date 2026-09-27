@@ -52,13 +52,22 @@ or started.
 
 ## Qualification attempt (2026-09-27)
 
-A bounded behavioral probe was attempted and did **not** qualify any adapter:
+### Hermes qualifies
+
+`hermes -z "Reply with exactly the single word READY and nothing else." --cli` in a
+throwaway working directory completed with exit 0 and returned `READY`. Hermes
+uses its own `minimax-oauth` / `nous` (`z-ai/glm-5.2`) provider rather than the
+exhausted Codex quota. This is one runtime completing one bounded turn in an
+assigned workspace; it does not establish tool use, side effects, resume or
+recovery.
+
+### Prime / Pi / Codex blocked
 
 - **Codex** 0.154.0 started a bounded `codex exec` turn (workdir `/tmp/rt-qual`, model `gpt-5.6-luna`, provider `openai`) but did not complete within 180s; an MCP transport error (Apify missing/invalid token) was observed during startup.
 - **Pi** 0.87.1 `pi -p --no-session` returned `Codex error: The usage limit has been reached`.
-- **Prime** and **Hermes** were not attempted after the shared provider reported its usage limit reached.
+- **Prime** was not attempted after Pi reported the shared provider usage limit reached.
 
-Conclusion: native behavioral qualification is blocked by unavailable provider quota on this account, not by the runtimes' presence or the adapter code. Every adapter remains **unverified** until a provider turn completes in an assigned workspace.
+Conclusion: one runtime (Hermes) completed a bounded turn; the other three are blocked by unavailable provider quota on this account, not by their presence or the adapter code. Each of those three stays **unverified** until a provider turn completes.
 
 ## Not yet established
 
