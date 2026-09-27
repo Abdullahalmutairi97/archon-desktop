@@ -248,7 +248,10 @@ describe('WorkspaceFileBrowser', () => {
     await waitFor(() => expect(read).toHaveBeenCalledWith('workspace-create', 'new.md', 64 * 1024))
     expect(await screen.findByText('# New note')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'new.md 11 B' })).toHaveAttribute('aria-pressed', 'true')
-    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+    // The refresh after a create is one extra mocked call. Allow for a loaded
+    // machine rather than the default one-second wait, which is not a property of
+    // the component under test.
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2), { timeout: 5000 })
   })
 
   it('rejects unsafe paths and oversized text, then distinguishes collisions from uncertain results', async () => {
