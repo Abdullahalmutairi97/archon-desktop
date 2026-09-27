@@ -1,6 +1,6 @@
 # P4 — Full solo workstation
 
-**Status:** in progress. The Server data view can register an existing backend-side Git project, provision a checkout, and select that checkout for a Prime task. Registered checkouts can be browsed, searched, created and edited for small text files, with a bounded selected-file Git diff; the full IDE, persistent shell, debugger, and in-app service preview remain open. **Dependencies:** P2 and P3. **Outcome:** one person can ask an agent to build, inspect/edit/debug its code, run a persistent shell and use the resulting app within Archon.
+**Status:** in progress. The Server data view can register an existing backend-side Git project, provision a checkout, and select that checkout for a Prime task. Registered checkouts can be browsed, searched, created and edited for small text files, with a bounded selected-file Git diff. Prime task details now show recent bounded assistant/tool activity during execution and after reattach. The full IDE, persistent shell, debugger, and in-app service preview remain open. **Dependencies:** P2 and P3. **Outcome:** one person can ask an agent to build, inspect/edit/debug its code, run a persistent shell and use the resulting app within Archon.
 
 ## Scope
 

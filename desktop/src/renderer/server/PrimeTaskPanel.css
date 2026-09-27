@@ -297,6 +297,34 @@
 .prime-task-hint { color: var(--muted, #96928c); font-size: calc(9px * var(--font-scale, 1)); }
 .prime-task-id code { color: var(--text, #e8e5e0); user-select: text; }
 
+.prime-task-activity {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.prime-task-activity > strong,
+.prime-task-activity li small {
+  color: var(--muted, #96928c);
+  font-size: calc(9px * var(--font-scale, 1));
+}
+
+.prime-task-activity ol {
+  display: grid;
+  gap: 5px;
+  max-height: 120px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px 8px 26px;
+  border: 1px solid var(--line, #343230);
+  border-radius: var(--radius, 5px);
+  font-size: calc(9px * var(--font-scale, 1));
+}
+
+.prime-task-activity li { overflow-wrap: anywhere; }
+.prime-task-activity li small { display: block; }
+.prime-task-activity > p { margin: 0; color: var(--quiet, #77736d); font-size: calc(9px * var(--font-scale, 1)); }
+
 .prime-task-output {
   display: grid;
   gap: 5px;

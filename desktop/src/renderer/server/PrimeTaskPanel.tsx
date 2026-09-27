@@ -6,10 +6,14 @@ const POLL_DELAY_MS = 2_000
 const MAX_POLLS = 120
 const MAX_OUTPUT_LENGTH = 30_000
 const MAX_RECENT_TASKS = 8
+const MAX_ACTIVITY_ITEMS = 8
+const MAX_ACTIVITY_ITEM_LENGTH = 200
+const MAX_ACTIVITY_TOTAL_LENGTH = 1_000
 
 type ProjectChoice = { id: string; name: string; primaryPath: string }
 type WorkspaceChoice = { id: string; projectId: string; root: string; generation: number }
 type PrimeTaskSummary = { id: string; status: string }
+type TaskActivity = { seq: number; kind: 'assistant' | 'tool'; text: string }
 type Draft = { bridge: DesktopBridge; generation: number; projectId: string; prompt: string; workspaceId?: string }
 type Confirmation = Draft & { project: ProjectChoice; workspace?: WorkspaceChoice }
 type TaskProgress = {
@@ -17,6 +21,7 @@ type TaskProgress = {
   status: string
   after: number
   polls: number
+  activity: readonly TaskActivity[]
   resultText: string | null
   errorText: string | null
   statusCheckFailed: boolean
@@ -117,6 +122,48 @@ function eventText(events: readonly TaskEventRecord[]): { resultText: string | n
     if (resultText || errorText) return { resultText, errorText }
   }
   return { resultText: null, errorText: null }
+}
+
+function activityForEvent(event: TaskEventRecord): TaskActivity | null {
+  const data = isRecord(event.data) ? event.data : null
+  if (!data) return null
+  if (event.type === 'message.delta') {
+    return typeof data.text === 'string' && data.text.length > 0
+      ? { seq: event.seq, kind: 'assistant', text: data.text.slice(0, MAX_ACTIVITY_ITEM_LENGTH) }
+      : null
+  }
+  if (event.type !== 'tool' || (data.phase !== 'start' && data.phase !== 'end')) return null
+  const rawTool = typeof data.tool === 'string' ? data.tool.trim() : ''
+  const tool = /^[A-Za-z0-9_.:-]{1,48}$/u.test(rawTool) ? rawTool : 'tool'
+  return {
+    seq: event.seq,
+    kind: 'tool',
+    text: `${data.phase === 'start' ? 'Started' : 'Finished'} ${tool}`.slice(0, MAX_ACTIVITY_ITEM_LENGTH),
+  }
+}
+
+function appendActivity(current: readonly TaskActivity[], events: readonly TaskEventRecord[]): TaskActivity[] {
+  const next = [...current]
+  for (const event of events) {
+    const item = activityForEvent(event)
+    if (!item) continue
+    const last = next.at(-1)
+    if (item.kind === 'assistant' && last?.kind === 'assistant') {
+      next[next.length - 1] = { ...last, text: `${last.text}${item.text}`.slice(-MAX_ACTIVITY_ITEM_LENGTH) }
+    } else {
+      next.push(item)
+    }
+    while (next.length > MAX_ACTIVITY_ITEMS) next.shift()
+    let totalLength = next.reduce((total, entry) => total + entry.text.length, 0)
+    while (totalLength > MAX_ACTIVITY_TOTAL_LENGTH && next.length > 0) {
+      totalLength -= next.shift()?.text.length ?? 0
+    }
+  }
+  return next
+}
+
+function activityFromEvents(events: readonly TaskEventRecord[]): TaskActivity[] {
+  return appendActivity([], events)
 }
 
 function latestCursor(events: readonly TaskEventRecord[], fallback: number): number {
@@ -264,6 +311,7 @@ export function PrimeTaskPanel({
               status: detail?.status ?? currentTask.status,
               after: events ? latestCursor(events, currentTask.after) : currentTask.after,
               polls: currentTask.polls + 1,
+              activity: events ? appendActivity(currentTask.activity, events) : currentTask.activity,
               resultText: text.resultText ?? eventOutput.resultText ?? currentTask.resultText,
               errorText: text.errorText ?? eventOutput.errorText ?? currentTask.errorText,
               statusCheckFailed: !detail,
@@ -314,6 +362,7 @@ export function PrimeTaskPanel({
         status: detail.status,
         after: events ? latestCursor(events, 0) : 0,
         polls: 0,
+        activity: events ? activityFromEvents(events) : [],
         resultText: detailOutput.resultText ?? eventOutput.resultText,
         errorText: detailOutput.errorText ?? eventOutput.errorText,
         statusCheckFailed: false,
@@ -357,6 +406,7 @@ export function PrimeTaskPanel({
           status: result.task.status,
           after: 0,
           polls: 0,
+          activity: [],
           resultText: output.resultText,
           errorText: output.errorText,
           statusCheckFailed: false,
@@ -433,6 +483,7 @@ export function PrimeTaskPanel({
           ...currentTask,
           status: detail?.status ?? currentTask.status,
           after: events ? latestCursor(events, currentTask.after) : currentTask.after,
+          activity: events ? appendActivity(currentTask.activity, events) : currentTask.activity,
           resultText: text.resultText ?? eventOutput.resultText ?? currentTask.resultText,
           errorText: text.errorText ?? eventOutput.errorText ?? currentTask.errorText,
           statusCheckFailed: !detail,
@@ -484,6 +535,7 @@ export function PrimeTaskPanel({
           ...currentTask,
           status: detail?.status ?? currentTask.status,
           after: events ? latestCursor(events, currentTask.after) : currentTask.after,
+          activity: events ? appendActivity(currentTask.activity, events) : currentTask.activity,
           resultText: text.resultText ?? eventOutput.resultText ?? currentTask.resultText,
           errorText: text.errorText ?? eventOutput.errorText ?? currentTask.errorText,
           statusCheckFailed: !detail,
@@ -611,6 +663,17 @@ export function PrimeTaskPanel({
       {submission.task.statusCheckFailed && <p className="prime-task-hint" role="alert">Task status could not be refreshed; the displayed status may be stale.</p>}
       {submission.task.eventsCheckFailed && <p className="prime-task-hint" role="alert">Task events could not be refreshed. Status is shown from the task record.</p>}
       {submission.task.polls >= MAX_POLLS && !isTerminal && <p className="prime-task-hint">Automatic status checks paused after {MAX_POLLS} attempts. The task may still be running.</p>}
+      <div className="prime-task-activity">
+        <strong>Recent activity</strong>
+        {submission.task.activity.length
+          ? <ol aria-label="Recent task activity">
+            {submission.task.activity.map((item) => <li key={`${item.seq}-${item.kind}`}>
+              {item.kind === 'assistant' && <small>Assistant</small>}
+              <span>{item.text}</span>
+            </li>)}
+          </ol>
+          : <p>No activity yet.</p>}
+      </div>
       {submission.task.resultText && <div className="prime-task-output"><strong>Result</strong><pre>{submission.task.resultText}</pre></div>}
       {submission.task.errorText && <div className="prime-task-output task-error"><strong>Server error</strong><pre>{submission.task.errorText}</pre></div>}
       {submission.task.polls >= MAX_POLLS && !isTerminal && <button type="button" onClick={() => { void checkTaskStatus() }} disabled={submission.checkingStatus || submission.cancelPending}>
