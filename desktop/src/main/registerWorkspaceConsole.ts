@@ -25,6 +25,8 @@ function proxyRequest(channel: string, input: Readonly<Record<string, unknown>>)
       return { operation: 'workspace.terminals.screen', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string, lines: input.lines as number }
     case WORKSPACE_CONSOLE_CHANNELS.sendLine:
       return { operation: 'workspace.terminals.input', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string, line: input.line as string }
+    case WORKSPACE_CONSOLE_CHANNELS.interrupt:
+      return { operation: 'workspace.terminals.interrupt', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string }
     case WORKSPACE_CONSOLE_CHANNELS.stop:
       return { operation: 'workspace.terminals.stop', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string }
     default:
@@ -47,7 +49,8 @@ export function registerWorkspaceConsole(options: RegisterWorkspaceConsoleOption
       } catch {
         assertTrusted(options.guard, event)
         // Do not include backend errors, paths, credentials, or command contents in IPC errors.
-        throw new Error('Workspace console outcome may be unknown. Refresh the session list and screen before any manual retry; the app will not retry lines.')
+        const ambiguousAction = channel === WORKSPACE_CONSOLE_CHANNELS.interrupt ? 'interrupt' : 'action'
+        throw new Error(`Workspace console ${ambiguousAction} outcome may be unknown. Refresh the session list and screen before any manual retry; the app will not retry requests.`)
       }
     })
   }

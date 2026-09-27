@@ -38,13 +38,15 @@ describe('preload bridge', () => {
 
     await expect(bridge.workspaceConsole.list({ workspaceId })).resolves.toEqual([])
     await expect(bridge.workspaceConsole.sendLine({ workspaceId, sessionId: `wterm-${'b'.repeat(32)}`, line: 'status' })).resolves.toBe(true)
+    await expect(bridge.workspaceConsole.interrupt({ workspaceId, sessionId: `wterm-${'b'.repeat(32)}` })).resolves.toBe(true)
     expect(invoke.mock.calls).toEqual([
       [WORKSPACE_CONSOLE_CHANNELS.list, { workspaceId }],
       [WORKSPACE_CONSOLE_CHANNELS.sendLine, { workspaceId, sessionId: `wterm-${'b'.repeat(32)}`, line: 'status' }],
+      [WORKSPACE_CONSOLE_CHANNELS.interrupt, { workspaceId, sessionId: `wterm-${'b'.repeat(32)}` }],
     ])
 
     expect(() => bridge.workspaceConsole.sendLine({ workspaceId, sessionId: `wterm-${'b'.repeat(32)}`, line: 'bad\ncommand' })).toThrow(TypeError)
-    expect(invoke).toHaveBeenCalledTimes(2)
+    expect(invoke).toHaveBeenCalledTimes(3)
   })
 
   it('rejects unlisted operations and malformed payloads before IPC', async () => {

@@ -76,6 +76,7 @@ from .services.local_codex_worker import (
 )
 from .services.workspace_terminal import (
     WorkspaceTerminalCapacity,
+    WorkspaceTerminalInterruptOutcomeUnknown,
     WorkspaceTerminalInputOutcomeUnknown,
     WorkspaceTerminalService,
 )
@@ -929,6 +930,25 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 content={
                     "detail": "Terminal input outcome is unknown; do not retry automatically",
                     "code": "workspace_terminal_input_outcome_unknown",
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(content={"sent": True}, headers={"Cache-Control": "no-store"})
+
+    @app.post(
+        "/api/local/workspaces/{workspace_id}/terminals/{session_id}/interrupt",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_terminal_interrupt(workspace_id: str, session_id: str):
+        current_owner_workspace(workspace_id)
+        try:
+            await workspace_terminal_service().interrupt(workspace_id, session_id)
+        except WorkspaceTerminalInterruptOutcomeUnknown:
+            return JSONResponse(
+                status_code=504,
+                content={
+                    "detail": "Terminal interrupt outcome is unknown; do not retry automatically",
+                    "code": "workspace_terminal_interrupt_outcome_unknown",
                 },
                 headers={"Cache-Control": "no-store"},
             )

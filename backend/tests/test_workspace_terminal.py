@@ -16,6 +16,7 @@ from archon_server.config import Settings
 from archon_server.local_pairing import LOCAL_PAIRING_AUDIENCE
 from archon_server.services.workspace_terminal import (
     WorkspaceTerminalCapacity,
+    WorkspaceTerminalInterruptOutcomeUnknown,
     WorkspaceTerminalService,
     WorkspaceTerminalUnavailable,
 )
@@ -29,6 +30,7 @@ def _fake_tmux(tmp_path: Path) -> Path:
     state_file = tmp_path / "tmux-state.json"
     hang_start_file = tmp_path / "hang-start"
     fail_enter_file = tmp_path / "fail-enter"
+    fail_interrupt_file = tmp_path / "fail-interrupt"
     pane_file = tmp_path / "pane.txt"
     input_file = tmp_path / "input.json"
     pane_file.write_text("fake pane output\n", encoding="utf-8")
@@ -39,6 +41,7 @@ def _fake_tmux(tmp_path: Path) -> Path:
         + f"state_file = {str(state_file)!r}\n"
         + f"hang_start_file = {str(hang_start_file)!r}\n"
         + f"fail_enter_file = {str(fail_enter_file)!r}\n"
+        + f"fail_interrupt_file = {str(fail_interrupt_file)!r}\n"
         + f"pane_file = {str(pane_file)!r}\n"
         + f"input_file = {str(input_file)!r}\n"
         + "args = sys.argv[1:]\n"
@@ -97,6 +100,8 @@ def _fake_tmux(tmp_path: Path) -> Path:
         + "        if os.path.exists(fail_enter_file):\n"
         + "            print('simulated enter failure', file=sys.stderr); raise SystemExit(1)\n"
         + "        event = {'type': 'enter'}\n"
+        + "    elif len(args) == 6 and args[5] == 'C-c':\n"
+        + "        event = {'type': 'interrupt'}\n"
         + "    else:\n"
         + "        print('bad send-keys form', file=sys.stderr); raise SystemExit(64)\n"
         + "    try:\n"
@@ -105,6 +110,8 @@ def _fake_tmux(tmp_path: Path) -> Path:
         + "        inputs = []\n"
         + "    inputs.append(event)\n"
         + "    with open(input_file, 'w', encoding='utf-8') as handle: json.dump(inputs, handle)\n"
+        + "    if args[5] == 'C-c' and os.path.exists(fail_interrupt_file):\n"
+        + "        print('simulated ambiguous interrupt', file=sys.stderr); raise SystemExit(1)\n"
         + "else:\n"
         + "    print('unknown action', file=sys.stderr); raise SystemExit(64)\n"
         + "with open(state_file, 'w', encoding='utf-8') as handle: json.dump(state, handle)\n",
@@ -317,6 +324,26 @@ async def test_screen_and_single_line_input_are_bounded_and_literal(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_interrupt_sends_one_ctrl_c_to_the_active_ledger_pane_without_retry(tmp_path):
+    fake = _fake_tmux(tmp_path)
+    service, _ = _service(tmp_path, executable=fake)
+    terminal = await service.create(WORKSPACE_ID, expected_generation=1)
+
+    assert await service.interrupt(WORKSPACE_ID, terminal["sessionId"]) == {"sent": True}
+    event_path = tmp_path / "input.json"
+    assert json.loads(event_path.read_text(encoding="utf-8")) == [{"type": "interrupt"}]
+
+    # The fake records delivery before returning failure, simulating an
+    # ambiguous tmux response. The service reports uncertainty and does not retry.
+    (tmp_path / "fail-interrupt").touch()
+    with pytest.raises(WorkspaceTerminalInterruptOutcomeUnknown, match="outcome is unknown"):
+        await service.interrupt(WORKSPACE_ID, terminal["sessionId"])
+    assert json.loads(event_path.read_text(encoding="utf-8")) == [
+        {"type": "interrupt"}, {"type": "interrupt"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_create_requires_current_expected_generation(tmp_path):
     service, _ = _service(tmp_path)
     with pytest.raises(ValueError, match="generation"):
@@ -341,6 +368,10 @@ def test_local_owner_workspace_terminal_api_contract(tmp_path, monkeypatch):
     with TestClient(create_app(settings)) as client:
         assert client.app.state.local_workspace_terminals.tmux_executable == str(fake.resolve())
         assert client.get(f"/api/local/workspaces/{WORKSPACE_ID}/terminals").status_code == 401
+        assert client.post(
+            f"/api/local/workspaces/{WORKSPACE_ID}/terminals/"
+            "wterm-0123456789abcdef0123456789abcdef/interrupt",
+        ).status_code == 401
         legacy = {"Authorization": "Bearer legacy-token"}
         assert client.get(f"/api/local/workspaces/{WORKSPACE_ID}/terminals", headers=legacy).status_code == 401
         headers = _paired_owner_headers(settings.local_pairing_socket_path)
@@ -383,6 +414,17 @@ def test_local_owner_workspace_terminal_api_contract(tmp_path, monkeypatch):
         assert screen.json() == {"text": "fake pane output\n", "truncated": False}
         assert screen.headers["cache-control"] == "no-store"
         assert client.get(f"{session_url}/screen?lines=121", headers=headers).status_code == 422
+
+        interrupted = client.post(f"{session_url}/interrupt", headers=headers)
+        assert interrupted.status_code == 200 and interrupted.json() == {"sent": True}
+        assert interrupted.headers["cache-control"] == "no-store"
+        (tmp_path / "fail-interrupt").touch()
+        uncertain_interrupt = client.post(f"{session_url}/interrupt", headers=headers)
+        assert uncertain_interrupt.status_code == 504
+        assert uncertain_interrupt.json() == {
+            "detail": "Terminal interrupt outcome is unknown; do not retry automatically",
+            "code": "workspace_terminal_interrupt_outcome_unknown",
+        }
 
         sent = client.post(f"{session_url}/input", headers=headers, json={"line": "echo 'from owner'"})
         assert sent.status_code == 200 and sent.json() == {"sent": True}

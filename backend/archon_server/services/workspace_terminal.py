@@ -50,6 +50,10 @@ class WorkspaceTerminalInputOutcomeUnknown(WorkspaceTerminalUnavailable):
     """tmux may have accepted some or all of one input line."""
 
 
+class WorkspaceTerminalInterruptOutcomeUnknown(WorkspaceTerminalUnavailable):
+    """tmux may have delivered the one requested interrupt key."""
+
+
 def _private_directory(path: str | os.PathLike[str], *, label: str) -> Path:
     candidate = Path(path)
     if not candidate.is_absolute():
@@ -311,6 +315,38 @@ class WorkspaceTerminalService:
                     raise
                 raise WorkspaceTerminalInputOutcomeUnknown(
                     "Terminal input outcome is unknown; do not retry automatically"
+                ) from exc
+            return {"sent": True}
+
+    async def interrupt(self, workspace_id: str, session_id: str) -> dict[str, bool]:
+        """Send one Ctrl-C key to the ledger-owned active pane, without retrying."""
+        if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
+            raise ValueError("session_id is invalid")
+        async with self._lock:
+            workspace = self._resolve_workspace(workspace_id)
+            self._assert_tmux_available()
+            record = self._load_record(workspace)
+            await self._reconcile(workspace, record)
+            row = next((item for item in record["sessions"] if item["sessionId"] == session_id), None)
+            if row is None:
+                raise KeyError(session_id)
+            if row["state"] != "running":
+                raise ValueError("Workspace terminal is not ready")
+            socket_path = self._socket_path(workspace)
+            pane_id = await self._active_pane(socket_path, row["name"])
+            if self._resolve_workspace(workspace_id) != workspace:
+                raise ValueError("Workspace identity or generation changed during terminal interrupt")
+            try:
+                sent = await self._run_tmux(socket_path, "send-keys", "-t", pane_id, "C-c")
+                if sent["returncode"] != 0:
+                    raise WorkspaceTerminalInterruptOutcomeUnknown(
+                        "Terminal interrupt outcome is unknown; do not retry automatically"
+                    )
+            except WorkspaceTerminalUnavailable as exc:
+                if isinstance(exc, WorkspaceTerminalInterruptOutcomeUnknown):
+                    raise
+                raise WorkspaceTerminalInterruptOutcomeUnknown(
+                    "Terminal interrupt outcome is unknown; do not retry automatically"
                 ) from exc
             return {"sent": True}
 

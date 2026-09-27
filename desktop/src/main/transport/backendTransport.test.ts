@@ -85,6 +85,7 @@ describe('backend transport', () => {
       { operation: 'workspace.terminals.create', workspaceId, expectedGeneration: 4 } as const,
       { operation: 'workspace.terminals.screen', workspaceId, sessionId, lines: 80 } as const,
       { operation: 'workspace.terminals.input', workspaceId, sessionId, line: 'pwd' } as const,
+      { operation: 'workspace.terminals.interrupt', workspaceId, sessionId } as const,
       { operation: 'workspace.terminals.stop', workspaceId, sessionId } as const,
     ]
     for (const request of requests) await transport.invokeLocalCodex(request)
@@ -94,6 +95,7 @@ describe('backend transport', () => {
       [`/api/local/workspaces/${workspaceId}/terminals`, 'POST', JSON.stringify({ expectedGeneration: 4 })],
       [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/screen?lines=80`, 'GET', undefined],
       [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/input`, 'POST', JSON.stringify({ line: 'pwd' })],
+      [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/interrupt`, 'POST', undefined],
       [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}`, 'DELETE', JSON.stringify({ confirm: true })],
     ])
     expect(fetcher.mock.calls.every(([, init]) => (init?.headers as Record<string, string>).Authorization === `Bearer ${localConnection.token}`)).toBe(true)

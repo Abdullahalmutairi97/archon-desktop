@@ -14,6 +14,7 @@ describe('WorkspaceConsole', () => {
       create: vi.fn(),
       screen: vi.fn(async () => ({ text: 'ready', truncated: false })),
       sendLine: vi.fn(async () => { throw new Error('reply lost') }),
+      interrupt: vi.fn(async () => true),
       stop: vi.fn(),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
@@ -25,5 +26,66 @@ describe('WorkspaceConsole', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('It was not retried.')
     await waitFor(() => expect(bridge.sendLine).toHaveBeenCalledTimes(1))
     expect(bridge.sendLine).toHaveBeenCalledWith({ workspaceId, sessionId, line: 'do work' })
+  })
+
+  it('interrupts the selected command once without closing its console session', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const sessionId = `wterm-${'b'.repeat(32)}`
+    const bridge: WorkspaceConsoleBridge = {
+      list: vi.fn(async () => [{ sessionId, state: 'running' as const, createdAt: '2026-09-27T00:00:00Z' }]),
+      create: vi.fn(),
+      screen: vi.fn(async () => ({ text: 'running command', truncated: false })),
+      sendLine: vi.fn(),
+      interrupt: vi.fn(async () => true),
+      stop: vi.fn(),
+    }
+    render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
+    expect(await screen.findByText('running command')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Interrupt command' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Interrupt sent once.')
+    expect(bridge.interrupt).toHaveBeenCalledOnce()
+    expect(bridge.interrupt).toHaveBeenCalledWith({ workspaceId, sessionId })
+    expect(screen.getByRole('combobox', { name: 'Console session' })).toHaveValue(sessionId)
+    expect(bridge.stop).not.toHaveBeenCalled()
+  })
+
+  it('does not retry an ambiguous interrupt and tells the user to refresh before retrying', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const sessionId = `wterm-${'b'.repeat(32)}`
+    const bridge: WorkspaceConsoleBridge = {
+      list: vi.fn(async () => [{ sessionId, state: 'running' as const, createdAt: '2026-09-27T00:00:00Z' }]),
+      create: vi.fn(),
+      screen: vi.fn(async () => ({ text: 'running command', truncated: false })),
+      sendLine: vi.fn(),
+      interrupt: vi.fn(async () => { throw new Error('outcome unknown') }),
+      stop: vi.fn(),
+    }
+    render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
+    expect(await screen.findByText('running command')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Interrupt command' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('It was not retried. Refresh the screen before any manual retry.')
+    expect(bridge.interrupt).toHaveBeenCalledOnce()
+    expect(screen.getByRole('combobox', { name: 'Console session' })).toHaveValue(sessionId)
+  })
+
+  it('waits for a running session before accepting input or an interrupt', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const sessionId = `wterm-${'b'.repeat(32)}`
+    const bridge: WorkspaceConsoleBridge = {
+      list: vi.fn(async () => [{ sessionId, state: 'starting' as const, createdAt: '2026-09-27T00:00:00Z' }]),
+      create: vi.fn(),
+      screen: vi.fn(),
+      sendLine: vi.fn(),
+      interrupt: vi.fn(),
+      stop: vi.fn(),
+    }
+    render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
+    expect(await screen.findByRole('button', { name: 'Interrupt command' })).toBeDisabled()
+    expect(screen.getByRole('textbox', { name: 'Send one line' })).toBeDisabled()
+    expect(bridge.interrupt).not.toHaveBeenCalled()
   })
 })

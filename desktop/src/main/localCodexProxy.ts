@@ -13,6 +13,7 @@ export type LocalCodexProxyRequest =
   | { operation: 'workspace.terminals.create'; workspaceId: string; expectedGeneration: number }
   | { operation: 'workspace.terminals.screen'; workspaceId: string; sessionId: string; lines: number }
   | { operation: 'workspace.terminals.input'; workspaceId: string; sessionId: string; line: string }
+  | { operation: 'workspace.terminals.interrupt'; workspaceId: string; sessionId: string }
   | { operation: 'workspace.terminals.stop'; workspaceId: string; sessionId: string }
 
 export interface LocalCodexProxyEventRecord {

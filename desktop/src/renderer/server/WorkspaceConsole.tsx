@@ -104,7 +104,7 @@ export function WorkspaceConsole({
 
   async function sendLine(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
-    if (requestLock.current || !sessionId || !line || /[\u0000-\u001f\u007f]/u.test(line)
+    if (requestLock.current || !pairingAvailable || !sessionId || !terminals.some((item) => item.sessionId === sessionId && item.state === 'running') || !line || /[\u0000-\u001f\u007f]/u.test(line)
       || new TextEncoder().encode(line).byteLength > 4096) return
     requestLock.current = true
     setBusy(true)
@@ -118,6 +118,27 @@ export function WorkspaceConsole({
       if (await refreshScreen()) setMessage({ kind: 'status', text: 'Line sent once.' })
     } catch {
       if (identityRef.current === requestedIdentity) setMessage({ kind: 'ambiguous', text: 'The line may have reached the process, but the reply was not confirmed. It was not retried. Refresh the screen before deciding what to do next.' })
+    } finally {
+      requestLock.current = false
+      if (identityRef.current === requestedIdentity) setBusy(false)
+    }
+  }
+
+  async function interruptCommand(): Promise<void> {
+    if (requestLock.current || !pairingAvailable || !sessionId || !terminals.some((item) => item.sessionId === sessionId && item.state === 'running')) return
+    requestLock.current = true
+    setBusy(true)
+    setMessage(null)
+    const requestedIdentity = identity
+    const requestedSessionId = sessionId
+    try {
+      await bridge.interrupt({ workspaceId, sessionId: requestedSessionId })
+      if (identityRef.current !== requestedIdentity || sessionIdRef.current !== requestedSessionId) return
+      setMessage({ kind: 'status', text: 'Interrupt sent once. The console session remains open.' })
+    } catch {
+      if (identityRef.current === requestedIdentity && sessionIdRef.current === requestedSessionId) {
+        setMessage({ kind: 'ambiguous', text: 'The interrupt may have reached the process, but the reply was not confirmed. It was not retried. Refresh the screen before any manual retry.' })
+      }
     } finally {
       requestLock.current = false
       if (identityRef.current === requestedIdentity) setBusy(false)
@@ -146,6 +167,8 @@ export function WorkspaceConsole({
     }
   }
 
+  const canInteract = pairingAvailable && terminals.some((item) => item.sessionId === sessionId && item.state === 'running')
+
   return <section className="workspace-console" aria-label="Trusted same-user line console">
     <div className="workspace-console-heading">
       <div><h4>Trusted same-user line console</h4><span>Checkout {workspaceId} · generation {generation}</span></div>
@@ -161,6 +184,7 @@ export function WorkspaceConsole({
         </select>
       </label>
       <button type="button" onClick={() => { void createSession() }} disabled={!pairingAvailable || busy || terminals.length >= 16}>Create session</button>
+      {sessionId && pairingAvailable && <button type="button" onClick={() => { void interruptCommand() }} disabled={busy || !canInteract}>Interrupt command</button>}
       {sessionId && !confirmStop && <button type="button" onClick={() => setConfirmStop(true)} disabled={busy}>Stop session…</button>}
       {sessionId && confirmStop && <span className="workspace-console-confirm">Stop this console session?
         <button type="button" onClick={() => { void stopSession() }} disabled={busy}>Confirm stop</button>
@@ -173,8 +197,8 @@ export function WorkspaceConsole({
     </div>
     <form className="workspace-console-input" onSubmit={(event) => { void sendLine(event) }}>
       <label htmlFor="workspace-console-line">Send one line</label>
-      <input id="workspace-console-line" type="text" autoComplete="off" maxLength={4096} value={line} onChange={(event) => setLine(event.currentTarget.value)} disabled={!pairingAvailable || !sessionId || busy} />
-      <button type="submit" disabled={!pairingAvailable || !sessionId || busy || !line || /[\u0000-\u001f\u007f]/u.test(line) || new TextEncoder().encode(line).byteLength > 4096}>{busy ? 'Working…' : 'Send line'}</button>
+      <input id="workspace-console-line" type="text" autoComplete="off" maxLength={4096} value={line} onChange={(event) => setLine(event.currentTarget.value)} disabled={!canInteract || busy} />
+      <button type="submit" disabled={!canInteract || busy || !line || /[\u0000-\u001f\u007f]/u.test(line) || new TextEncoder().encode(line).byteLength > 4096}>{busy ? 'Working…' : 'Send line'}</button>
     </form>
     {message && <p className={`workspace-console-message console-${message.kind}`} role={message.kind === 'error' || message.kind === 'ambiguous' ? 'alert' : 'status'}>{message.text}</p>}
   </section>

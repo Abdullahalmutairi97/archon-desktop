@@ -65,6 +65,7 @@ export const WORKSPACE_CONSOLE_CHANNELS = Object.freeze({
   create: 'archon:workspace-console:create',
   screen: 'archon:workspace-console:screen',
   sendLine: 'archon:workspace-console:send-line',
+  interrupt: 'archon:workspace-console:interrupt',
   stop: 'archon:workspace-console:stop',
 } as const)
 
@@ -1094,6 +1095,7 @@ function workspaceConsoleInput(channel: unknown, value: unknown): Record<string,
     }
     case WORKSPACE_CONSOLE_CHANNELS.screen:
     case WORKSPACE_CONSOLE_CHANNELS.stop:
+    case WORKSPACE_CONSOLE_CHANNELS.interrupt:
     case WORKSPACE_CONSOLE_CHANNELS.sendLine: {
       const allowed = channel === WORKSPACE_CONSOLE_CHANNELS.screen ? ['workspaceId', 'sessionId', 'lines']
         : channel === WORKSPACE_CONSOLE_CHANNELS.sendLine ? ['workspaceId', 'sessionId', 'line']
@@ -1154,6 +1156,11 @@ export function parseWorkspaceConsoleBackendResponse(channel: unknown, value: un
       if (record.ok !== true) return fail()
       return true
     }
+    case WORKSPACE_CONSOLE_CHANNELS.interrupt: {
+      const record = exactObject(value, ['sent'])
+      if (record.sent !== true) return fail()
+      return true
+    }
     default:
       return fail()
   }
@@ -1169,6 +1176,7 @@ export function parseWorkspaceConsoleResponse(channel: unknown, value: unknown):
     case WORKSPACE_CONSOLE_CHANNELS.screen:
       return parseWorkspaceConsoleBackendResponse(channel, value)
     case WORKSPACE_CONSOLE_CHANNELS.sendLine:
+    case WORKSPACE_CONSOLE_CHANNELS.interrupt:
     case WORKSPACE_CONSOLE_CHANNELS.stop:
       if (value !== true) return fail()
       return true

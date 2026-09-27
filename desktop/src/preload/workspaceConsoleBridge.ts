@@ -14,6 +14,7 @@ export function createWorkspaceConsoleBridge(ipc: LocalCodexIpcInvoker): Workspa
     create: (input: Parameters<WorkspaceConsoleBridge['create']>[0]) => invoke<WorkspaceConsoleTerminalDto>(ipc, WORKSPACE_CONSOLE_CHANNELS.create, input),
     screen: (input: Parameters<WorkspaceConsoleBridge['screen']>[0]) => invoke<WorkspaceConsoleScreenDto>(ipc, WORKSPACE_CONSOLE_CHANNELS.screen, input),
     sendLine: (input: Parameters<WorkspaceConsoleBridge['sendLine']>[0]) => invoke<boolean>(ipc, WORKSPACE_CONSOLE_CHANNELS.sendLine, input),
+    interrupt: (input: Parameters<WorkspaceConsoleBridge['interrupt']>[0]) => invoke<boolean>(ipc, WORKSPACE_CONSOLE_CHANNELS.interrupt, input),
     stop: (input: Parameters<WorkspaceConsoleBridge['stop']>[0]) => invoke<boolean>(ipc, WORKSPACE_CONSOLE_CHANNELS.stop, input),
   }) satisfies WorkspaceConsoleBridge
 }

@@ -228,6 +228,7 @@ export interface WorkspaceConsoleBridge {
   create(input: { workspaceId: string; expectedGeneration: number }): Promise<WorkspaceConsoleTerminalDto>
   screen(input: { workspaceId: string; sessionId: string; lines: number }): Promise<WorkspaceConsoleScreenDto>
   sendLine(input: { workspaceId: string; sessionId: string; line: string }): Promise<boolean>
+  interrupt(input: { workspaceId: string; sessionId: string }): Promise<boolean>
   stop(input: { workspaceId: string; sessionId: string }): Promise<boolean>
 }
 

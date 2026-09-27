@@ -678,6 +678,10 @@ function localCodexRequestDetails(request: LocalCodexProxyRequest): {
         || /[\u0000-\u001f\u007f]/u.test(request.line)
         || new TextEncoder().encode(request.line).byteLength > 4096) break
       return { method: 'POST', path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}/input`, body: JSON.stringify({ line: request.line }) }
+    case 'workspace.terminals.interrupt':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)) break
+      return { method: 'POST', path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}/interrupt` }
     case 'workspace.terminals.stop':
       if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
         || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)) break
