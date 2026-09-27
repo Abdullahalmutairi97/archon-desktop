@@ -63,6 +63,14 @@ def test_enrollment_is_bounded_and_names_are_unique(tmp_path):
         service.enroll("Bad Name")
 
 
+def test_runner_liveness_marks_a_never_seen_runner_stale(tmp_path):
+    service = RunnerEnrollmentService(tmp_path / "runner-state", stale_after_seconds=5)
+    enrolled = service.enroll("worker")
+    assert service.list()[0]["stale"] is True
+    service.authenticate(enrolled["runnerId"], enrolled["secret"])
+    assert service.list()[0]["stale"] is False
+
+
 def test_enrollment_ledger_is_private_and_rejects_tampering(tmp_path):
     service = _service(tmp_path)
     service.enroll("runner-one")

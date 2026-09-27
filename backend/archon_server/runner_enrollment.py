@@ -72,12 +72,17 @@ def _private_ledger(root: str | os.PathLike[str]) -> Path:
 class RunnerEnrollmentService:
     """Enroll, list, revoke and authenticate named task runners."""
 
-    def __init__(self, state_root: str | os.PathLike[str], *, max_runners: int = _MAX_RUNNERS):
+    def __init__(self, state_root: str | os.PathLike[str], *, max_runners: int = _MAX_RUNNERS,
+                 stale_after_seconds: int = 180):
         if isinstance(max_runners, bool) or not isinstance(max_runners, int) or not 1 <= max_runners <= 64:
             raise ValueError("max_runners must be between 1 and 64")
+        if (isinstance(stale_after_seconds, bool) or not isinstance(stale_after_seconds, int)
+                or not 5 <= stale_after_seconds <= 86400):
+            raise ValueError("stale_after_seconds must be between 5 and 86400")
         self._root = _private_ledger(state_root)
         self._path = self._root / "runners.json"
         self._max_runners = max_runners
+        self._stale_after_seconds = stale_after_seconds
 
     def enroll(self, name: Any) -> dict[str, str]:
         """Enroll a named runner and return its plaintext secret exactly once."""
@@ -103,13 +108,21 @@ class RunnerEnrollmentService:
         return {"runnerId": runner_id, "name": name, "secret": secret}
 
     def list(self) -> list[dict[str, Any]]:
-        return [
-            {
+        now = datetime.now(timezone.utc)
+        rows = []
+        for row in self._load()["runners"]:
+            last_seen = row["lastSeenAt"]
+            stale = True
+            if isinstance(last_seen, str):
+                try:
+                    stale = (now - datetime.fromisoformat(last_seen)).total_seconds() > self._stale_after_seconds
+                except ValueError:
+                    stale = True
+            rows.append({
                 "runnerId": row["runnerId"], "name": row["name"],
-                "createdAt": row["createdAt"], "lastSeenAt": row["lastSeenAt"],
-            }
-            for row in self._load()["runners"]
-        ]
+                "createdAt": row["createdAt"], "lastSeenAt": last_seen, "stale": stale,
+            })
+        return rows
 
     def revoke(self, runner_id: Any) -> None:
         if not isinstance(runner_id, str) or not _RUNNER_ID.fullmatch(runner_id):

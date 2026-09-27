@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — runner liveness
+
+- The enrolled-runner list now reports a `stale` flag derived from the last authenticated heartbeat against a configurable threshold, so the owner can tell a live remote runner from a silent one.
+
 ## Unreleased — remote runner dispatch
 
 - Owner submits a prompt for an enrolled runner via `POST /api/local/runners/{id}/tasks`; it is dispatched through the durable outbox and the runner claims, executes and reports it. The multi-machine loop (submit -> durable dispatch -> remote execute -> bounded result) is now end-to-end.
