@@ -26,7 +26,7 @@ const buildMetadata = {
   channel: 'reconstruction',
   sourceCommit: sourceCommit(),
   baselineParity: 'unverified',
-  liveConnectionsEnabled: false,
+  liveConnectionsEnabled: true,
 }
 
 export default defineConfig({

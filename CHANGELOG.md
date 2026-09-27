@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 2C.1 connection and readiness view
+
+- Add a Connection view that explicitly saves a main-process memory-only token and shows authenticated backend readiness, bounded read-only project/session/task lists and event cursor. Returned session/task lengths are not totals.
+- Keep the existing workspace fixture views separate from server data. Browser preview has no bridge and cannot connect.
+- Clear entered token text after submission and avoid renderer persistence; native security and keyring qualification remain later gates.
+- Advance the reconstruction source channel to `0.3.0-reconstruction.3`.
+
 ## Unreleased — Phase 2B.1 trusted connection boundary
 
 - Add a finite, validated preload bridge and top-frame IPC binding for five read-only backend operations and explicit connection methods.

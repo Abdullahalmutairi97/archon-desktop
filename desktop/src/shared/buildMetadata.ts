@@ -3,7 +3,7 @@ export interface ReconstructionBuildMetadata {
   channel: 'reconstruction'
   sourceCommit: string
   baselineParity: 'unverified'
-  liveConnectionsEnabled: false
+  liveConnectionsEnabled: boolean
 }
 
 declare const __ARCHON_BUILD_METADATA__: ReconstructionBuildMetadata

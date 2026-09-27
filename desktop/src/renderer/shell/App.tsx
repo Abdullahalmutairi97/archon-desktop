@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { buildMetadata } from '../../shared/buildMetadata'
 import { AppearanceStudio } from '../appearance/AppearanceStudio'
+import { ConnectionPanel } from '../connection/ConnectionPanel'
 import { readShellPreferences, saveShellPreferences, type ShellPreferences } from '../appearance/themes'
 import { FIXTURE_PROJECTS, FIXTURE_SESSIONS, FIXTURE_TASKS, runtimeLabel, sessionForId } from './fixtures'
 import { Icon } from './Icon'
@@ -113,7 +114,7 @@ export function App() {
       <main className="workspace-main" dir={preferences.direction}>
         <div className="workspace-view-header">
           <div className="view-heading">
-            <span className="eyebrow">{view === 'chat' ? runtimeLabel(currentSession.scope.runtime) : 'SYNTHETIC WORKSPACE'}</span>
+            <span className="eyebrow">{view === 'chat' ? runtimeLabel(currentSession.scope.runtime) : view === 'connection' ? 'DESKTOP CONNECTION' : 'SYNTHETIC WORKSPACE'}</span>
             <h1>{viewTitle(view, currentSession.title)}</h1>
           </div>
           <div className="view-actions">
@@ -127,12 +128,13 @@ export function App() {
         {view === 'sessions' && <SessionsView selectedSessionId={selectedSessionId} onSelect={(sessionId) => { selectSession(sessionId); setView('chat') }} />}
         {view === 'tasks' && <TasksView />}
         {view === 'projects' && <ProjectsView selectedProjectId={selectedProjectId} onSelectSession={selectSession} onViewChat={() => setView('chat')} />}
+        {view === 'connection' && <ConnectionPanel bridge={window.archon} />}
       </main>
       <WorkspaceBench active={activeBench} open={benchOpen} scope={currentSession.scope} onSelect={setActiveBench} onClose={() => setBenchOpen(false)} />
     </div>
 
     <div className="reconstruction-ribbon" aria-label="Reconstruction and fixture status">
-      <span><i />SOURCE RECONSTRUCTION</span><b>·</b><span>SYNTHETIC FIXTURE DATA</span><b>·</b><span>BASELINE PARITY UNVERIFIED</span>
+      <span><i />SOURCE RECONSTRUCTION</span><b>·</b><span>{view === 'connection' ? 'READ-ONLY CONNECTION VIEW' : 'SYNTHETIC FIXTURE DATA'}</span><b>·</b><span>BASELINE PARITY UNVERIFIED</span>
     </div>
 
     {notice && <div className="toast-notice" role="status">{notice}</div>}
@@ -146,6 +148,7 @@ function viewTitle(view: WorkspaceView, sessionTitle: string) {
   if (view === 'chat') return sessionTitle
   if (view === 'sessions') return 'Sessions'
   if (view === 'tasks') return 'Task queue'
+  if (view === 'connection') return 'Connection'
   return 'Projects'
 }
 
@@ -216,13 +219,14 @@ function CommandPalette({ onClose, onNavigate, onAppearance, onBench }: { onClos
         <button onClick={() => onNavigate('sessions')}><Icon name="history" /><span>Browse sessions</span></button>
         <button onClick={() => onNavigate('tasks')}><Icon name="activity" /><span>View task queue</span></button>
         <button onClick={() => onNavigate('projects')}><Icon name="folder" /><span>View projects</span></button>
+        <button onClick={() => onNavigate('connection')}><Icon name="settings" /><span>Connection and readiness</span></button>
       </div>
       <div className="palette-group"><span className="eyebrow">PANELS & SETTINGS</span>
         <button onClick={() => onBench('files')}><Icon name="file" /><span>Open synthetic files</span><kbd>Ctrl 2</kbd></button>
         <button onClick={() => onBench('browser')}><Icon name="browser" /><span>Open offline browser fixture</span><kbd>Ctrl 4</kbd></button>
         <button onClick={onAppearance}><Icon name="settings" /><span>Appearance</span><kbd>Ctrl ,</kbd></button>
       </div>
-      <p className="palette-footnote">Actions switch local preview panels only.</p>
+      <p className="palette-footnote">Workspace panels use fixtures. Connection shows read-only backend status when the desktop bridge is available.</p>
     </section>
   </div>
 }

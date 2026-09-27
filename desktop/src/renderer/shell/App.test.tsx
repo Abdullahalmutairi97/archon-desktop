@@ -62,4 +62,13 @@ describe('reconstruction preview shell', () => {
     expect(document.querySelector('.ide-context')).toHaveTextContent('THIS PC · Local Codex')
     expect(document.querySelector('.ide-editor pre')).not.toHaveTextContent('Server fixture · Prime')
   })
+
+  it('opens an honest connection view in the browser preview', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Connection' }))
+    expect(screen.getByRole('region', { name: 'Desktop connection' })).toBeInTheDocument()
+    expect(screen.getByText('READ-ONLY CONNECTION VIEW')).toBeInTheDocument()
+    expect(screen.getByText(/requires the desktop bridge/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled()
+  })
 })

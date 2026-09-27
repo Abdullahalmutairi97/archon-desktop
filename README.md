@@ -36,7 +36,7 @@ npm run desktop:build
 npm run desktop:preview
 ```
 
-The current renderer uses synthetic data. P2B.1 adds a validated preload bridge and a main-process read-only backend transport under fake-service checks; no live provider, filesystem or terminal is connected to the UI. The source build has a separate reconstruction identity and leaves the official app/profile unchanged. See [the source-build guide](desktop/README.md) for outputs, provenance and remaining native/parity gates.
+The workspace renderer uses synthetic data. P2B.1 adds a validated preload bridge and main-process read-only backend transport; P2C.1 exposes explicit backend readiness and returned list lengths in a separate Connection view. Capped session/task lists are not totals. No live provider, filesystem or terminal is connected to the workspace UI. The source build has a separate reconstruction identity and leaves the official app/profile unchanged. See [the source-build guide](desktop/README.md) for outputs, provenance and remaining native/parity gates.
 
 ## Frozen kit setup and checks
 

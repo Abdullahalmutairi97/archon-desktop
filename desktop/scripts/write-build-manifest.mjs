@@ -80,7 +80,7 @@ const manifest = {
   sourceCommit,
   sourceTreeHasChanges: dirtyState.length > 0,
   baselineParity: 'unverified',
-  liveConnectionsEnabled: false,
+  liveConnectionsEnabled: true,
   nodeVersion: process.versions.node,
   npmVersion,
   lockSha256,

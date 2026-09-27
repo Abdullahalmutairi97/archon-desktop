@@ -1,10 +1,12 @@
 # Authored source-build provenance
 
-This directory is a new, isolated desktop reconstruction scaffold. Its package identity is `archon-desktop-reconstruction`, version `0.3.0-reconstruction.2`. It is not represented as an official Archon Desktop release, and parity with the unavailable v0.3.0 authored source remains unverified. The [source inventory](../docs/roadmap/p2-source-inventory.md) documents that the recovered historical tree identifies itself as version 1.0.0 and is not the source for v0.3.0. The local recovery manifest lives outside this repository and is not a build input. This foundation does not copy the legacy privileged main process.
+This directory is a new, isolated desktop reconstruction scaffold. Its package identity is `archon-desktop-reconstruction`, version `0.3.0-reconstruction.3`. It is not represented as an official Archon Desktop release, and parity with the unavailable v0.3.0 authored source remains unverified. The [source inventory](../docs/roadmap/p2-source-inventory.md) documents that the recovered historical tree identifies itself as version 1.0.0 and is not the source for v0.3.0. The local recovery manifest lives outside this repository and is not a build input. This foundation does not copy the legacy privileged main process.
 
-The renderer and domain modules are authored or selectively reconstructed from the inputs documented next to those modules. The shell runs with Electron's sandbox and context isolation enabled, with Node integration disabled. P2B.1 adds a finite preload bridge and main-process memory-only read transport; the renderer still uses fixtures, and there are no provider adapters, updater or live UI connection. The product name, application ID, user-data namespace, and package name are all distinct from the installed application. Build metadata states `baselineParity: "unverified"` and `liveConnectionsEnabled: false`.
+The renderer and domain modules are authored or selectively reconstructed from the inputs documented next to those modules. The shell runs with Electron's sandbox and context isolation enabled, with Node integration disabled. P2B.1 adds a finite preload bridge and main-process memory-only read transport. P2C.1 adds an explicit read-only connection view; chat, projects, sessions, tasks and tools still use fixtures. There are no provider adapters or updater. The product name, application ID, user-data namespace, and package name are all distinct from the installed application. Build metadata states `baselineParity: "unverified"` and `liveConnectionsEnabled: true` for the explicit Electron connection view; this flag is not native qualification.
 
 The P2B.1 bridge, frame guard and fixed-route transport are newly authored against the Phase 1D backend routes and readiness shape. The historical privileged main process was inspected as a compatibility reference only; its IPC registration, asset scheme, updater and plaintext safe-storage test toggle were not imported.
+
+The P2C.1 Connection view is new renderer code that consumes only the typed P2B.1 bridge. It does not import legacy renderer bundles or connect in browser preview. Its read-only server summary uses fixed API operations; session/project/task workspace views remain labeled fixtures.
 
 ## Pinned toolchain
 
@@ -30,7 +32,7 @@ All direct dependencies are exact pins in `package.json`; the npm lockfile recor
 
 The source-build workflow uses the official `node:24.21.0-bookworm-slim` OCI index pinned to `sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6`. It runs `npm ci` and the desktop package's `ci` script without launching Electron or packaging an installer. The generated `out/build-manifest.json` records the source commit, dirty-tree state, toolchain, lockfile hash, and sorted path/size/SHA-256 inventories for source/build inputs and emitted main/preload/renderer files. The manifest does not include its own hash.
 
-The renderer preview serves the already-built synthetic renderer on `127.0.0.1:4173`; it does not start Electron. No release artifact or compatibility claim is produced by this source build.
+The renderer preview serves the already-built renderer on loopback and does not start Electron. Its connection controls remain disabled because the preload bridge is unavailable in a browser. No release artifact or compatibility claim is produced by this source build.
 
 ## Primary references
 
