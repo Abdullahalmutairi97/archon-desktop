@@ -7,10 +7,10 @@ import { CodexApprovalBroker, createCodexApprovalHooks } from './adapters/codex/
 import type { CodexApprovalPrompt, ResolvedCodexApprovalContext } from './adapters/codex/approvalBroker'
 import { CodexDesktopService } from './adapters/codex/desktopService'
 import type { CodexDesktopTurn } from './adapters/codex/desktopService'
-import { isCodexProjectId, makeCodexProjectId } from './adapters/codex/ids'
+import { isCodexProjectId, isCodexSessionId, makeCodexProjectId } from './adapters/codex/ids'
 import type { OwnedCodexMetadataStore } from './adapters/codex/metadata'
 import { isProtectedCodexPath } from './adapters/codex/pathAccess'
-import type { LocalCodexApprovalDto, LocalCodexEvent, LocalCodexProjectDto, LocalCodexTurnDto } from '../shared/bridge/types'
+import type { LocalCodexApprovalDto, LocalCodexEvent, LocalCodexProjectDto, LocalCodexSessionDto, LocalCodexTurnDto } from '../shared/bridge/types'
 import { parseLocalCodexEvent } from '../shared/bridge/validation'
 
 const CODEX_APPROVAL_TIMEOUT_MS = 30_000
@@ -18,6 +18,7 @@ const APPROVAL_MAP_TIMEOUT_MS = 29_000
 const MAX_PENDING_APPROVALS = 64
 const MAX_START_EVENTS = 128
 const MAX_PROJECTS = 100
+const MAX_SESSIONS = 100
 const MAX_PROJECT_PATH_LENGTH = 16_000
 const CODEX_HOME_DEFAULT_SUFFIX = '.codex'
 const SAFE_START_FAILURE = 'Local Codex could not start. Check that Codex is installed and signed in, then try again.'
@@ -246,6 +247,24 @@ export class LocalCodexController {
     return Object.freeze(projects)
   }
 
+  async listSessions(projectId: string): Promise<readonly LocalCodexSessionDto[]> {
+    this.assertOpen()
+    if (typeof projectId !== 'string' || !isCodexProjectId(projectId)) throw new TypeError('Invalid local Codex project identity.')
+    const metadata = await this.options.metadata.read()
+    this.assertOpen()
+    const project = metadata.projects.find((entry) => entry.id === projectId)
+    if (!project) throw new Error('Unknown local Codex project.')
+    const rootPath = await canonicalizeLocalCodexProjectRoot(project.primary_path, this.protectedRoots)
+    this.assertOpen()
+    if (rootPath !== project.primary_path) throw new Error('Local Codex project location changed.')
+    const sessions = metadata.sessions.filter((entry) => isCodexSessionId(entry.id)
+      && entry.id === `codex:${entry.threadId}` && entry.projectId === projectId
+      && entry.cwd === rootPath && entry.turns.length > 0)
+      .slice(-MAX_SESSIONS).reverse()
+      .map((entry) => Object.freeze({ id: entry.id, title: entry.title, turnCount: entry.turns.length }))
+    return Object.freeze(sessions)
+  }
+
   async registerProject(): Promise<LocalCodexProjectDto | null> {
     this.assertOpen()
     if (this.registrationReserved || this.startReserved || this.hasActiveTurn()) {
@@ -291,7 +310,7 @@ export class LocalCodexController {
     }
   }
 
-  async startTurn(input: { projectId: string; prompt: string }): Promise<LocalCodexTurnDto> {
+  async startTurn(input: { projectId: string; prompt: string; sessionId?: string }): Promise<LocalCodexTurnDto> {
     this.assertOpen()
     if (this.registrationReserved) throw new Error('A local Codex project is being registered.')
     if (this.startReserved) throw new Error('A local Codex turn is already starting.')
@@ -302,7 +321,8 @@ export class LocalCodexController {
     this.startBuffer = buffer
     try {
       if (typeof input.projectId !== 'string' || !isCodexProjectId(input.projectId)
-        || typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 8000 || input.prompt.includes('\0')) {
+        || typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 8000 || input.prompt.includes('\0')
+        || (input.sessionId !== undefined && !isCodexSessionId(input.sessionId))) {
         throw new TypeError('Invalid local Codex turn request.')
       }
       if (this.hasActiveTurn()) throw new Error('A local Codex turn is already active.')
@@ -315,6 +335,13 @@ export class LocalCodexController {
       const rootPath = await canonicalizeLocalCodexProjectRoot(stored.primary_path, this.protectedRoots)
       this.assertOpen()
       if (rootPath !== stored.primary_path) throw new Error('Local Codex project location changed.')
+      if (input.sessionId !== undefined) {
+        const ownedSession = metadata.sessions.find((session) => session.id === input.sessionId)
+        if (!ownedSession || ownedSession.id !== `codex:${ownedSession.threadId}`
+          || ownedSession.projectId !== stored.id || ownedSession.cwd !== rootPath || ownedSession.turns.length < 1) {
+          throw new Error('Local Codex session is not owned by this project.')
+        }
+      }
       const project = Object.freeze({ id: stored.id, name: stored.name, rootPath })
       token = buffer.token
       const callbacks = this.runtimeHandlers(token)
@@ -324,11 +351,12 @@ export class LocalCodexController {
       this.active = { token, runtime, lastText: '' }
 
       this.assertOpen()
-      const result = await runtime.service.startTurn(input.prompt)
+      const result = await runtime.service.startTurn(input.prompt, input.sessionId)
       this.assertOpen()
       const persisted = await this.options.metadata.read()
       this.assertOpen()
-      const acknowledged = result.sessionId !== null && persisted.sessions.some((session) =>
+      const acknowledged = result.sessionId !== null && (input.sessionId === undefined || result.sessionId === input.sessionId)
+        && persisted.sessions.some((session) =>
         session.id === result.sessionId && session.projectId === project.id && session.cwd === project.rootPath
         && session.turns.some((turn) => turn.id === result.taskId),
       )

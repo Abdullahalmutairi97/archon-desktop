@@ -27,6 +27,7 @@ describe('fixed local Codex IPC registrar', () => {
     }))
     const controller: LocalCodexIpcController = {
       listProjects: async () => [project()],
+      listSessions: async () => [],
       registerProject: async () => null,
       startTurn,
       cancelTurn: async () => false,
@@ -57,6 +58,7 @@ describe('fixed local Codex IPC registrar', () => {
     let onEvent: ((event: LocalCodexEvent) => void) | undefined
     const controller: LocalCodexIpcController = {
       listProjects,
+      listSessions: async () => [],
       registerProject: async () => null,
       startTurn: async () => { throw new Error('unused') },
       cancelTurn: async () => false,

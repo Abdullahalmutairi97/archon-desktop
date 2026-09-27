@@ -166,6 +166,7 @@ void app.whenReady().then(async () => {
     localCodexController = undefined
     localCodexBridge = {
       listProjects: async () => [],
+      listSessions: async () => [],
       registerProject: async () => { throw new Error('Local Codex is unavailable.') },
       startTurn: async () => { throw new Error('Local Codex is unavailable.') },
       cancelTurn: async () => false,

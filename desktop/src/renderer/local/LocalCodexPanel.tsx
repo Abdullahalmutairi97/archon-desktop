@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { DesktopBridge, LocalCodexApprovalDto, LocalCodexBridge, LocalCodexEvent, LocalCodexProjectDto, LocalCodexTurnDto } from '../../shared/bridge/types'
+import type { DesktopBridge, LocalCodexApprovalDto, LocalCodexBridge, LocalCodexEvent, LocalCodexProjectDto, LocalCodexSessionDto, LocalCodexTurnDto } from '../../shared/bridge/types'
 import './LocalCodexPanel.css'
 
 const TEXT_LIMIT = 8000
@@ -86,15 +86,21 @@ function ApprovalDialog({ approval, answer }: { approval: LocalCodexApprovalDto;
 
 export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; active: boolean }) {
   const [projects, setProjects] = useState<readonly LocalCodexProjectDto[]>([])
+  const [sessions, setSessions] = useState<readonly LocalCodexSessionDto[]>([])
   const [projectId, setProjectId] = useState('')
+  const [selectedSessionId, setSelectedSessionId] = useState('')
   const [prompt, setPrompt] = useState('')
   const [ready, setReady] = useState(false)
   const [projectsLoadFailed, setProjectsLoadFailed] = useState(false)
+  const [sessionsLoadFailed, setSessionsLoadFailed] = useState(false)
+  const [sessionsRefresh, setSessionsRefresh] = useState(0)
   const [picking, setPicking] = useState(false)
   const [view, setView] = useState<View>(initialView)
   const session = useRef<Session | null>(null)
   const pickingRef = useRef(false)
   const projectRetryTimer = useRef<number | undefined>(undefined)
+  const sessionsRetryTimer = useRef<number | undefined>(undefined)
+  const sessionsLoadRequest = useRef(0)
   const formId = useId()
   const api = bridge?.localCodex
   const isCurrent = (current: Session) => current.alive && session.current === current
@@ -118,6 +124,28 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
       }
       setProjectsLoadFailed(true)
       setView((previous) => ({ ...previous, message: 'Could not load local projects.' }))
+    }
+  }
+
+  async function loadSessions(current: Session, targetProjectId: string, retryOnce = false) {
+    const request = ++sessionsLoadRequest.current
+    try {
+      const items = await current.api.listSessions(targetProjectId)
+      if (!isCurrent(current) || request !== sessionsLoadRequest.current) return
+      setSessions(items)
+      setSelectedSessionId((previous) => items.some((item) => item.id === previous)
+        || current.turn?.sessionId === previous ? previous : '')
+      setSessionsLoadFailed(false)
+    } catch {
+      if (!isCurrent(current) || request !== sessionsLoadRequest.current) return
+      if (retryOnce) {
+        sessionsRetryTimer.current = window.setTimeout(() => {
+          sessionsRetryTimer.current = undefined
+          void loadSessions(current, targetProjectId)
+        }, 250)
+        return
+      }
+      setSessionsLoadFailed(true)
     }
   }
 
@@ -176,7 +204,7 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
   }
 
   useEffect(() => {
-    setProjects([]); setProjectId(''); setReady(false); setProjectsLoadFailed(false); setPicking(false); pickingRef.current = false; setView(initialView())
+    setProjects([]); setSessions([]); setProjectId(''); setSelectedSessionId(''); setReady(false); setProjectsLoadFailed(false); setSessionsLoadFailed(false); setPicking(false); pickingRef.current = false; setView(initialView())
     if (!api) { session.current = null; return }
     const current: Session = { api, alive: true, ready: false, busy: false, pending: false, ended: false, cancelRequested: false, projectId: '', early: new Map(), approvals: [] }
     session.current = current
@@ -192,7 +220,10 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
     return () => {
       current.alive = false
       if (projectRetryTimer.current !== undefined) window.clearTimeout(projectRetryTimer.current)
+      if (sessionsRetryTimer.current !== undefined) window.clearTimeout(sessionsRetryTimer.current)
       projectRetryTimer.current = undefined
+      sessionsRetryTimer.current = undefined
+      sessionsLoadRequest.current += 1
       unsubscribe?.()
       deny(current.api, current.approvals)
       for (const early of current.early.values()) deny(current.api, early.approvals)
@@ -200,6 +231,23 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
     }
     // Visibility deliberately does not control the subscription or task lifetime.
   }, [api])
+
+  useEffect(() => {
+    setSessions([])
+    setSelectedSessionId('')
+    setSessionsLoadFailed(false)
+  }, [projectId])
+
+  useEffect(() => {
+    const current = session.current
+    if (!current?.ready || !projectId) return
+    void loadSessions(current, projectId, true)
+    return () => {
+      sessionsLoadRequest.current += 1
+      if (sessionsRetryTimer.current !== undefined) window.clearTimeout(sessionsRetryTimer.current)
+      sessionsRetryTimer.current = undefined
+    }
+  }, [api, projectId, ready, sessionsRefresh])
 
   async function registerProject() {
     const current = session.current
@@ -224,9 +272,11 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
     current.projectId = projectId; current.early.clear(); current.approvals = []
     setView({ ...initialView(), status: 'starting' })
     try {
-      const turn = await current.api.startTurn({ projectId, prompt })
+      const turn = await current.api.startTurn({ projectId, prompt, ...(selectedSessionId ? { sessionId: selectedSessionId } : {}) })
       if (!isCurrent(current)) return
       if (turn.projectId !== current.projectId) throw new Error('Project binding mismatch')
+      if (turn.sessionId) setSelectedSessionId(turn.sessionId)
+      setSessionsRefresh((previous) => previous + 1)
       current.pending = false; current.turn = turn
       setView((previous) => ({ ...previous, turn, status: 'running' }))
       const early = current.early.get(turn.taskId)
@@ -286,7 +336,7 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
     <section className="local-codex-panel" aria-label="Local Codex" hidden={!active}>
       <header><div><p className="local-codex-eyebrow">THIS PC · CODEX</p><h1>Work in a local project</h1></div>
         <span className="local-codex-status" role="status">{!api ? 'Desktop connection unavailable' : statusLabels[view.status]}</span></header>
-      <p className="local-codex-description">Start a new Codex turn in a folder registered on this PC. Command approvals appear here; file-change approvals are declined until their exact changes can be reviewed.</p>
+      <p className="local-codex-description">Start a new conversation by default, or choose an earlier conversation in this project to continue it. Review command and exact file-change approvals here.</p>
       {!api && <p>Open the desktop app to run Codex on this PC. Browser preview is offline.</p>}
       <form onSubmit={(event) => { event.preventDefault(); void startTurn() }}>
         <div className="local-codex-project-row"><label htmlFor={`${formId}-project`}>Local project
@@ -296,6 +346,13 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
           </select></label>
           <button type="button" disabled={!ready || busy || picking} onClick={() => void registerProject()}>{picking ? 'Choosing folder…' : 'Add local project'}</button>
           {projectsLoadFailed && <button type="button" disabled={!ready || busy || picking} onClick={() => { const current = session.current; if (current) void loadProjects(current) }}>Retry projects</button>}
+        </div>
+        <div className="local-codex-project-row"><label htmlFor={`${formId}-conversation`}>Conversation
+          <select id={`${formId}-conversation`} value={selectedSessionId} disabled={!ready || busy || picking || !project} onChange={(event) => setSelectedSessionId(event.target.value)}>
+            <option value="">New conversation</option>
+            {sessions.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.turnCount} {item.turnCount === 1 ? 'turn' : 'turns'}</option>)}
+          </select></label>
+          {sessionsLoadFailed && <button type="button" disabled={!ready || busy || picking || !project} onClick={() => setSessionsRefresh((previous) => previous + 1)}>Retry conversations</button>}
         </div>
         {project && <code className="local-codex-root">{project.rootPath}</code>}
         <label htmlFor={`${formId}-prompt`}>Local prompt

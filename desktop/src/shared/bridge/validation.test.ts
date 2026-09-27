@@ -185,6 +185,10 @@ describe('finite desktop bridge validation', () => {
       channel: LOCAL_CODEX_CHANNELS.listProjects,
       args: [],
     })
+    expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.listSessions, [{ projectId: 'codex-project:fixture' }])).toEqual({
+      channel: LOCAL_CODEX_CHANNELS.listSessions,
+      args: [{ projectId: 'codex-project:fixture' }],
+    })
     expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.registerProject, [])).toEqual({
       channel: LOCAL_CODEX_CHANNELS.registerProject,
       args: [],
@@ -196,6 +200,9 @@ describe('finite desktop bridge validation', () => {
       args: [{ projectId: 'codex-project:fixture', prompt: 'Review this file' }],
     })
     expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.startTurn, [{
+      projectId: 'codex-project:fixture', prompt: 'Continue', sessionId: 'codex:thread-1',
+    }]).args).toEqual([{ projectId: 'codex-project:fixture', prompt: 'Continue', sessionId: 'codex:thread-1' }])
+    expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.startTurn, [{
       projectId: 'codex-project:fixture', prompt: 'x'.repeat(8000),
     }]).args[0]).toEqual({ projectId: 'codex-project:fixture', prompt: 'x'.repeat(8000) })
     expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.cancelTurn, [{ taskId: 'codex-task:fixture' }]).args)
@@ -205,7 +212,9 @@ describe('finite desktop bridge validation', () => {
 
     for (const [channel, args] of [
       [LOCAL_CODEX_CHANNELS.registerProject, [{ rootPath: '/tmp/workspace' }]],
+      [LOCAL_CODEX_CHANNELS.listSessions, [{ projectId: 'wrong:fixture' }]],
       [LOCAL_CODEX_CHANNELS.startTurn, [{ projectId: 'codex-project:fixture', prompt: 'work', command: '/bin/sh' }]],
+      [LOCAL_CODEX_CHANNELS.startTurn, [{ projectId: 'codex-project:fixture', prompt: 'work', sessionId: 'other:thread' }]],
       [LOCAL_CODEX_CHANNELS.startTurn, [{ projectId: 'codex-project:fixture', prompt: '  ' }]],
       [LOCAL_CODEX_CHANNELS.startTurn, [{ projectId: 'codex-project:fixture', prompt: 'x'.repeat(8001) }]],
       [LOCAL_CODEX_CHANNELS.cancelTurn, [{ taskId: 'prime:task' }]],
@@ -220,6 +229,8 @@ describe('finite desktop bridge validation', () => {
   it('validates bounded local project and acknowledged turn DTOs without leaking turn cwd', () => {
     const project = { id: 'codex-project:fixture', name: 'Fixture', rootPath: '/tmp/workspace' }
     expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.listProjects, [project])).toEqual([project])
+    const session = { id: 'codex:thread-1', title: 'Inspect project', turnCount: 2 }
+    expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.listSessions, [session])).toEqual([session])
     expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.registerProject, null)).toBeNull()
     expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.registerProject, project)).toEqual(project)
     expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.startTurn, {
@@ -232,6 +243,7 @@ describe('finite desktop bridge validation', () => {
     expect(() => parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.listProjects, [
       { ...project, token: 'sentinel' },
     ])).toThrow(TypeError)
+    expect(() => parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.listSessions, [{ ...session, threadId: 'thread-1' }])).toThrow(TypeError)
     expect(() => parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.registerProject, {
       ...project, rootPath: '/tmp/workspace/../outside',
     })).toThrow(TypeError)

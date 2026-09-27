@@ -1,4 +1,4 @@
-import type { LocalCodexEvent, LocalCodexProjectDto, LocalCodexTurnDto } from '../shared/bridge/types'
+import type { LocalCodexEvent, LocalCodexProjectDto, LocalCodexSessionDto, LocalCodexTurnDto } from '../shared/bridge/types'
 import {
   LOCAL_CODEX_CHANNELS,
   parseLocalCodexEvent,
@@ -19,8 +19,9 @@ export interface LocalCodexWindowLike {
 
 export interface LocalCodexIpcController {
   listProjects(): Promise<readonly LocalCodexProjectDto[]>
+  listSessions(projectId: string): Promise<readonly LocalCodexSessionDto[]>
   registerProject(): Promise<LocalCodexProjectDto | null>
-  startTurn(input: { projectId: string; prompt: string }): Promise<LocalCodexTurnDto>
+  startTurn(input: { projectId: string; prompt: string; sessionId?: string }): Promise<LocalCodexTurnDto>
   cancelTurn(input: { taskId: string }): Promise<boolean>
   answerApproval(input: { approvalId: string; allow: boolean }): boolean
   subscribe(listener: (event: LocalCodexEvent) => void): () => void
@@ -36,6 +37,7 @@ export interface RegisterLocalCodexOptions {
 
 const LOCAL_CODEX_INVOKE_CHANNELS = Object.freeze([
   LOCAL_CODEX_CHANNELS.listProjects,
+  LOCAL_CODEX_CHANNELS.listSessions,
   LOCAL_CODEX_CHANNELS.registerProject,
   LOCAL_CODEX_CHANNELS.startTurn,
   LOCAL_CODEX_CHANNELS.cancelTurn,
@@ -79,11 +81,14 @@ export function registerLocalCodex(options: RegisterLocalCodexOptions): () => vo
           case LOCAL_CODEX_CHANNELS.listProjects:
             result = await options.controller.listProjects()
             break
+          case LOCAL_CODEX_CHANNELS.listSessions:
+            result = await options.controller.listSessions((request.args[0] as { projectId: string }).projectId)
+            break
           case LOCAL_CODEX_CHANNELS.registerProject:
             result = await options.controller.registerProject()
             break
           case LOCAL_CODEX_CHANNELS.startTurn:
-            result = await options.controller.startTurn(request.args[0] as { projectId: string; prompt: string })
+            result = await options.controller.startTurn(request.args[0] as { projectId: string; prompt: string; sessionId?: string })
             break
           case LOCAL_CODEX_CHANNELS.cancelTurn:
             result = await options.controller.cancelTurn(request.args[0] as { taskId: string })

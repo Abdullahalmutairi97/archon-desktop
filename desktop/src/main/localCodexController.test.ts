@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -97,6 +97,31 @@ describe('main-owned local Codex controller', () => {
     const controller = createController(async () => root)
     await expect(controller.registerProject()).rejects.toThrow(/limit/i)
     expect(metadata.replace).not.toHaveBeenCalled()
+    controller.close()
+  })
+
+  it('rejects a follow-up session owned by another project before creating a runtime', async () => {
+    const otherRoot = join(root, 'other-project')
+    await mkdir(otherRoot)
+    const ownerId = makeCodexProjectId('session-owner')
+    const otherId = makeCodexProjectId('different-project')
+    const sessionId = 'codex:owned-thread'
+    state.projects = [
+      { id: ownerId, name: 'Owner', primary_path: root, runtime: 'codex' },
+      { id: otherId, name: 'Other', primary_path: otherRoot, runtime: 'codex' },
+    ]
+    state.sessions = [{
+      id: sessionId, threadId: 'owned-thread', title: 'Owned conversation', cwd: root, projectId: ownerId,
+      turns: [{ id: makeCodexTaskId('previous'), turnId: 'native-turn' }],
+    }]
+    const createRuntime = vi.fn()
+    const controller = createController(async () => null, createRuntime)
+
+    await expect(controller.startTurn({ projectId: otherId, sessionId, prompt: 'Continue elsewhere' }))
+      .rejects.toThrow(/could not start/i)
+    await expect(controller.listSessions(ownerId)).resolves.toEqual([{ id: sessionId, title: 'Owned conversation', turnCount: 1 }])
+    await expect(controller.listSessions(otherId)).resolves.toEqual([])
+    expect(createRuntime).not.toHaveBeenCalled()
     controller.close()
   })
 

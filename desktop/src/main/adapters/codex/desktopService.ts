@@ -4,7 +4,7 @@ import type { CodexAppServerClient, CodexServerRequest } from './appServer'
 import type { CodexApprovalBroker, ResolvedCodexApprovalContext } from './approvalBroker'
 import { fileChangePaths, validateCodexFileChanges } from './fileChanges'
 import type { CodexFileChange } from './fileChanges'
-import { isCodexProjectId, makeCodexTaskId, toCodexSessionId } from './ids'
+import { isCodexProjectId, isCodexSessionId, makeCodexTaskId, toCodexSessionId } from './ids'
 import type { OwnedCodexMetadataStore } from './metadata'
 
 export const MAX_CODEX_PROMPT_CHARS = 8_000
@@ -121,8 +121,9 @@ export class CodexDesktopService {
       && this.options.appServer.connected && this.options.appServer.processGeneration === generation
   }
 
-  async startTurn(prompt: string): Promise<Readonly<CodexDesktopTurn>> {
+  async startTurn(prompt: string, sessionId?: string): Promise<Readonly<CodexDesktopTurn>> {
     if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > MAX_CODEX_PROMPT_CHARS || prompt.includes('\0')) throw new TypeError('Invalid or oversized Codex prompt.')
+    if (sessionId !== undefined && !isCodexSessionId(sessionId)) throw new TypeError('Invalid local Codex session identity.')
     if (this.closed) throw new Error('Local Codex service is closed.')
     if (this.starting || (this.current && !terminal(this.current.dto.status))) throw new Error('A local Codex task is already active.')
     directory(this.project.cwd)
@@ -134,19 +135,45 @@ export class CodexDesktopService {
     op.timer = setTimeout(() => this.abort(op, 'Codex did not finish before the turn deadline. Its outcome may be incomplete.'), this.timeoutMs)
     this.publish(op)
     try {
+      const savedSession = sessionId === undefined ? undefined : await this.waitFor(op, this.options.metadata.read()).then((saved) => {
+        const project = saved.projects.find((entry) => entry.id === this.project.id)
+        const session = saved.sessions.find((entry) => entry.id === sessionId)
+        if (!project || project.primary_path !== this.project.cwd || !session
+          || session.id !== toCodexSessionId(session.threadId) || session.projectId !== this.project.id
+          || session.cwd !== this.project.cwd || session.turns.length < 1) {
+          throw new Error('Local Codex session is not owned by this project.')
+        }
+        return session
+      })
       op.generation = await this.waitFor(op, this.options.appServer.start())
       this.connection(op)
       this.options.approvals.activateProcess(op.generation)
       if (op.cancelRequested) { this.finish(op, 'cancelled'); return this.snapshot()! }
-      const response = await this.waitFor(op, this.options.appServer.request('thread/start', {
-        cwd: this.project.cwd, approvalPolicy: 'untrusted', approvalsReviewer: 'user', sandbox: 'workspace-write',
-      }))
-      this.connection(op)
-      const threadId = this.threadIdentity(response)
-      const sessionId = toCodexSessionId(threadId)
-      op.binding = { projectId: this.project.id, sessionId, taskId: op.dto.taskId, threadId, cwd: this.project.cwd, processGeneration: op.generation }
-      op.dto.sessionId = sessionId
-      await this.persistSession(op, prompt)
+      let threadId: string
+      let activeSessionId: string
+      if (savedSession) {
+        const resumed = await this.waitFor(op, this.options.appServer.request('thread/resume', {
+          threadId: savedSession.threadId, cwd: this.project.cwd,
+          approvalPolicy: 'untrusted', approvalsReviewer: 'user', sandbox: 'workspace-write', excludeTurns: true,
+        }))
+        this.connection(op)
+        threadId = this.threadIdentity(resumed)
+        if (threadId !== savedSession.threadId || !record(resumed) || !record(resumed.thread)
+          || !record(resumed.thread.status) || resumed.thread.status.type !== 'idle') {
+          throw new Error('Resumed Codex thread is not idle or does not match the owned session.')
+        }
+        activeSessionId = savedSession.id
+      } else {
+        const response = await this.waitFor(op, this.options.appServer.request('thread/start', {
+          cwd: this.project.cwd, approvalPolicy: 'untrusted', approvalsReviewer: 'user', sandbox: 'workspace-write',
+        }))
+        this.connection(op)
+        threadId = this.threadIdentity(response)
+        activeSessionId = toCodexSessionId(threadId)
+      }
+      op.binding = { projectId: this.project.id, sessionId: activeSessionId, taskId: op.dto.taskId, threadId, cwd: this.project.cwd, processGeneration: op.generation }
+      op.dto.sessionId = activeSessionId
+      if (!savedSession) await this.persistSession(op, prompt)
       this.connection(op)
       if (op.cancelRequested) { this.finish(op, 'cancelled'); return this.snapshot()! }
       directory(this.project.cwd)

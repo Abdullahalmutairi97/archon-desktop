@@ -9,12 +9,14 @@ const turn = {
   sessionId: 'codex:thread-1',
   state: 'running' as const,
 }
+const session = { id: 'codex:thread-1', title: 'Fixture conversation', turnCount: 1 }
 
 describe('local Codex preload bridge', () => {
   it('forwards only the fixed local operations and validates each result', async () => {
     const invoke = vi.fn(async (channel: string) => {
       switch (channel) {
         case LOCAL_CODEX_CHANNELS.listProjects: return [project]
+        case LOCAL_CODEX_CHANNELS.listSessions: return [session]
         case LOCAL_CODEX_CHANNELS.registerProject: return null
         case LOCAL_CODEX_CHANNELS.startTurn: return turn
         case LOCAL_CODEX_CHANNELS.cancelTurn:
@@ -26,15 +28,17 @@ describe('local Codex preload bridge', () => {
 
     expect(Object.isFrozen(bridge)).toBe(true)
     expect(Object.keys(bridge).sort()).toEqual([
-      'answerApproval', 'cancelTurn', 'listProjects', 'registerProject', 'startTurn', 'subscribe',
+      'answerApproval', 'cancelTurn', 'listProjects', 'listSessions', 'registerProject', 'startTurn', 'subscribe',
     ])
     await expect(bridge.listProjects()).resolves.toEqual([project])
+    await expect(bridge.listSessions(project.id)).resolves.toEqual([session])
     await expect(bridge.registerProject()).resolves.toBeNull()
     await expect(bridge.startTurn({ projectId: project.id, prompt: 'Do the task' })).resolves.toEqual(turn)
     await expect(bridge.cancelTurn({ taskId: turn.taskId })).resolves.toBe(true)
     await expect(bridge.answerApproval({ approvalId: 'approval-1', allow: false })).resolves.toBe(true)
     expect(invoke.mock.calls).toEqual([
       [LOCAL_CODEX_CHANNELS.listProjects],
+      [LOCAL_CODEX_CHANNELS.listSessions, { projectId: project.id }],
       [LOCAL_CODEX_CHANNELS.registerProject],
       [LOCAL_CODEX_CHANNELS.startTurn, { projectId: project.id, prompt: 'Do the task' }],
       [LOCAL_CODEX_CHANNELS.cancelTurn, { taskId: turn.taskId }],

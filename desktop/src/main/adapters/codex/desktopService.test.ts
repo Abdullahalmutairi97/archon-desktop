@@ -16,14 +16,18 @@ class FakeServer {
   calls: { method: string; params: Record<string, unknown> }[] = []
   listeners = new Set<(method: string, params: Record<string, unknown>, generation: number) => void>()
   handler: ((method: string) => Promise<unknown>) | undefined
+  private turnSequence = 0
   constructor(readonly cwd: string) {}
   async start() { return this.processGeneration }
   async request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
     this.calls.push({ method, params })
     if (this.handler) return this.handler(method)
-    return method === 'thread/start' ? this.thread() : method === 'turn/start' ? { turn: { id: 'turn-1', status: 'inProgress', items: [] } } : {}
+    if (method === 'thread/start') return this.thread()
+    if (method === 'thread/resume') return this.thread({ type: 'idle' })
+    if (method === 'turn/start') return { turn: { id: `turn-${++this.turnSequence}`, status: 'inProgress', items: [] } }
+    return {}
   }
-  thread() { return { thread: { id: 'thread-1', sessionId: 'thread-1', cwd: this.cwd }, cwd: this.cwd, approvalPolicy: 'untrusted', approvalsReviewer: 'user', sandbox: { type: 'workspaceWrite', networkAccess: false, writableRoots: [this.cwd] } } }
+  thread(status?: Record<string, unknown>) { return { thread: { id: 'thread-1', sessionId: 'thread-1', cwd: this.cwd, ...(status ? { status } : {}) }, cwd: this.cwd, approvalPolicy: 'untrusted', approvalsReviewer: 'user', sandbox: { type: 'workspaceWrite', networkAccess: false, writableRoots: [this.cwd] } } }
   onNotification(listener: (method: string, params: Record<string, unknown>, generation: number) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   emit(method: string, params: Record<string, unknown>, generation = 1) { for (const listener of this.listeners) listener(method, params, generation) }
   close = vi.fn(() => { this.connected = false })
@@ -74,6 +78,26 @@ describe('finite main-owned Codex turns', () => {
     server.emit('turn/completed', { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed', items: [{ type: 'agentMessage', id: 'answer', text: 'Final answer' }] } })
     expect(service.snapshot()).toMatchObject({ status: 'completed', text: 'Final answer' })
     expect(service.activeBinding).toBeNull()
+  })
+  it('resumes a completed owned conversation with the same approval and workspace policy', async () => {
+    const first = await service.startTurn('Inspect fixture')
+    server.emit('turn/completed', { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed', items: [] } })
+    expect(service.snapshot()?.status).toBe('completed')
+
+    const next = await service.startTurn('Continue the work', first.sessionId!)
+    expect(next).toMatchObject({ status: 'running', sessionId: first.sessionId })
+    expect(server.calls.map((call) => call.method)).toEqual(['thread/start', 'turn/start', 'thread/resume', 'turn/start'])
+    expect(server.calls[2]).toEqual({ method: 'thread/resume', params: {
+      threadId: 'thread-1', cwd, approvalPolicy: 'untrusted', approvalsReviewer: 'user', sandbox: 'workspace-write', excludeTurns: true,
+    } })
+    expect(server.calls[3].params).toMatchObject({
+      threadId: 'thread-1', cwd, approvalPolicy: 'untrusted', approvalsReviewer: 'user',
+      sandboxPolicy: { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false, excludeSlashTmp: true, excludeTmpdirEnvVar: true },
+    })
+    expect(state.sessions[0].turns).toEqual([
+      { id: first.taskId, turnId: 'turn-1' },
+      { id: next.taskId, turnId: 'turn-2' },
+    ])
   })
   it.each(['cwd', 'sandbox', 'approvalPolicy'])('rejects a changed thread %s before submitting prompt', async (field) => {
     server.handler = async () => ({ ...server.thread(), [field]: field === 'cwd' ? '/' : field === 'sandbox' ? { type: 'dangerFullAccess' } : 'never' })

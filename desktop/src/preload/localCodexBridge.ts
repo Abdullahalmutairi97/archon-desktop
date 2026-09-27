@@ -28,6 +28,9 @@ export function createLocalCodexBridge(ipc: LocalCodexIpcInvoker): LocalCodexBri
     listProjects: () => invokeLocalCodex<Awaited<ReturnType<LocalCodexBridge['listProjects']>>>(
       ipc, LOCAL_CODEX_CHANNELS.listProjects, [],
     ),
+    listSessions: (projectId: string) => invokeLocalCodex<Awaited<ReturnType<LocalCodexBridge['listSessions']>>>(
+      ipc, LOCAL_CODEX_CHANNELS.listSessions, [{ projectId }],
+    ),
     registerProject: () => invokeLocalCodex<Awaited<ReturnType<LocalCodexBridge['registerProject']>>>(
       ipc, LOCAL_CODEX_CHANNELS.registerProject, [],
     ),

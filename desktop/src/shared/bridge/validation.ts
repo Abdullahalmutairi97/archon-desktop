@@ -11,6 +11,7 @@ import type {
   LocalCodexEvent,
   LocalCodexFileChangeDto,
   LocalCodexProjectDto,
+  LocalCodexSessionDto,
   LocalCodexTurnDto,
   OperationMap,
   OperationName,
@@ -35,6 +36,7 @@ export const BRIDGE_CHANNELS = Object.freeze({
 /** Separate fixed IPC surface for local Codex; never accepts a method or route from renderer input. */
 export const LOCAL_CODEX_CHANNELS = Object.freeze({
   listProjects: 'archon:local-codex:projects:list',
+  listSessions: 'archon:local-codex:sessions:list',
   registerProject: 'archon:local-codex:projects:register',
   startTurn: 'archon:local-codex:turn:start',
   cancelTurn: 'archon:local-codex:turn:cancel',
@@ -76,6 +78,7 @@ const MAX_RESULT_NODES = 20_000
 const MAX_RESULT_ESTIMATED_BYTES = 2 * 1024 * 1024
 const MAX_RESULT_OBJECT_KEYS = 512
 const MAX_LOCAL_PROJECTS = 100
+const MAX_LOCAL_SESSIONS = 100
 const MAX_LOCAL_PROJECT_ID_LENGTH = 256
 const MAX_LOCAL_TASK_ID_LENGTH = 256
 const MAX_LOCAL_APPROVAL_ID_LENGTH = 128
@@ -577,6 +580,14 @@ function parseLocalProject(value: unknown): LocalCodexProjectDto {
   return Object.freeze({ id: record.id, name: record.name, rootPath: record.rootPath })
 }
 
+function parseLocalSession(value: unknown): LocalCodexSessionDto {
+  const record = exactObject(value, ['id', 'title', 'turnCount'])
+  if (!isLocalSessionId(record.id) || !boundedString(record.title, 500)
+    || typeof record.turnCount !== 'number' || !Number.isSafeInteger(record.turnCount)
+    || record.turnCount < 1 || record.turnCount > 5000) return fail()
+  return Object.freeze({ id: record.id, title: record.title, turnCount: record.turnCount })
+}
+
 function parseLocalTurn(value: unknown): LocalCodexTurnDto {
   const record = exactObject(value, ['taskId', 'projectId', 'sessionId', 'state'])
   if (!isLocalTaskId(record.taskId) || !isLocalProjectId(record.projectId)
@@ -674,11 +685,19 @@ function isRepresentableLocalDiff(value: unknown): value is string {
   return true
 }
 
-function parseLocalPrompt(value: unknown): { projectId: string; prompt: string } {
-  const record = exactObject(value, ['projectId', 'prompt'])
+function parseLocalPrompt(value: unknown): { projectId: string; prompt: string; sessionId?: string } {
+  const record = readOwnDataRecord(value, ['projectId', 'prompt', 'sessionId'])
   if (!isLocalProjectId(record.projectId) || !boundedString(record.prompt, MAX_LOCAL_PROMPT_LENGTH)
     || !record.prompt.trim()) return fail()
-  return Object.freeze({ projectId: record.projectId, prompt: record.prompt })
+  if (record.sessionId !== undefined && !isLocalSessionId(record.sessionId)) return fail()
+  return Object.freeze({ projectId: record.projectId, prompt: record.prompt,
+    ...(record.sessionId === undefined ? {} : { sessionId: record.sessionId }) })
+}
+
+function parseLocalSessionsPayload(value: unknown): { projectId: string } {
+  const record = exactObject(value, ['projectId'])
+  if (!isLocalProjectId(record.projectId)) return fail()
+  return Object.freeze({ projectId: record.projectId })
 }
 
 function parseLocalTaskPayload(value: unknown): { taskId: string } {
@@ -720,6 +739,9 @@ export function parseLocalCodexRequest(channel: unknown, args: readonly unknown[
     case LOCAL_CODEX_CHANNELS.registerProject:
       if (safeArgs.length !== 0) return fail()
       return makeLocalCodexRequest(channel, [])
+    case LOCAL_CODEX_CHANNELS.listSessions:
+      if (safeArgs.length !== 1) return fail()
+      return makeLocalCodexRequest(channel, [parseLocalSessionsPayload(safeArgs[0])])
     case LOCAL_CODEX_CHANNELS.startTurn:
       if (safeArgs.length !== 1) return fail()
       return makeLocalCodexRequest(channel, [parseLocalPrompt(safeArgs[0])])
@@ -744,6 +766,12 @@ export function parseLocalCodexResponse(channel: unknown, value: unknown): unkno
       })
       if (new Set(projects.map((project) => project.id)).size !== projects.length) return fail()
       return boundedLocalResult(Object.freeze(projects))
+    }
+    case LOCAL_CODEX_CHANNELS.listSessions: {
+      const rawSessions = readLocalArray(value, MAX_LOCAL_SESSIONS)
+      const sessions = rawSessions.map(parseLocalSession)
+      if (new Set(sessions.map((session) => session.id)).size !== sessions.length) return fail()
+      return boundedLocalResult(Object.freeze(sessions))
     }
     case LOCAL_CODEX_CHANNELS.registerProject:
       return value === null ? null : boundedLocalResult(parseLocalProject(value))

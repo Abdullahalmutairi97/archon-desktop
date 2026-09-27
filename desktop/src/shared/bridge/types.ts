@@ -168,6 +168,13 @@ export interface LocalCodexProjectDto {
   rootPath: string
 }
 
+/** Renderer-safe projection of a persisted session owned by a registered project. */
+export interface LocalCodexSessionDto {
+  id: string
+  title: string
+  turnCount: number
+}
+
 /** Only returned after the native app-server acknowledges `turn/start`. */
 export interface LocalCodexTurnDto {
   taskId: string
@@ -209,9 +216,10 @@ export type LocalCodexEvent =
 
 export interface LocalCodexBridge {
   listProjects(): Promise<readonly LocalCodexProjectDto[]>
+  listSessions(projectId: string): Promise<readonly LocalCodexSessionDto[]>
   /** Opens a native directory picker; the renderer cannot supply a path. */
   registerProject(): Promise<LocalCodexProjectDto | null>
-  startTurn(input: { projectId: string; prompt: string }): Promise<LocalCodexTurnDto>
+  startTurn(input: { projectId: string; prompt: string; sessionId?: string }): Promise<LocalCodexTurnDto>
   cancelTurn(input: { taskId: string }): Promise<boolean>
   subscribe(listener: (event: LocalCodexEvent) => void): () => void
   answerApproval(input: { approvalId: string; allow: boolean }): Promise<boolean>
