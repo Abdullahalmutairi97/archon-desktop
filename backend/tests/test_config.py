@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from archon_server.config import Settings
 
 
@@ -37,3 +39,18 @@ def test_defaults_follow_account_home_not_hermes_overridden_home(monkeypatch):
     assert settings.archon_root == expected
     assert settings.backup_dir == expected / "backups"
     assert settings.hermes_home == expected / ".hermes"
+
+
+def test_workspace_terminal_tmux_executable_defaults_and_loads_from_service_environment(monkeypatch):
+    name = "ARCHON_DESKTOP_LOCAL_WORKSPACE_TERMINAL_TMUX_EXECUTABLE"
+    monkeypatch.delenv(name, raising=False)
+    assert Settings(_env_file=None).local_workspace_terminal_tmux_executable == "tmux"
+
+    monkeypatch.setenv(name, "/home/archon/.local/bin/tmux")
+    assert Settings(_env_file=None).local_workspace_terminal_tmux_executable == "/home/archon/.local/bin/tmux"
+
+
+@pytest.mark.parametrize("value", ["./bin/tmux", "bin/tmux", "bin\\tmux", "bad\x00tmux"])
+def test_workspace_terminal_tmux_executable_rejects_unsafe_path_forms(value):
+    with pytest.raises(ValueError, match="LOCAL_WORKSPACE_TERMINAL_TMUX_EXECUTABLE"):
+        Settings(_env_file=None, local_workspace_terminal_tmux_executable=value)

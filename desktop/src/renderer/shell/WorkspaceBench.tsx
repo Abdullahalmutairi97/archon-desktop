@@ -107,7 +107,7 @@ export function WorkspaceBench({
       {active === 'terminal' && <section className="bench-panel unavailable-panel" aria-labelledby="terminal-heading">
         <div className="panel-title-row"><div><span className="eyebrow">COMMAND SURFACE</span><h2 id="terminal-heading">Terminal</h2></div><span className="fixture-tag">DISCONNECTED</span></div>
         <div className="terminal-window"><div className="terminal-chrome"><i /><i /><i /><span>synthetic-shell</span></div><div className="terminal-body"><p><span className="terminal-prompt">$</span> Terminal is not connected.</p><p className="terminal-muted">This preview never executes commands.</p><span className="terminal-cursor" /></div></div>
-        <div className="bench-note"><Icon name="terminal" /><p>Command execution is intentionally absent from the reconstruction shell.</p></div>
+        <div className="bench-note"><Icon name="terminal" /><p>For a real selected-checkout shell, open Server work and choose its line console. This preview never executes commands.</p></div>
       </section>}
 
       {active === 'browser' && <section className="bench-panel browser-panel" aria-labelledby="browser-heading">

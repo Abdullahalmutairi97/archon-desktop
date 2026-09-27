@@ -142,7 +142,7 @@ export function App() {
     </div>
 
     <div className="reconstruction-ribbon" aria-label="Reconstruction and fixture status">
-      <span><i />SOURCE RECONSTRUCTION</span><b>·</b><span>{view === 'connection' ? 'CONNECTION STATUS' : view === 'server' ? 'SERVER DATA · PRIME TASKS' : view === 'codex' ? 'LOCAL CODEX · ONE TURN' : 'SYNTHETIC FIXTURE DATA'}</span><b>·</b><span>BASELINE PARITY UNVERIFIED</span>
+      <span><i />SOURCE RECONSTRUCTION</span><b>·</b><span>{view === 'connection' ? 'CONNECTION STATUS' : view === 'server' ? 'SERVER CHECKOUTS · LINE CONSOLE' : view === 'codex' ? 'LOCAL CODEX · ONE TURN' : 'SYNTHETIC FIXTURE DATA'}</span><b>·</b><span>BASELINE PARITY UNVERIFIED</span>
     </div>
 
     {appearanceOpen && <AppearanceStudio value={preferences} onChange={setPreferences} onClose={() => setAppearanceOpen(false)} />}

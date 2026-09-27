@@ -37,4 +37,6 @@ A disposable host probe demonstrated cgroup CPU/memory/PID limits and a bubblewr
 
 On 27 September, a disposable local project completed one real backend-owned Codex turn with `codex-cli 0.155.1`: project registration succeeded, start was durably acknowledged, and the private turn ledger reached `completed`. The prompt requested a short reply without commands or file edits. This validates that one native provider path on this laptop, not Electron UI-close/relaunch behavior, native side-effect recovery, or a remote runner.
 
+An isolated backend and Electron launch on the same day reached backend health and created the pairing socket, but the available computer-use tool exposed no app or browser target for the launched Electron renderer. No UI turn was submitted, so UI-close/relaunch completion remains unverified. The temporary backend, Electron process and profile were removed after the attempt.
+
 Publish increments using the [roadmap workflow](README.md), recording fixture versus native results separately.

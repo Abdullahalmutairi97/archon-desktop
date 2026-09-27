@@ -676,7 +676,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                         Path(tempfile.gettempdir())
                         / f"archon-wt-{os.geteuid()}-{socket_key}"
                     ),
-                    tmux_executable="tmux",
+                    tmux_executable=settings.local_workspace_terminal_tmux_executable,
                 )
             if settings.local_codex_enabled:
                 local_codex_event_journal = LocalCodexEventJournal(

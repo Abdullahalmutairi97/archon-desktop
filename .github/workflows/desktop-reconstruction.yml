@@ -39,3 +39,27 @@ jobs:
       - run: npm run ci
       - name: Show source and emitted-file SHA-256 inventory
         run: cat out/build-manifest.json
+      - name: Build portable Linux x64 reconstruction preview
+        run: npm run package:portable
+      - name: Verify portable preview checksum
+        shell: bash
+        working-directory: desktop/release
+        run: |
+          shopt -s nullglob
+          bundles=(Archon-Desktop-Reconstruction-*-linux-x64.tar.gz)
+          checksums=(Archon-Desktop-Reconstruction-*-linux-x64.tar.gz.sha256)
+          if [[ ${#bundles[@]} -ne 1 || ${#checksums[@]} -ne 1 ]]; then
+            echo "Expected exactly one reconstruction tarball and checksum sidecar." >&2
+            exit 1
+          fi
+          sha256sum --check "${checksums[0]}"
+      - name: Upload non-release reconstruction preview
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: archon-desktop-reconstruction-preview-not-a-release
+          path: |
+            desktop/release/Archon-Desktop-Reconstruction-*-linux-x64.tar.gz
+            desktop/release/Archon-Desktop-Reconstruction-*-linux-x64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

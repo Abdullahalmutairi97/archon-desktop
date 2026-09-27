@@ -157,7 +157,7 @@ export function WorkspaceConsole({
       <label><span>Session</span>
         <select aria-label="Console session" value={sessionId ?? ''} onChange={(event) => { setScreen(null); setSessionId(event.currentTarget.value || null); setConfirmStop(false) }} disabled={!pairingAvailable || busy}>
           <option value="">No session</option>
-          {terminals.map((terminal) => <option key={terminal.sessionId} value={terminal.sessionId}>{terminal.state} · {terminal.createdAt}</option>)}
+          {terminals.map((terminal) => <option key={terminal.sessionId} value={terminal.sessionId}>{terminal.state} · {terminal.createdAt} · …{terminal.sessionId.slice(-6)}</option>)}
         </select>
       </label>
       <button type="button" onClick={() => { void createSession() }} disabled={!pairingAvailable || busy || terminals.length >= 16}>Create session</button>

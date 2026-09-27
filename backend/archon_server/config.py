@@ -5,7 +5,7 @@ import pwd
 import ipaddress
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     local_codex_executable: Path | None = None
     local_codex_request_timeout_seconds: float = Field(default=15.0, ge=0.05, le=120.0)
     local_codex_start_timeout_seconds: float = Field(default=60.0, ge=0.05, le=300.0)
+    local_workspace_terminal_tmux_executable: str = Field(default="tmux", min_length=1, max_length=4096)
     remote_access_mode: str = "disabled"
     remote_base_url: str | None = None
     backup_dir: Path = Field(default_factory=lambda: _account_home() / "backups")
@@ -88,6 +89,17 @@ class Settings(BaseSettings):
     worker_poll_seconds: float = 0.5
     # Compatibility setting only: started tasks are never automatically replayed.
     quota_retry_seconds: float = Field(default=18000, ge=1)
+
+    @field_validator("local_workspace_terminal_tmux_executable")
+    @classmethod
+    def validate_local_workspace_terminal_tmux_executable(cls, value: str) -> str:
+        if "\x00" in value:
+            raise ValueError("ARCHON_DESKTOP_LOCAL_WORKSPACE_TERMINAL_TMUX_EXECUTABLE must not contain NUL")
+        if not Path(value).is_absolute() and ("/" in value or "\\" in value):
+            raise ValueError(
+                "ARCHON_DESKTOP_LOCAL_WORKSPACE_TERMINAL_TMUX_EXECUTABLE must be an absolute path or a basename"
+            )
+        return value
 
     @model_validator(mode="after")
     def validate_local_codex_settings(self) -> "Settings":

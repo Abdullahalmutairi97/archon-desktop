@@ -223,6 +223,15 @@ async def test_missing_tmux_fails_closed_without_creating_metadata(tmp_path):
     assert list((tmp_path / "private-state").glob("*.json")) == []
 
 
+def test_tmux_basename_is_resolved_from_service_path(tmp_path, monkeypatch):
+    fake = _fake_tmux(tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    service, _ = _service(tmp_path, executable=fake.name)
+
+    assert service.tmux_executable == str(fake.resolve())
+
+
 @pytest.mark.asyncio
 async def test_capacity_is_bounded_and_reconciliation_releases_finished_session(tmp_path):
     fake = _fake_tmux(tmp_path)
@@ -315,14 +324,10 @@ async def test_create_requires_current_expected_generation(tmp_path):
 
 
 def test_local_owner_workspace_terminal_api_contract(tmp_path, monkeypatch):
-    import archon_server.services.workspace_terminal as workspace_terminal
-
     fake = _fake_tmux(tmp_path)
-    real_which = workspace_terminal.shutil.which
-    monkeypatch.setattr(
-        workspace_terminal.shutil,
-        "which",
-        lambda executable: str(fake) if executable == "tmux" else real_which(executable),
+    monkeypatch.setenv(
+        "ARCHON_DESKTOP_LOCAL_WORKSPACE_TERMINAL_TMUX_EXECUTABLE",
+        str(fake),
     )
     settings = Settings(
         archon_root=tmp_path,
@@ -332,7 +337,9 @@ def test_local_owner_workspace_terminal_api_contract(tmp_path, monkeypatch):
         local_owner_mode=True,
         start_worker=False,
     )
+    assert settings.local_workspace_terminal_tmux_executable == str(fake)
     with TestClient(create_app(settings)) as client:
+        assert client.app.state.local_workspace_terminals.tmux_executable == str(fake.resolve())
         assert client.get(f"/api/local/workspaces/{WORKSPACE_ID}/terminals").status_code == 401
         legacy = {"Authorization": "Bearer legacy-token"}
         assert client.get(f"/api/local/workspaces/{WORKSPACE_ID}/terminals", headers=legacy).status_code == 401
