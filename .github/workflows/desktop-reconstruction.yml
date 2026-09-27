@@ -39,6 +39,8 @@ jobs:
       - run: npm run ci
       - name: Show source and emitted-file SHA-256 inventory
         run: cat out/build-manifest.json
+      - name: Install Git for portable package provenance
+        run: apt-get update && apt-get install -y --no-install-recommends git
       - name: Build portable Linux x64 reconstruction preview
         run: npm run package:portable
       - name: Verify portable preview checksum
