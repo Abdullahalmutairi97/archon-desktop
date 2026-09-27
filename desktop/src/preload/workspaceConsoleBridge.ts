@@ -1,5 +1,5 @@
-import type { WorkspaceConsoleBridge, WorkspaceConsoleScreenDto, WorkspaceConsoleTerminalDto, WorkspaceConsoleAttachTicketDto, WorkspaceConsoleAttachLeaseDto } from '../shared/bridge/types'
-import { WORKSPACE_CONSOLE_CHANNELS, parseWorkspaceConsoleRequest, parseWorkspaceConsoleResponse } from '../shared/bridge/validation'
+import type { WorkspaceConsoleBridge, WorkspaceConsoleScreenDto, WorkspaceConsoleTerminalDto, WorkspaceConsoleAttachTicketDto, WorkspaceConsoleAttachLeaseDto, WorkspaceConsoleAttachEventDto } from '../shared/bridge/types'
+import { WORKSPACE_CONSOLE_CHANNELS, parseWorkspaceConsoleEvent, parseWorkspaceConsoleRequest, parseWorkspaceConsoleResponse } from '../shared/bridge/validation'
 import type { LocalCodexIpcInvoker } from './localCodexBridge'
 
 function invoke<T>(ipc: LocalCodexIpcInvoker, channel: string, input: unknown): Promise<T> {
@@ -21,5 +21,29 @@ export function createWorkspaceConsoleBridge(ipc: LocalCodexIpcInvoker): Workspa
     attachScreen: (input: Parameters<WorkspaceConsoleBridge['attachScreen']>[0]) => invoke<WorkspaceConsoleScreenDto>(ipc, WORKSPACE_CONSOLE_CHANNELS.attachScreen, input),
     attachInput: (input: Parameters<WorkspaceConsoleBridge['attachInput']>[0]) => invoke<boolean>(ipc, WORKSPACE_CONSOLE_CHANNELS.attachInput, input),
     detach: (input: Parameters<WorkspaceConsoleBridge['detach']>[0]) => invoke<boolean>(ipc, WORKSPACE_CONSOLE_CHANNELS.attachDetach, input),
+    watch: (input: Parameters<WorkspaceConsoleBridge['watch']>[0]) => invoke<boolean>(ipc, WORKSPACE_CONSOLE_CHANNELS.attachWatch, input),
+    unwatch: (input: Parameters<WorkspaceConsoleBridge['unwatch']>[0]) => invoke<boolean>(ipc, WORKSPACE_CONSOLE_CHANNELS.attachUnwatch, input),
+    subscribe: (listener: (event: WorkspaceConsoleAttachEventDto) => void): (() => void) => {
+      if (typeof listener !== 'function' || !ipc.on || !ipc.removeListener) {
+        throw new TypeError('Console attach subscription is unavailable.')
+      }
+      const onEvent = (_event: unknown, ...args: unknown[]) => {
+        if (args.length !== 1) return
+        let safeEvent: WorkspaceConsoleAttachEventDto
+        try {
+          safeEvent = parseWorkspaceConsoleEvent(args[0])
+        } catch {
+          return
+        }
+        listener(safeEvent)
+      }
+      ipc.on(WORKSPACE_CONSOLE_CHANNELS.attachEvent, onEvent)
+      let active = true
+      return () => {
+        if (!active) return
+        active = false
+        ipc.removeListener?.(WORKSPACE_CONSOLE_CHANNELS.attachEvent, onEvent)
+      }
+    },
   }) satisfies WorkspaceConsoleBridge
 }

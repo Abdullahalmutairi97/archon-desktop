@@ -122,6 +122,32 @@ describe('preload bridge', () => {
     expect(() => bridge.workspaceServices.logs({ workspaceId, name: 'web', lines: 999 })).toThrow(TypeError)
   })
 
+  it('exposes attach-stream watch/unwatch and a validated subscription', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const sessionId = `wterm-${'b'.repeat(32)}`
+    const attachId = `watt-${'c'.repeat(32)}`
+    let emitted: ((event: unknown, ...args: unknown[]) => void) | undefined
+    const invoke = vi.fn(async (_channel: string, ..._args: unknown[]) => true)
+    const bridge = createDesktopBridge({
+      invoke,
+      on: (_channel: string, listener: (event: unknown, ...args: unknown[]) => void) => { emitted = listener },
+      removeListener: vi.fn(),
+    })
+    await expect(bridge.workspaceConsole.watch({ workspaceId, sessionId, attachId, lines: 80 })).resolves.toBe(true)
+    await expect(bridge.workspaceConsole.unwatch({ workspaceId, sessionId, attachId })).resolves.toBe(true)
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      WORKSPACE_CONSOLE_CHANNELS.attachWatch,
+      WORKSPACE_CONSOLE_CHANNELS.attachUnwatch,
+    ])
+    const received: unknown[] = []
+    const unsubscribe = bridge.workspaceConsole.subscribe((event) => received.push(event))
+    emitted?.({}, { attachId, text: 'pane', truncated: false })
+    emitted?.({}, { attachId, text: 'pane', truncated: 'no' })
+    emitted?.({}, { attachId: 'bad', text: 'pane', truncated: false })
+    expect(received).toEqual([{ attachId, text: 'pane', truncated: false }])
+    unsubscribe()
+  })
+
   it('exposes fixed preview calls and rejects malformed bounds', async () => {
     const workspaceId = `workspace-${'a'.repeat(32)}`
     const ticket = `wprev-${'d'.repeat(32)}`

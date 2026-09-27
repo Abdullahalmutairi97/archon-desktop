@@ -22,6 +22,9 @@ describe('WorkspaceConsole', () => {
       attachScreen: vi.fn(),
       attachInput: vi.fn(),
       detach: vi.fn(),
+      watch: vi.fn(async () => true),
+      unwatch: vi.fn(async () => true),
+      subscribe: vi.fn(() => () => {}),
     }
 
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
@@ -53,6 +56,9 @@ describe('WorkspaceConsole', () => {
       attachScreen: vi.fn(),
       attachInput: vi.fn(),
       detach: vi.fn(),
+      watch: vi.fn(async () => true),
+      unwatch: vi.fn(async () => true),
+      subscribe: vi.fn(() => () => {}),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
     expect(await screen.findByText('ready')).toBeInTheDocument()
@@ -80,6 +86,9 @@ describe('WorkspaceConsole', () => {
       attachScreen: vi.fn(),
       attachInput: vi.fn(),
       detach: vi.fn(),
+      watch: vi.fn(async () => true),
+      unwatch: vi.fn(async () => true),
+      subscribe: vi.fn(() => () => {}),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
     expect(await screen.findByText('running command')).toBeInTheDocument()
@@ -108,6 +117,9 @@ describe('WorkspaceConsole', () => {
       attachScreen: vi.fn(),
       attachInput: vi.fn(),
       detach: vi.fn(),
+      watch: vi.fn(async () => true),
+      unwatch: vi.fn(async () => true),
+      subscribe: vi.fn(() => () => {}),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
     expect(await screen.findByText('running command')).toBeInTheDocument()
@@ -134,6 +146,9 @@ describe('WorkspaceConsole', () => {
       attachScreen: vi.fn(),
       attachInput: vi.fn(),
       detach: vi.fn(),
+      watch: vi.fn(async () => true),
+      unwatch: vi.fn(async () => true),
+      subscribe: vi.fn(() => () => {}),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
     expect(await screen.findByRole('button', { name: 'Interrupt command' })).toBeDisabled()
@@ -157,6 +172,9 @@ describe('WorkspaceConsole', () => {
       attachScreen: vi.fn(),
       attachInput: vi.fn(async () => true),
       detach: vi.fn(async () => true),
+      watch: vi.fn(async () => true),
+      unwatch: vi.fn(async () => true),
+      subscribe: vi.fn(() => () => {}),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
     fireEvent.click(await screen.findByRole('button', { name: 'Attach control' }))
@@ -190,6 +208,9 @@ describe('WorkspaceConsole', () => {
       attachScreen: vi.fn(),
       attachInput: vi.fn(async () => true),
       detach: vi.fn(async () => true),
+      watch: vi.fn(async () => true),
+      unwatch: vi.fn(async () => true),
+      subscribe: vi.fn(() => () => {}),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
     fireEvent.click(await screen.findByRole('button', { name: 'Attach read-only' }))

@@ -226,6 +226,7 @@ void app.whenReady().then(async () => {
     },
     guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
     invokePairedLocalCodex: connection.invokePairedLocalCodex,
+    getWindow: () => mainWindow,
   })
   unregisterWorkspaceServices = registerWorkspaceServices({
     ipc: {

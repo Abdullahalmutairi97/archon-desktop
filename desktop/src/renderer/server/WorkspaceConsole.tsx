@@ -249,6 +249,26 @@ export function WorkspaceConsole({
     }
   }
 
+  useEffect(() => {
+    if (!lease || !sessionId) return
+    let active = true
+    let unsubscribe: (() => void) | undefined
+    try {
+      unsubscribe = bridge.subscribe((event) => {
+        if (!active || event.attachId !== lease.attachId) return
+        setScreen({ text: event.text, truncated: event.truncated })
+      })
+    } catch {
+      unsubscribe = undefined
+    }
+    void bridge.watch({ workspaceId, sessionId, attachId: lease.attachId, lines: 80 }).catch(() => {})
+    return () => {
+      active = false
+      unsubscribe?.()
+      void bridge.unwatch({ workspaceId, sessionId, attachId: lease.attachId }).catch(() => {})
+    }
+  }, [bridge, lease, sessionId, workspaceId])
+
   const quickKeys: readonly { label: string; key: WorkspaceConsoleNamedKey }[] = [
     { label: 'Tab', key: 'Tab' }, { label: '↑', key: 'Up' }, { label: '↓', key: 'Down' },
     { label: 'Esc', key: 'Escape' }, { label: 'Ctrl-C', key: 'C-c' }, { label: 'Backspace', key: 'BSpace' },
@@ -304,8 +324,7 @@ export function WorkspaceConsole({
           const pending = interactiveLine
           setInteractiveLine('')
           void sendKeys([{ type: 'text', value: pending }, { type: 'key', value: 'Enter' }])
-        }}>
-          <label htmlFor="workspace-console-interactive">Interactive input</label>
+        }}>          <label htmlFor="workspace-console-interactive">Interactive input</label>
           <input id="workspace-console-interactive" type="text" autoComplete="off" maxLength={1024} value={interactiveLine} onChange={(event) => setInteractiveLine(event.currentTarget.value)} disabled={!canInteract || busy || lease.mode !== 'control'} />
           <button type="submit" disabled={!canInteract || busy || lease.mode !== 'control' || !interactiveLine || /[\u0000-\u001f\u007f]/u.test(interactiveLine) || new TextEncoder().encode(interactiveLine).byteLength > 1024}>Send keys</button>
         </form>

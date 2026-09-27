@@ -244,6 +244,12 @@ export interface WorkspaceConsoleAttachLeaseDto {
   expiresAt: string
 }
 
+export interface WorkspaceConsoleAttachEventDto {
+  attachId: string
+  text: string
+  truncated: boolean
+}
+
 export interface WorkspaceConsoleBridge {
   list(input: { workspaceId: string }): Promise<readonly WorkspaceConsoleTerminalDto[]>
   create(input: { workspaceId: string; expectedGeneration: number }): Promise<WorkspaceConsoleTerminalDto>
@@ -256,6 +262,9 @@ export interface WorkspaceConsoleBridge {
   attachScreen(input: { workspaceId: string; sessionId: string; attachId: string; lines: number }): Promise<WorkspaceConsoleScreenDto>
   attachInput(input: { workspaceId: string; sessionId: string; attachId: string; events: readonly WorkspaceConsoleKeyEvent[] }): Promise<boolean>
   detach(input: { workspaceId: string; sessionId: string; attachId: string }): Promise<boolean>
+  watch(input: { workspaceId: string; sessionId: string; attachId: string; lines: number }): Promise<boolean>
+  unwatch(input: { workspaceId: string; sessionId: string; attachId: string }): Promise<boolean>
+  subscribe(listener: (event: WorkspaceConsoleAttachEventDto) => void): () => void
 }
 
 export interface WorkspaceServicePortDto {

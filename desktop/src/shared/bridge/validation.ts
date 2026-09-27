@@ -40,6 +40,7 @@ import type {
   WorkspaceConsoleAttachLeaseDto,
   WorkspaceConsoleKeyEvent,
   WorkspaceConsoleNamedKey,
+  WorkspaceConsoleAttachEventDto,
   WorkspaceServiceDto,
   WorkspaceServiceDefinitionInput,
 } from './types'
@@ -78,6 +79,9 @@ export const WORKSPACE_CONSOLE_CHANNELS = Object.freeze({
   attachScreen: 'archon:workspace-console:attach-screen',
   attachInput: 'archon:workspace-console:attach-input',
   attachDetach: 'archon:workspace-console:attach-detach',
+  attachWatch: 'archon:workspace-console:attach-watch',
+  attachUnwatch: 'archon:workspace-console:attach-unwatch',
+  attachEvent: 'archon:workspace-console:attach-event',
 } as const)
 
 export type WorkspaceConsoleInvokeChannel = (typeof WORKSPACE_CONSOLE_CHANNELS)[keyof typeof WORKSPACE_CONSOLE_CHANNELS]
@@ -1260,6 +1264,16 @@ function parseWorkspaceConsoleTerminal(value: unknown): WorkspaceConsoleTerminal
   return Object.freeze({ sessionId: record.sessionId, state: record.state, createdAt: record.createdAt })
 }
 
+/** Validate one normalized attach stream frame before it reaches the renderer. */
+export function parseWorkspaceConsoleEvent(value: unknown): WorkspaceConsoleAttachEventDto {
+  const record = exactObject(value, ['attachId', 'text', 'truncated'])
+  if (typeof record.attachId !== 'string' || !/^watt-[0-9a-f]{32}$/u.test(record.attachId)) return fail()
+  if (typeof record.text !== 'string'
+    || new TextEncoder().encode(record.text).byteLength > MAX_WORKSPACE_CONSOLE_SCREEN_BYTES) return fail()
+  if (typeof record.truncated !== 'boolean') return fail()
+  return Object.freeze({ attachId: record.attachId, text: record.text, truncated: record.truncated })
+}
+
 function parseWorkspaceConsoleAttachTicket(value: unknown): WorkspaceConsoleAttachTicketDto {
   const record = exactObject(value, ['ticket', 'mode', 'expiresAt'])
   if (typeof record.ticket !== 'string' || !/^watt-[0-9a-f]{32}$/u.test(record.ticket)
@@ -1347,9 +1361,12 @@ function workspaceConsoleInput(channel: unknown, value: unknown): Record<string,
     }
     case WORKSPACE_CONSOLE_CHANNELS.attachClaim:
     case WORKSPACE_CONSOLE_CHANNELS.attachScreen:
+    case WORKSPACE_CONSOLE_CHANNELS.attachWatch:
     case WORKSPACE_CONSOLE_CHANNELS.attachInput:
-    case WORKSPACE_CONSOLE_CHANNELS.attachDetach: {
-      const allowed = channel === WORKSPACE_CONSOLE_CHANNELS.attachScreen ? ['workspaceId', 'sessionId', 'attachId', 'lines']
+    case WORKSPACE_CONSOLE_CHANNELS.attachDetach:
+    case WORKSPACE_CONSOLE_CHANNELS.attachUnwatch: {
+      const allowed = channel === WORKSPACE_CONSOLE_CHANNELS.attachScreen || channel === WORKSPACE_CONSOLE_CHANNELS.attachWatch
+        ? ['workspaceId', 'sessionId', 'attachId', 'lines']
         : channel === WORKSPACE_CONSOLE_CHANNELS.attachInput ? ['workspaceId', 'sessionId', 'attachId', 'events']
           : ['workspaceId', 'sessionId', channel === WORKSPACE_CONSOLE_CHANNELS.attachClaim ? 'ticket' : 'attachId']
       const record = exactObject(value, allowed)
@@ -1360,7 +1377,7 @@ function workspaceConsoleInput(channel: unknown, value: unknown): Record<string,
         return { workspaceId: record.workspaceId, sessionId: record.sessionId, ticket: record.ticket }
       }
       if (typeof record.attachId !== 'string' || !/^watt-[0-9a-f]{32}$/u.test(record.attachId)) return fail()
-      if (channel === WORKSPACE_CONSOLE_CHANNELS.attachScreen) {
+      if (channel === WORKSPACE_CONSOLE_CHANNELS.attachScreen || channel === WORKSPACE_CONSOLE_CHANNELS.attachWatch) {
         if (typeof record.lines !== 'number' || !Number.isInteger(record.lines) || record.lines < 1 || record.lines > 120) return fail()
         return { workspaceId: record.workspaceId, sessionId: record.sessionId, attachId: record.attachId, lines: record.lines }
       }
@@ -1454,6 +1471,10 @@ export function parseWorkspaceConsoleResponse(channel: unknown, value: unknown):
     case WORKSPACE_CONSOLE_CHANNELS.stop:
     case WORKSPACE_CONSOLE_CHANNELS.attachInput:
     case WORKSPACE_CONSOLE_CHANNELS.attachDetach:
+      if (value !== true) return fail()
+      return true
+    case WORKSPACE_CONSOLE_CHANNELS.attachWatch:
+    case WORKSPACE_CONSOLE_CHANNELS.attachUnwatch:
       if (value !== true) return fail()
       return true
     case WORKSPACE_CONSOLE_CHANNELS.attachOpen:

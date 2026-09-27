@@ -4,13 +4,36 @@ import { WORKSPACE_CONSOLE_CHANNELS, parseWorkspaceConsoleBackendResponse, parse
 import type { IpcRegistrar } from './registerBridge'
 import { assertBoundedIpcPayload } from './security/TrustedShellFrameGuard'
 
+interface ConsoleWindowLike {
+  isDestroyed(): boolean
+  webContents: {
+    isDestroyed(): boolean
+    send(channel: string, ...args: unknown[]): void
+  }
+}
+
 export interface RegisterWorkspaceConsoleOptions {
   ipc: IpcRegistrar
   guard(event: unknown): boolean | void
   invokePairedLocalCodex(request: LocalCodexProxyRequest): Promise<unknown>
+  getWindow(): ConsoleWindowLike | undefined
 }
 
-const channels = Object.freeze(Object.values(WORKSPACE_CONSOLE_CHANNELS))
+const proxiedChannels = Object.freeze([
+  WORKSPACE_CONSOLE_CHANNELS.list,
+  WORKSPACE_CONSOLE_CHANNELS.create,
+  WORKSPACE_CONSOLE_CHANNELS.screen,
+  WORKSPACE_CONSOLE_CHANNELS.sendLine,
+  WORKSPACE_CONSOLE_CHANNELS.interrupt,
+  WORKSPACE_CONSOLE_CHANNELS.stop,
+  WORKSPACE_CONSOLE_CHANNELS.attachOpen,
+  WORKSPACE_CONSOLE_CHANNELS.attachClaim,
+  WORKSPACE_CONSOLE_CHANNELS.attachScreen,
+  WORKSPACE_CONSOLE_CHANNELS.attachInput,
+  WORKSPACE_CONSOLE_CHANNELS.attachDetach,
+])
+
+const WATCH_INTERVAL_MS = 600
 
 function assertTrusted(guard: RegisterWorkspaceConsoleOptions['guard'], event: unknown): void {
   if (guard(event) === false) throw new Error('Untrusted desktop frame')
@@ -45,9 +68,24 @@ function proxyRequest(channel: string, input: Readonly<Record<string, unknown>>)
   }
 }
 
-/** Fixed main-process IPC surface for the trusted same-user line console. */
+/** Fixed main-process IPC surface for the trusted same-user console and its attach stream. */
 export function registerWorkspaceConsole(options: RegisterWorkspaceConsoleOptions): () => void {
-  for (const channel of channels) {
+  let watch: { workspaceId: string; sessionId: string; attachId: string; lines: number; timer: ReturnType<typeof setInterval>; cancelled: boolean } | undefined
+
+  function stopWatch(): void {
+    if (!watch) return
+    clearInterval(watch.timer)
+    watch.cancelled = true
+    watch = undefined
+  }
+
+  function emit(event: unknown): void {
+    const window = options.getWindow()
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
+    window.webContents.send(WORKSPACE_CONSOLE_CHANNELS.attachEvent, event)
+  }
+
+  for (const channel of proxiedChannels) {
     options.ipc.handle(channel, async (event, ...args) => {
       assertTrusted(options.guard, event)
       assertBoundedIpcPayload(args)
@@ -65,5 +103,57 @@ export function registerWorkspaceConsole(options: RegisterWorkspaceConsoleOption
       }
     })
   }
-  return () => { for (const channel of channels) options.ipc.removeHandler(channel) }
+
+  options.ipc.handle(WORKSPACE_CONSOLE_CHANNELS.attachWatch, async (event, ...args) => {
+    assertTrusted(options.guard, event)
+    assertBoundedIpcPayload(args)
+    const input = parseWorkspaceConsoleRequest(WORKSPACE_CONSOLE_CHANNELS.attachWatch, args)
+    stopWatch()
+    const state = {
+      workspaceId: input.workspaceId as string,
+      sessionId: input.sessionId as string,
+      attachId: input.attachId as string,
+      lines: input.lines as number,
+      cancelled: false,
+      timer: undefined as unknown as ReturnType<typeof setInterval>,
+    }
+    state.timer = setInterval(() => {
+      if (state.cancelled) return
+      void (async () => {
+        try {
+          const response = await options.invokePairedLocalCodex({
+            operation: 'workspace.terminals.attach.screen',
+            workspaceId: state.workspaceId,
+            sessionId: state.sessionId,
+            attachId: state.attachId,
+            lines: state.lines,
+          })
+          if (state.cancelled) return
+          const screen = parseWorkspaceConsoleBackendResponse(
+            WORKSPACE_CONSOLE_CHANNELS.attachScreen, response,
+          ) as { text: string; truncated: boolean }
+          emit({ attachId: state.attachId, text: screen.text, truncated: screen.truncated })
+        } catch {
+          // A missed tick is not surfaced; the renderer keeps the last good frame.
+        }
+      })()
+    }, WATCH_INTERVAL_MS)
+    watch = state
+    return true
+  })
+
+  options.ipc.handle(WORKSPACE_CONSOLE_CHANNELS.attachUnwatch, async (event, ...args) => {
+    assertTrusted(options.guard, event)
+    assertBoundedIpcPayload(args)
+    parseWorkspaceConsoleRequest(WORKSPACE_CONSOLE_CHANNELS.attachUnwatch, args)
+    stopWatch()
+    return true
+  })
+
+  return () => {
+    stopWatch()
+    for (const channel of proxiedChannels) options.ipc.removeHandler(channel)
+    options.ipc.removeHandler(WORKSPACE_CONSOLE_CHANNELS.attachWatch)
+    options.ipc.removeHandler(WORKSPACE_CONSOLE_CHANNELS.attachUnwatch)
+  }
 }

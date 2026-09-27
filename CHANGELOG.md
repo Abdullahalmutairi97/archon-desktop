@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — streaming attach transport
+
+- Stream an active attach lease's screen to the renderer: main polls the bounded attach-screen operation and pushes validated frames over a dedicated event channel, and the renderer subscribes for live updates. Watch/unwatch are finite bridge calls; frames with a wrong attach id or bad shape are dropped.
+
+## Unreleased — canonical baseline comparison harness
+
+- Add `current/testing/canonical-compare.cjs`: it verifies the frozen v0.3.0 input against every official baseline hash and verifies a rebuilt candidate keeps the untouched files byte-identical while changing only the intended files, bundling PeerJS and patching the renderer CSP. The frozen input matches all four baseline files and the candidate passes (exit 0).
+
 ## Unreleased — preview WebSocket forwarding
 
 - Forward preview WebSockets (HTTP/HMR) through the ticket-gated gateway on the same declared loopback port with a 2 MiB frame cap and an Origin check that rejects a WebSocket whose Origin is not the local server origin; an invalid ticket closes with 1008.
