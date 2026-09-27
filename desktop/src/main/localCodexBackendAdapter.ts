@@ -86,6 +86,7 @@ export class LocalCodexBackendAdapter implements LocalCodexIpcController {
   private pollEpoch = 0
   private closed = false
   private lastAcceptedTaskId: string | undefined
+  private lastOutput: Extract<LocalCodexEvent, { type: 'turn.output' }> | undefined
 
   constructor(private readonly options: LocalCodexBackendAdapterOptions) {
     this.pollIntervalMs = options.pollIntervalMs ?? 250
@@ -122,6 +123,7 @@ export class LocalCodexBackendAdapter implements LocalCodexIpcController {
       throw new TypeError('Local Codex returned a turn for a different project or session')
     }
     this.lastAcceptedTaskId = turn.taskId
+    this.lastOutput = undefined
     return turn
   }
 
@@ -131,10 +133,19 @@ export class LocalCodexBackendAdapter implements LocalCodexIpcController {
     if (!Array.isArray(envelope.turns) || envelope.turns.length > 1) throw new TypeError('Invalid Local Codex turn list')
     if (envelope.turns.length === 0) {
       this.lastAcceptedTaskId = undefined
+      this.lastOutput = undefined
       return null
     }
     const status = parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.turnStatus, envelope.turns[0]) as LocalCodexTurnStatusDto
     this.lastAcceptedTaskId = status.taskId
+    // The main process can consume journal events before the renderer has
+    // subscribed. Re-send only the latest bounded output for this exact turn;
+    // the renderer buffers it until the status response arrives.
+    if (this.lastOutput?.taskId === status.taskId) {
+      for (const listener of [...this.listeners]) {
+        try { listener(this.lastOutput) } catch { /* One subscriber cannot break status readback. */ }
+      }
+    }
     return status
   }
 
@@ -189,6 +200,7 @@ export class LocalCodexBackendAdapter implements LocalCodexIpcController {
         for (const item of batch.events) {
           if (item.seq <= this.cursor) continue
           this.cursor = item.seq
+          if (item.event.type === 'turn.output') this.lastOutput = item.event
           for (const listener of [...this.listeners]) {
             try { listener(item.event) } catch { /* One renderer subscriber cannot break event delivery. */ }
           }

@@ -92,6 +92,29 @@ describe('backend-owned Local Codex adapter', () => {
     adapter.close()
   })
 
+  it('re-sends retained output when status is restored after main consumed replay', async () => {
+    const output = { type: 'turn.output' as const, taskId: 'codex-task:fixture', text: 'Retained answer' }
+    const invokePairedLocalCodex = vi.fn(async (request: LocalCodexProxyRequest): Promise<unknown> => {
+      if (request.operation === 'events.list') return request.after === 0
+        ? { cursor: 1, latest: 1, oldest: 1, reset: false, events: [{ seq: 1, event: output }] }
+        : { cursor: 1, latest: 1, oldest: 1, reset: false, events: [] }
+      if (request.operation === 'turns.list') return { turns: [{
+        taskId: output.taskId, projectId: project.id, sessionId: 'codex:session-1', state: 'completed',
+      }] }
+      throw new Error('unexpected route')
+    })
+    const adapter = new LocalCodexBackendAdapter({ connection: { invokePairedLocalCodex }, pollIntervalMs: 2 })
+    const events: unknown[] = []
+    const unsubscribe = adapter.subscribe((event) => events.push(event))
+    await vi.waitFor(() => expect(events).toEqual([output]))
+    events.length = 0 // The main window was not yet ready for the first delivery.
+
+    await expect(adapter.getLatestTurnStatus()).resolves.toMatchObject({ taskId: output.taskId, state: 'completed' })
+    expect(events).toEqual([output])
+    unsubscribe()
+    adapter.close()
+  })
+
   it('replays retained events after the owner worker resets its sequence', async () => {
     const observedAfter: number[] = []
     const invokePairedLocalCodex = vi.fn(async (request: LocalCodexProxyRequest): Promise<unknown> => {
