@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — enforced service memory budget
+
+- Launch a service that declares `memoryLimitMb` under `systemd-run --user --scope -p MemoryMax=<n>M` (cgroup v2) instead of an unbounded process; a service without a budget keeps the plain argv launch.
+
 ## Unreleased — managed service health state
 
 - Probe each service's declared loopback health target with a bounded, credential-free GET (2s interval, 1.5s timeout) and report `starting`/`healthy`/`unhealthy`; a service without a health target reports `unknown`. Health stops with the service and is exposed on the service DTO and in the panel.

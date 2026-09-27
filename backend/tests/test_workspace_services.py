@@ -128,6 +128,48 @@ async def test_declared_health_target_is_probed_on_loopback(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_declared_memory_budget_launches_under_a_scope(tmp_path):
+    spawned: list[list[str]] = []
+
+    class FakeStream:
+        async def read(self, _size: int) -> bytes:
+            return b""
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = None
+            self.stdout = FakeStream()
+
+        async def wait(self) -> int:
+            while self.returncode is None:
+                await asyncio.sleep(0.01)
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+        def kill(self) -> None:
+            self.returncode = 0
+
+    async def fake_spawn(*argv, **_kwargs):
+        spawned.append(list(argv))
+        return FakeProcess()
+
+    manager = _manager(tmp_path)
+    manager._spawn = fake_spawn
+    await manager.define(WORKSPACE_ID, _definition(
+        name="limited", argv=["/bin/echo", "hi"], memoryLimitMb=128,
+    ))
+    await manager.start(WORKSPACE_ID, "limited")
+    assert spawned and spawned[0][:6] == [
+        "systemd-run", "--user", "--scope", "--collect", "--quiet", "-p",
+    ]
+    assert "MemoryMax=128M" in spawned[0]
+    assert spawned[0][-3:] == ["--", "/bin/echo", "hi"]
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_service_without_health_target_reports_unknown(tmp_path):
     manager = _manager(tmp_path)
     await manager.define(WORKSPACE_ID, _definition(name="plain", argv=["/bin/sleep", "5"]))

@@ -273,8 +273,18 @@ class WorkspaceServiceManager:
             raise WorkspaceServiceUnavailable("Service could not be started")
 
     async def _spawn_child(self, runtime: dict[str, Any], entry: dict[str, Any], cwd: Path, env: dict[str, str]) -> None:
+        command = list(entry["argv"])
+        # Enforce the declared memory budget with a user-scoped cgroup. This host
+        # provides systemd-run and cgroup v2; a memory budget is never silently
+        # ignored by falling back to an unbounded process.
+        if entry.get("memoryLimitMb") is not None:
+            command = [
+                "systemd-run", "--user", "--scope", "--collect", "--quiet",
+                "-p", f"MemoryMax={entry['memoryLimitMb']}M",
+                "--", *command,
+            ]
         process = await self._spawn(
-            *entry["argv"],
+            *command,
             cwd=str(cwd),
             env=env,
             stdin=asyncio.subprocess.DEVNULL,
