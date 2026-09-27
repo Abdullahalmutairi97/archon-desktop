@@ -13,7 +13,7 @@
     "preinstall": "node scripts/check-toolchain.mjs",
     "dev": "electron-vite dev",
     "start": "electron .",
-    "package:portable": "node scripts/check-toolchain.mjs && npm run build && node scripts/package-portable-linux.mjs",
+    "package:portable": "node scripts/check-toolchain.mjs && node node_modules/electron/install.js && npm run build && node scripts/package-portable-linux.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:runner": "vitest run src/runner",

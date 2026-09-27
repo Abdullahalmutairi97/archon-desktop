@@ -9,7 +9,7 @@
     "build": "npm --prefix current run build --",
     "build:candidate": "npm --prefix current run build:candidate --",
     "test:backend": "python3 scripts/test-backend.py",
-    "desktop:setup": "npm ci --prefix desktop",
+    "desktop:setup": "npm ci --prefix desktop && node desktop/node_modules/electron/install.js",
     "desktop:dev": "npm run dev --prefix desktop",
     "desktop:start": "npm run build --prefix desktop && npm start --prefix desktop",
     "desktop:package:portable": "npm run package:portable --prefix desktop",
