@@ -6,6 +6,33 @@ import { WorkspaceConsole } from './WorkspaceConsole'
 afterEach(cleanup)
 
 describe('WorkspaceConsole', () => {
+  it('reuses the in-flight screen refresh after sending a line', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const sessionId = `wterm-${'b'.repeat(32)}`
+    let resolveScreen: ((value: { text: string; truncated: boolean }) => void) | undefined
+    const bridge: WorkspaceConsoleBridge = {
+      list: vi.fn(async () => [{ sessionId, state: 'running' as const, createdAt: '2026-09-27T00:00:00Z' }]),
+      create: vi.fn(),
+      screen: vi.fn(() => new Promise<{ text: string; truncated: boolean }>((resolve) => { resolveScreen = resolve })),
+      sendLine: vi.fn(async () => true),
+      interrupt: vi.fn(),
+      stop: vi.fn(),
+    }
+
+    render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
+    await screen.findByRole('button', { name: 'Interrupt command' })
+    await waitFor(() => expect(bridge.screen).toHaveBeenCalledOnce())
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Send one line' }), { target: { value: 'do work' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send line' }))
+    await waitFor(() => expect(bridge.sendLine).toHaveBeenCalledOnce())
+    expect(bridge.screen).toHaveBeenCalledOnce()
+
+    resolveScreen?.({ text: 'latest refresh', truncated: false })
+    expect(await screen.findByRole('status')).toHaveTextContent('Line sent once.')
+    expect(bridge.screen).toHaveBeenCalledOnce()
+  })
+
   it('does not retry an input line after an ambiguous send failure', async () => {
     const workspaceId = `workspace-${'a'.repeat(32)}`
     const sessionId = `wterm-${'b'.repeat(32)}`

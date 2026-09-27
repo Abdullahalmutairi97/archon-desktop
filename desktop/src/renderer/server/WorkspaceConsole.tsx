@@ -21,6 +21,7 @@ export function WorkspaceConsole({
   const [confirmStop, setConfirmStop] = useState(false)
   const [message, setMessage] = useState<{ kind: 'status' | 'error' | 'ambiguous'; text: string } | null>(null)
   const requestLock = useRef(false)
+  const screenRequestRef = useRef<{ key: string; promise: Promise<boolean> } | null>(null)
   const listRequestId = useRef(0)
   const workspaceIdRef = useRef(workspaceId)
   workspaceIdRef.current = workspaceId
@@ -56,31 +57,38 @@ export function WorkspaceConsole({
     }
   }, [bridge, generation, identity, pairingAvailable, workspaceId])
 
-  const refreshScreen = useCallback(async (): Promise<boolean> => {
-    if (!pairingAvailable || !sessionId) return false
+  const refreshScreen = useCallback((): Promise<boolean> => {
+    if (!pairingAvailable || !sessionId) return Promise.resolve(false)
     const requestKey = `${identity}:${sessionId}`
-    try {
-      const response = await bridge.screen({ workspaceId, sessionId, lines: 80 })
+    const currentRequest = screenRequestRef.current
+    if (currentRequest?.key === requestKey) return currentRequest.promise
+    const request = Promise.resolve().then(() => bridge.screen({ workspaceId, sessionId, lines: 80 })).then((response) => {
       if (screenKeyRef.current !== requestKey) return false
       setScreen(response)
       return true
-    } catch {
+    }).catch(() => {
       if (screenKeyRef.current === requestKey) {
         setScreen(null)
         setMessage({ kind: 'error', text: 'Could not refresh the screen. Check the session list before sending another line.' })
       }
       return false
-    }
+    }).finally(() => {
+      if (screenRequestRef.current?.promise === request) screenRequestRef.current = null
+    })
+    screenRequestRef.current = { key: requestKey, promise: request }
+    return request
   }, [bridge, generation, identity, pairingAvailable, sessionId, workspaceId])
 
   useEffect(() => { void refreshList() }, [refreshList])
+  const selectedSessionRunning = terminals.some((item) => item.sessionId === sessionId && item.state === 'running')
   useEffect(() => {
     setScreen(null)
     if (!sessionId) return
     void refreshScreen()
+    if (!selectedSessionRunning) return
     const timer = window.setInterval(() => { void refreshScreen() }, 2500)
     return () => window.clearInterval(timer)
-  }, [refreshScreen, sessionId])
+  }, [refreshScreen, selectedSessionRunning, sessionId])
 
   async function createSession(): Promise<void> {
     if (requestLock.current || !pairingAvailable) return
