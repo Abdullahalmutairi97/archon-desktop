@@ -108,4 +108,66 @@ describe('finite desktop bridge validation', () => {
     }, 'projects.list')).toThrow(TypeError)
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { cursor: -1 }, 'events.cursor')).toThrow(TypeError)
   })
+
+  it('accepts only the narrow Prime submit/get/events/cancel payloads', () => {
+    expect(parseOperationRequest('runtimes.list', {})).toEqual(['runtimes.list', {}])
+    expect(parseOperationRequest('tasks.submit', { projectId: 'project-1', prompt: 'Inspect this project' })).toEqual([
+      'tasks.submit', { projectId: 'project-1', prompt: 'Inspect this project' },
+    ])
+    expect(parseOperationRequest('tasks.get', { taskId: 'task_123-ab' })).toEqual([
+      'tasks.get', { taskId: 'task_123-ab' },
+    ])
+    expect(parseOperationRequest('tasks.events', { taskId: 'task_123-ab', after: 14 })).toEqual([
+      'tasks.events', { taskId: 'task_123-ab', after: 14 },
+    ])
+    expect(parseOperationRequest('tasks.cancel', { taskId: 'task_123-ab' })).toEqual([
+      'tasks.cancel', { taskId: 'task_123-ab' },
+    ])
+
+    for (const [operation, payload] of [
+      ['tasks.submit', { projectId: 'project-1', prompt: 'work', cwd: '/tmp' }],
+      ['tasks.submit', { projectId: 'project-1', prompt: 'work', approval_mode: 'approve' }],
+      ['tasks.submit', { projectId: 'project-1', prompt: 'work', idempotencyKey: 'renderer-key' }],
+      ['tasks.submit', { projectId: '', prompt: 'work' }],
+      ['tasks.submit', { projectId: 'project-1', prompt: '' }],
+      ['tasks.submit', { projectId: 'project-1', prompt: 'x'.repeat(8_001) }],
+      ['tasks.get', { taskId: '../outside' }],
+      ['tasks.cancel', { taskId: 'task?id=outside' }],
+      ['tasks.events', { taskId: 'task_1', after: -1 }],
+      ['tasks.events', { taskId: 'task_1', after: 1.5 }],
+      ['tasks.events', { taskId: 'task_1', after: Number.MAX_SAFE_INTEGER + 1 }],
+    ] as const) {
+      expect(() => parseOperationRequest(operation, payload)).toThrow(TypeError)
+    }
+  })
+
+  it('validates bounded runtime, task and event responses', () => {
+    const taskId = 'a'.repeat(32)
+    const runtime = {
+      id: 'prime', aliases: ['default', 'prime'], available: true,
+      availability_check: 'executable_file', version: null, version_verified: false,
+      availability_note: 'Filesystem availability is not execution verification.',
+      modes: [{ id: 'auto', label: 'Trusted execution', restricted: false }],
+      chat_only: false, sandboxed: false,
+    }
+    const task = { id: taskId, status: 'queued', prompt: 'Inspect this project', project_id: 'project-1' }
+    const event = {
+      seq: 12, task_id: taskId, type: 'task.queued', data: { status: 'queued' },
+      created_at: '2026-09-27T00:00:00Z', attempt_id: null,
+    }
+
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { runtimes: [runtime] }, 'runtimes.list'))
+      .toEqual({ runtimes: [runtime] })
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { task }, 'tasks.submit')).toEqual({ task })
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { task }, 'tasks.get')).toEqual({ task })
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { events: [event] }, 'tasks.events'))
+      .toEqual({ events: [event] })
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { ok: true }, 'tasks.cancel')).toEqual({ ok: true })
+
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { task: { ...task, access_token: 'secret' } }, 'tasks.get'))
+      .toThrow(TypeError)
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { events: Array.from({ length: 1001 }, () => event) }, 'tasks.events'))
+      .toThrow(TypeError)
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { ok: false }, 'tasks.cancel')).toThrow(TypeError)
+  })
 })

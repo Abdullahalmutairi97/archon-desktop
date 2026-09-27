@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ConnectionDescription, DesktopBridge, JsonRecord } from '../../shared/bridge/types'
+import { PrimeTaskPanel } from './PrimeTaskPanel'
 import './ServerCollections.css'
 
 type CollectionData = {
@@ -153,7 +154,7 @@ export function ServerCollections({
     <header className="server-collections-header">
       <div><span className="eyebrow">SERVER DATA</span><h2>Projects, sessions and tasks</h2></div>
       <span className={`server-collections-state state-${state}`} role="status">
-        {state === 'ready' ? 'SERVER connected · read only' :
+        {state === 'ready' ? 'SERVER connected · data loaded' :
           state === 'loading' ? 'SERVER data loading' :
             state === 'disconnected' ? 'SERVER disconnected' :
               accessRejected ? 'SERVER access rejected' : 'SERVER unavailable'}
@@ -177,5 +178,6 @@ export function ServerCollections({
       <CollectionSection title="TASKS" kind="task" records={data.tasks} />
     </div>}
     {data && <p className="server-collections-note">Counts show rows returned; the server may cap session and task lists.</p>}
+    {data && bridge && connection && <PrimeTaskPanel key={generation} bridge={bridge} connection={connection} projects={data.projects} tasks={data.tasks} />}
   </section>
 }

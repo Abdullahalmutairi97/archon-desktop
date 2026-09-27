@@ -79,7 +79,8 @@ describe('ServerCollections', () => {
     expect(container.textContent).not.toContain('TOKEN_SENTINEL')
     expect(container.textContent).not.toContain('PRIVATE_PROMPT')
     expect(container.textContent).not.toContain('PRIVATE_COMMAND')
-    expect(apiInvoke.mock.calls.map(([operation]) => operation).sort()).toEqual([
+    expect(apiInvoke.mock.calls.map(([operation]) => operation).filter((operation) =>
+      ['projects.list', 'sessions.list', 'tasks.list'].includes(operation)).sort()).toEqual([
       'projects.list', 'sessions.list', 'tasks.list',
     ])
   })
@@ -138,7 +139,7 @@ describe('ServerCollections', () => {
     ])
     const { bridge, apiInvoke } = fakeBridge((operation) => {
       if (generation === 1) return collections([{ id: 'old-project', name: 'Previous server project' }], [], [])(operation)
-      return pendingNew.get(operation)!.promise
+      return pendingNew.get(operation)?.promise ?? Promise.reject(new Error(`Unexpected operation: ${operation}`))
     })
     const { rerender } = render(<ServerCollections bridge={bridge} connection={connection(true, 1)} />)
 
@@ -148,7 +149,7 @@ describe('ServerCollections', () => {
 
     expect(screen.queryByText('Previous server project')).not.toBeInTheDocument()
     expect(screen.getByText('SERVER data loading')).toBeInTheDocument()
-    expect(apiInvoke).toHaveBeenCalledTimes(6)
+    expect(apiInvoke.mock.calls.filter(([operation]) => ['projects.list', 'sessions.list', 'tasks.list'].includes(operation))).toHaveLength(6)
 
     newProjects.resolve({ projects: [{ id: 'new-project', name: 'Current server project' }] })
     newSessions.resolve({ sessions: [] })
@@ -165,7 +166,7 @@ describe('ServerCollections', () => {
 
     expect(screen.getByText('SERVER disconnected')).toBeInTheDocument()
     expect(screen.queryByText('Project from server')).not.toBeInTheDocument()
-    expect(apiInvoke).toHaveBeenCalledTimes(3)
+    expect(apiInvoke.mock.calls.filter(([operation]) => ['projects.list', 'sessions.list', 'tasks.list'].includes(operation))).toHaveLength(3)
   })
 
   it('shows an unavailable state when any read fails and offers a retry', async () => {
@@ -182,7 +183,7 @@ describe('ServerCollections', () => {
     shouldFail = false
     fireEvent.click(screen.getByRole('button', { name: 'Retry SERVER data' }))
     expect(await screen.findByText('Project after retry')).toBeInTheDocument()
-    expect(apiInvoke).toHaveBeenCalledTimes(6)
+    expect(apiInvoke.mock.calls.filter(([operation]) => ['projects.list', 'sessions.list', 'tasks.list'].includes(operation))).toHaveLength(6)
   })
 
   it('shows access rejection and directs the user to re-enter the token instead of retrying', async () => {

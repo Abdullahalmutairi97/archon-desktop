@@ -71,14 +71,14 @@ export function Sidebar({
     </div>
 
     <div className="sidebar-footer">
-      <button className={`nav-item connection-navigation ${view === 'server' ? 'active' : ''}`} aria-label="Server data" aria-current={view === 'server' ? 'page' : undefined} onClick={() => onView('server')}><Icon name="folder" /><span className="nav-label">Server data</span></button>
+      <button className={`nav-item connection-navigation ${view === 'server' ? 'active' : ''}`} aria-label="Server work" aria-current={view === 'server' ? 'page' : undefined} onClick={() => onView('server')}><Icon name="folder" /><span className="nav-label">Server work</span></button>
       <button className={`nav-item connection-navigation ${view === 'connection' ? 'active' : ''}`} aria-label="Connection" aria-current={view === 'connection' ? 'page' : undefined} onClick={() => onView('connection')}><Icon name="settings" /><span className="nav-label">Connection</span></button>
       <div className="profile-card">
         <span className="profile-avatar">A</span>
         <span className="profile-copy"><strong>Local preview</strong><small>Fixture profile</small></span>
         <button className="quiet-icon-button" aria-label="Open appearance settings" onClick={onAppearance}><Icon name="settings" /></button>
       </div>
-      {!collapsed && <div className="footer-state"><span className="state-light" />Reconstruction <span className="footer-version">P2C.2</span></div>}
+      {!collapsed && <div className="footer-state"><span className="state-light" />Reconstruction <span className="footer-version">P2C.3</span></div>}
     </div>
   </aside>
 }

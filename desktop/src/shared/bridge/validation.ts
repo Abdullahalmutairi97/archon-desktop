@@ -9,7 +9,13 @@ import type {
   JsonValue,
   OperationMap,
   OperationName,
+  RuntimeRecord,
   SessionsListPayload,
+  TaskByIdPayload,
+  TaskEventRecord,
+  TaskEventsPayload,
+  TaskRecord,
+  TaskSubmitPayload,
   TasksListPayload,
 } from './types'
 
@@ -29,6 +35,11 @@ const operationNames = Object.freeze([
   'sessions.list',
   'tasks.list',
   'events.cursor',
+  'runtimes.list',
+  'tasks.submit',
+  'tasks.get',
+  'tasks.events',
+  'tasks.cancel',
 ] as const satisfies readonly OperationName[])
 
 const channels = new Set<string>(Object.values(BRIDGE_CHANNELS))
@@ -36,8 +47,13 @@ const operations = new Set<string>(operationNames)
 const MAX_SERVER_URL_LENGTH = 2048
 const MAX_TOKEN_LENGTH = 8192
 const MAX_PROJECT_ID_LENGTH = 200
+const MAX_TASK_ID_LENGTH = 200
+// Fits the 64 KiB IPC envelope even when every UTF-16 code unit encodes to four UTF-8 bytes.
+const MAX_TASK_PROMPT_LENGTH = 8_000
 const MAX_LIST_LIMIT = 500
-const MAX_RESULT_STRING_LENGTH = 65_536
+const MAX_TASK_EVENT_CURSOR = Number.MAX_SAFE_INTEGER
+const MAX_TASK_EVENT_RESULTS = 1_000
+const MAX_RESULT_STRING_LENGTH = 100_000
 const MAX_RESULT_DEPTH = 16
 const MAX_RESULT_NODES = 20_000
 const MAX_RESULT_ESTIMATED_BYTES = 2 * 1024 * 1024
@@ -157,6 +173,35 @@ function parseTasksPayload(value: unknown): TasksListPayload {
   return Object.freeze(limit === undefined ? {} : { limit })
 }
 
+function validTaskId(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length <= MAX_TASK_ID_LENGTH
+    && /^[A-Za-z0-9_-]{1,200}$/u.test(value)
+}
+
+function parseTaskSubmitPayload(value: unknown): TaskSubmitPayload {
+  const record = readOwnDataRecord(value, ['projectId', 'prompt'])
+  if (Object.keys(record).length !== 2) return fail()
+  if (!boundedString(record.projectId, MAX_PROJECT_ID_LENGTH)) return fail()
+  if (!boundedString(record.prompt, MAX_TASK_PROMPT_LENGTH) || !record.prompt.trim()) return fail()
+  return Object.freeze({ projectId: record.projectId, prompt: record.prompt })
+}
+
+function parseTaskByIdPayload(value: unknown): TaskByIdPayload {
+  const record = readOwnDataRecord(value, ['taskId'])
+  if (Object.keys(record).length !== 1 || !validTaskId(record.taskId)) return fail()
+  return Object.freeze({ taskId: record.taskId })
+}
+
+function parseTaskEventsPayload(value: unknown): TaskEventsPayload {
+  const record = readOwnDataRecord(value, ['taskId', 'after'])
+  if (Object.keys(record).length !== 2 || !validTaskId(record.taskId)) return fail()
+  if (typeof record.after !== 'number' || !Number.isSafeInteger(record.after) || record.after < 0 || record.after > MAX_TASK_EVENT_CURSOR) {
+    return fail()
+  }
+  return Object.freeze({ taskId: record.taskId, after: record.after })
+}
+
 export function isOperationName(value: unknown): value is OperationName {
   return typeof value === 'string' && operations.has(value)
 }
@@ -171,11 +216,19 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
     case 'readiness':
     case 'projects.list':
     case 'events.cursor':
+    case 'runtimes.list':
       return Object.freeze([operation, parseEmptyPayload(payload)])
     case 'sessions.list':
       return Object.freeze([operation, parseSessionsPayload(payload)])
     case 'tasks.list':
       return Object.freeze([operation, parseTasksPayload(payload)])
+    case 'tasks.submit':
+      return Object.freeze([operation, parseTaskSubmitPayload(payload)])
+    case 'tasks.get':
+    case 'tasks.cancel':
+      return Object.freeze([operation, parseTaskByIdPayload(payload)])
+    case 'tasks.events':
+      return Object.freeze([operation, parseTaskEventsPayload(payload)])
   }
 }
 
@@ -327,6 +380,36 @@ function exactObject(value: unknown, allowedKeys: readonly string[]): Record<str
   return record
 }
 
+function parseRuntimeRecord(value: unknown): RuntimeRecord {
+  const record = boundedJsonRecord(value)
+  if (record.id !== 'prime' && record.id !== 'pi') return fail()
+  if (!Array.isArray(record.aliases) || record.aliases.length > 200 ||
+      record.aliases.some((alias) => typeof alias !== 'string' || !boundedString(alias, 128))) return fail()
+  if (typeof record.available !== 'boolean' || !boundedString(record.availability_check, 128)) return fail()
+  if (record.version !== null && !boundedString(record.version, 256, true)) return fail()
+  if (typeof record.version_verified !== 'boolean' || !boundedString(record.availability_note, 2_000, true)) return fail()
+  if (!Array.isArray(record.modes) || record.modes.length > 32 || record.modes.some((mode) =>
+    !isRecord(mode) || !boundedString(mode.id, 64) || !boundedString(mode.label, 256) || typeof mode.restricted !== 'boolean'
+  )) return fail()
+  if (typeof record.chat_only !== 'boolean' || typeof record.sandboxed !== 'boolean') return fail()
+  return record as RuntimeRecord
+}
+
+function parseTaskRecord(value: unknown): TaskRecord {
+  const record = boundedJsonRecord(value)
+  if (!validTaskId(record.id) || !boundedString(record.status, 64)) return fail()
+  return record as TaskRecord
+}
+
+function parseTaskEvent(value: unknown): TaskEventRecord {
+  const record = boundedJsonRecord(value)
+  if (typeof record.seq !== 'number' || !Number.isSafeInteger(record.seq) || record.seq < 1) return fail()
+  if (!validTaskId(record.task_id) || !boundedString(record.type, 128)) return fail()
+  if (!boundedString(record.created_at, 128) || !Object.prototype.hasOwnProperty.call(record, 'data')) return fail()
+  if (record.attempt_id !== null && !validTaskId(record.attempt_id)) return fail()
+  return record as TaskEventRecord
+}
+
 function parseOperationResponse(operation: unknown, value: unknown): OperationMap[OperationName]['result'] {
   if (!isOperationName(operation)) return fail()
   switch (operation) {
@@ -346,6 +429,26 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       const record = exactObject(value, ['cursor'])
       if (typeof record.cursor !== 'number' || !Number.isSafeInteger(record.cursor) || record.cursor < 0) return fail()
       return Object.freeze({ cursor: record.cursor })
+    }
+    case 'runtimes.list': {
+      const record = exactObject(value, ['runtimes'])
+      if (!Array.isArray(record.runtimes) || record.runtimes.length > 100) return fail()
+      return Object.freeze({ runtimes: Object.freeze(record.runtimes.map(parseRuntimeRecord)) })
+    }
+    case 'tasks.submit':
+    case 'tasks.get': {
+      const record = exactObject(value, ['task'])
+      return Object.freeze({ task: parseTaskRecord(record.task) })
+    }
+    case 'tasks.events': {
+      const record = exactObject(value, ['events'])
+      if (!Array.isArray(record.events) || record.events.length > MAX_TASK_EVENT_RESULTS) return fail()
+      return Object.freeze({ events: Object.freeze(record.events.map(parseTaskEvent)) })
+    }
+    case 'tasks.cancel': {
+      const record = exactObject(value, ['ok'])
+      if (record.ok !== true) return fail()
+      return Object.freeze({ ok: true })
     }
   }
 }

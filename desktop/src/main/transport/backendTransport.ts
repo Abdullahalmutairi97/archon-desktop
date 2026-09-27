@@ -1,11 +1,12 @@
 import { isIP } from 'node:net'
+import { randomUUID } from 'node:crypto'
 import type {
   ConnectionProbeResult,
   JsonRecord,
   OperationMap,
   OperationName,
 } from '../../shared/bridge/types'
-import { isOperationName, parseOperationPayload } from '../../shared/bridge/validation'
+import { BRIDGE_CHANNELS, isOperationName, parseBridgeResponse, parseOperationPayload } from '../../shared/bridge/validation'
 import {
   isBoundedIpcPayload,
   type BoundedPayloadLimits,
@@ -18,6 +19,27 @@ export const READ_ONLY_OPERATIONS: readonly OperationName[] = Object.freeze([
   'tasks.list',
   'events.cursor',
 ])
+
+export const TASK_OPERATIONS: readonly OperationName[] = Object.freeze([
+  'runtimes.list',
+  'tasks.submit',
+  'tasks.get',
+  'tasks.events',
+  'tasks.cancel',
+])
+
+const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Object.freeze({
+  readiness: 'GET',
+  'projects.list': 'GET',
+  'sessions.list': 'GET',
+  'tasks.list': 'GET',
+  'events.cursor': 'GET',
+  'runtimes.list': 'GET',
+  'tasks.submit': 'POST',
+  'tasks.get': 'GET',
+  'tasks.events': 'GET',
+  'tasks.cancel': 'POST',
+})
 
 export const MAX_BACKEND_RESPONSE_BYTES = 2 * 1024 * 1024
 
@@ -36,6 +58,11 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'sessions.list': '/api/sessions',
   'tasks.list': '/api/tasks',
   'events.cursor': '/api/events/cursor',
+  'runtimes.list': '/api/runtimes',
+  'tasks.submit': '/api/tasks',
+  'tasks.get': '/api/tasks',
+  'tasks.events': '/api/tasks',
+  'tasks.cancel': '/api/tasks',
 })
 
 const SAFE_MESSAGES = Object.freeze({
@@ -252,7 +279,15 @@ function operationUrl(
   operation: OperationName,
   payload: OperationMap[OperationName]['payload'],
 ): URL {
-  const url = new URL(`${basePath}${OPERATION_PATHS[operation]}`, origin)
+  let path = `${basePath}${OPERATION_PATHS[operation]}`
+  if (operation === 'tasks.get' || operation === 'tasks.events' || operation === 'tasks.cancel') {
+    const taskPayload = payload as OperationMap['tasks.get']['payload']
+    const taskId = encodeURIComponent(taskPayload.taskId)
+    path += `/${taskId}`
+    if (operation === 'tasks.events') path += '/events'
+    if (operation === 'tasks.cancel') path += '/cancel'
+  }
+  const url = new URL(path, origin)
   if (operation === 'sessions.list') {
     const listPayload = payload as OperationMap['sessions.list']['payload']
     if (listPayload.projectId !== undefined) url.searchParams.set('project_id', listPayload.projectId)
@@ -260,24 +295,39 @@ function operationUrl(
   } else if (operation === 'tasks.list') {
     const listPayload = payload as OperationMap['tasks.list']['payload']
     if (listPayload.limit !== undefined) url.searchParams.set('limit', String(listPayload.limit))
+  } else if (operation === 'tasks.events') {
+    const eventPayload = payload as OperationMap['tasks.events']['payload']
+    url.searchParams.set('after', String(eventPayload.after))
   }
   return url
 }
 
-function isSupportedResult(operation: OperationName, value: unknown): value is JsonRecord {
+function isSupportedResult(
+  operation: OperationName,
+  payload: OperationMap[OperationName]['payload'],
+  value: unknown,
+): value is JsonRecord {
   if (!isBoundedIpcPayload(value, RESPONSE_PAYLOAD_LIMITS) || !isRecord(value)) return false
-  switch (operation) {
-    case 'readiness':
-      return isReadinessResponse(value)
-    case 'projects.list':
-    case 'sessions.list':
-    case 'tasks.list': {
-      const key = operation === 'projects.list' ? 'projects' : operation === 'sessions.list' ? 'sessions' : 'tasks'
-      const rows = value[key]
-      return Array.isArray(rows) && rows.length <= 2_000 && rows.every(isRecord)
+  if (operation === 'readiness') return isReadinessResponse(value)
+  try {
+    parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, value, operation)
+    if (operation === 'tasks.get') {
+      const requestedTaskId = (payload as OperationMap['tasks.get']['payload']).taskId
+      return isRecord(value.task) && value.task.id === requestedTaskId
     }
-    case 'events.cursor':
-      return Number.isSafeInteger(value.cursor) && (value.cursor as number) >= 0
+    if (operation === 'tasks.events') {
+      const { taskId, after } = payload as OperationMap['tasks.events']['payload']
+      return Array.isArray(value.events) && value.events.every((event) =>
+        isRecord(event) &&
+        event.task_id === taskId &&
+        typeof event.seq === 'number' &&
+        Number.isSafeInteger(event.seq) &&
+        event.seq > after,
+      )
+    }
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -287,8 +337,24 @@ function checkResponseStatus(operation: OperationName, response: Response): void
   }
   if (response.status === 401 || response.status === 403) throw new BackendTransportError('unauthorized')
   if (operation === 'readiness' && (response.status === 200 || response.status === 503)) return
+  if (operation === 'tasks.submit') {
+    if (response.status === 202) return
+    throw new BackendTransportError('http_error')
+  }
   if (operation !== 'readiness' && response.status === 200) return
   throw new BackendTransportError('http_error')
+}
+
+function requestBody(operation: OperationName, payload: OperationMap[OperationName]['payload']): string | undefined {
+  if (operation !== 'tasks.submit') return undefined
+  const submitPayload = payload as OperationMap['tasks.submit']['payload']
+  return JSON.stringify({
+    prompt: submitPayload.prompt,
+    project_id: submitPayload.projectId,
+    profile: 'prime',
+    approval_mode: 'auto',
+    chat_only: false,
+  })
 }
 
 async function readBoundedBody(response: Response): Promise<Uint8Array> {
@@ -359,7 +425,7 @@ function generationChanged(transport: BackendTransport, generation: number): boo
   return transport.generation !== generation
 }
 
-/** Fixed-route, memory-only backend transport for the reviewed B1 operations. */
+/** Fixed-route, memory-only transport for read-only state plus narrow Prime task actions. */
 export class BackendTransport {
   private readonly fetchImpl: BackendFetch
   private activeConnection: ActiveConnection | undefined
@@ -432,12 +498,21 @@ export class BackendTransport {
         operation,
         normalizedPayload as OperationMap[OperationName]['payload'],
       )
+      const body = requestBody(operation, normalizedPayload as OperationMap[OperationName]['payload'])
+      const headers: Record<string, string> = {
+        Accept: 'application/json',
+        Authorization: `Bearer ${connection.token}`,
+      }
+      if (operation === 'tasks.submit') {
+        headers['Content-Type'] = 'application/json'
+        // Generate once per user invocation. This transport never retries an
+        // ambiguous POST, and the renderer never chooses or receives this key.
+        headers['Idempotency-Key'] = randomUUID()
+      }
       const response = await this.fetchImpl(url, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${connection.token}`,
-        },
+        method: OPERATION_METHODS[operation],
+        headers,
+        ...(body === undefined ? {} : { body }),
         redirect: 'manual',
         signal: controller.signal,
       })
@@ -451,7 +526,9 @@ export class BackendTransport {
         throw new BackendTransportError('connection_changed')
       }
       const result = parseJsonResponse(bytes, response.headers.get('content-type'))
-      if (!isSupportedResult(operation, result)) throw new BackendTransportError('invalid_response')
+      if (!isSupportedResult(operation, normalizedPayload as OperationMap[OperationName]['payload'], result)) {
+        throw new BackendTransportError('invalid_response')
+      }
       if (
         operation === 'readiness' &&
         ((response.status === 503 && result.dispatch_ready !== false) ||

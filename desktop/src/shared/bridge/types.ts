@@ -1,9 +1,9 @@
 /**
  * The finite renderer/main contract for the authored desktop build.
  *
- * Operations deliberately describe read-only API surfaces only. Additions must
- * be reviewed with the main-process transport and must not accept paths,
- * commands, channels, or backend URLs from the renderer.
+ * Operations are finite reviewed API surfaces. Task submission and cancellation
+ * are the only bounded mutations; renderer payloads never accept paths,
+ * commands, channels, backend URLs, or idempotency keys.
  */
 
 export type JsonPrimitive = string | number | boolean | null
@@ -54,6 +54,52 @@ export interface TasksListPayload {
   limit?: number
 }
 
+export type RuntimeModeRecord = JsonRecord & {
+  id: string
+  label: string
+  restricted: boolean
+}
+
+export type RuntimeRecord = JsonRecord & {
+  id: 'prime' | 'pi'
+  aliases: readonly string[]
+  available: boolean
+  availability_check: string
+  version: string | null
+  version_verified: boolean
+  availability_note: string
+  modes: readonly RuntimeModeRecord[]
+  chat_only: boolean
+  sandboxed: boolean
+}
+
+export type TaskRecord = JsonRecord & {
+  id: string
+  status: string
+}
+
+export type TaskEventRecord = JsonRecord & {
+  seq: number
+  task_id: string
+  type: string
+  data: JsonValue
+  created_at: string
+  attempt_id: string | null
+}
+
+export interface TaskSubmitPayload {
+  projectId: string
+  prompt: string
+}
+
+export interface TaskByIdPayload {
+  taskId: string
+}
+
+export interface TaskEventsPayload extends TaskByIdPayload {
+  after: number
+}
+
 export interface OperationMap {
   readiness: {
     payload: EmptyPayload
@@ -74,6 +120,26 @@ export interface OperationMap {
   'events.cursor': {
     payload: EmptyPayload
     result: { cursor: number }
+  }
+  'runtimes.list': {
+    payload: EmptyPayload
+    result: { runtimes: readonly RuntimeRecord[] }
+  }
+  'tasks.submit': {
+    payload: TaskSubmitPayload
+    result: { task: TaskRecord }
+  }
+  'tasks.get': {
+    payload: TaskByIdPayload
+    result: { task: TaskRecord }
+  }
+  'tasks.events': {
+    payload: TaskEventsPayload
+    result: { events: readonly TaskEventRecord[] }
+  }
+  'tasks.cancel': {
+    payload: TaskByIdPayload
+    result: { ok: true }
   }
 }
 

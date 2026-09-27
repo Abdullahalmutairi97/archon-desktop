@@ -140,10 +140,10 @@ export function ConnectionPanel({ bridge }: { bridge?: DesktopBridge }) {
 
   const status = statusLabel(description, probe)
   return <section className="collection-view connection-view" aria-label="Desktop connection">
-    <div className="collection-intro"><span className="eyebrow">SERVER CONNECTION</span><p>Inspect backend readiness and counts through the desktop bridge. Chat, files and tools remain fixture views.</p></div>
+    <div className="collection-intro"><span className="eyebrow">SERVER CONNECTION</span><p>Inspect backend readiness and counts through the desktop bridge. Server work can submit Prime tasks after confirmation; chat, files and workbench remain fixtures.</p></div>
     <div className="connection-layout">
       <form className="connection-card" onSubmit={(event) => { void connect(event) }}>
-        <div className="connection-card-heading"><h2>Connect to Archon</h2><span className="fixture-tag">READ ONLY</span></div>
+        <div className="connection-card-heading"><h2>Connect to Archon</h2><span className="fixture-tag">MAIN PROCESS</span></div>
         <label htmlFor="connection-url">Server address</label>
         <input id="connection-url" type="url" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://archon.example" autoComplete="url" disabled={!bridge || busy} />
         <label htmlFor="connection-token">Device token</label>
