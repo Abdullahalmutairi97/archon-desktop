@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import './WorkspaceFileBrowser.css'
+import { clearDraft, readDraft, writeDraft } from './draftStore'
 
 export interface WorkspaceFileEntry {
   name: string
@@ -228,6 +229,7 @@ export function WorkspaceFileBrowser({
   const [listingState, setListingState] = useState<ListingState | null>(null)
   const [readState, setReadState] = useState<ReadState | null>(null)
   const [editingState, setEditingState] = useState<{ workspaceId: string; path: string; draft: string } | null>(null)
+  const [recoveredState, setRecoveredState] = useState<{ workspaceId: string; path: string } | null>(null)
   const [saveFeedbackState, setSaveFeedbackState] = useState<SaveFeedback | null>(null)
   const [creatingState, setCreatingState] = useState<{ workspaceId: string; name: string; content: string } | null>(null)
   const [createFeedbackState, setCreateFeedbackState] = useState<CreateFeedback | null>(null)
@@ -358,7 +360,14 @@ export function WorkspaceFileBrowser({
   function beginEdit(): void {
     if (savePending || !selectedPath || currentRead?.status !== 'ready' || !readOnlyFilePort.write || !canEditContent(currentRead.content, currentRead.truncated)) return
     setSaveFeedbackState(null)
+    const recovered = readDraft(workspaceId, selectedPath)
+    if (recovered !== null && recovered !== currentRead.content) {
+      setEditingState({ workspaceId, path: selectedPath, draft: recovered })
+      setRecoveredState({ workspaceId, path: selectedPath })
+      return
+    }
     setEditingState({ workspaceId, path: selectedPath, draft: currentRead.content })
+    setRecoveredState(null)
   }
 
   function beginCreate(): void {
@@ -453,7 +462,9 @@ export function WorkspaceFileBrowser({
       }
       if (readGeneration.current === generation && selectedState?.workspaceId === workspaceId && selectedState.path === filePath) {
         setReadState({ workspaceId, path: filePath, status: 'ready', content: result.content, truncated: false })
+        clearDraft(workspaceId, filePath)
         setEditingState(null)
+        setRecoveredState(null)
         setSaveFeedbackState(null)
         diffGeneration.current += 1
         setDiffState(null)
@@ -471,7 +482,9 @@ export function WorkspaceFileBrowser({
 
   function cancelEdit(): void {
     if (savePending) return
+    if (currentEditing) clearDraft(workspaceId, currentEditing.path)
     setEditingState(null)
+    setRecoveredState(null)
     setSaveFeedbackState(null)
   }
 
@@ -642,6 +655,8 @@ export function WorkspaceFileBrowser({
           {currentEditing
             ? <form className="workspace-file-editor" onSubmit={(event) => { void saveEdit(event) }}>
               <label htmlFor="workspace-file-editor-content">Edit {selectedPath}</label>
+              {recoveredState?.workspaceId === workspaceId && recoveredState.path === selectedPath
+                && <p className="workspace-file-message" role="status">Recovered an unsaved draft from this window's last session. Cancel to discard it.</p>}
               <textarea
                 id="workspace-file-editor-content"
                 aria-label={`Edit ${selectedPath}`}
@@ -649,7 +664,11 @@ export function WorkspaceFileBrowser({
                 maxLength={EDIT_LIMIT_CHARS}
                 spellCheck={false}
                 disabled={savePending}
-                onChange={(event) => setEditingState({ ...currentEditing, draft: event.currentTarget.value })}
+                onChange={(event) => {
+                  const next = event.currentTarget.value
+                  setEditingState({ ...currentEditing, draft: next })
+                  writeDraft(workspaceId, currentEditing.path, next)
+                }}
               />
               <div className="workspace-file-editor-actions">
                 <span>{currentEditIsDirty ? 'Unsaved changes' : 'No changes'} · {currentEditing.draft.length} / {EDIT_LIMIT_CHARS} characters · {byteLabel(currentEditByteLength)} / 16 KiB</span>

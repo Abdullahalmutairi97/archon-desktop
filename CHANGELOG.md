@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — editor draft recovery
+
+- Persist small-file editor drafts locally and bounded (max 8 drafts, 16 KiB per file, 128 KiB total, oldest-first eviction). Opening a file with a recovered draft that differs from the server content restores it with a visible notice; saving or cancelling clears it. Only file text is stored, never credentials, and storage failures degrade to no persistence.
+
 ## Unreleased — streaming attach transport
 
 - Stream an active attach lease's screen to the renderer: main polls the bounded attach-screen operation and pushes validated frames over a dedicated event channel, and the renderer subscribes for live updates. Watch/unwatch are finite bridge calls; frames with a wrong attach id or bad shape are dropped.
