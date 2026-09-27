@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pwd
+import ipaddress
 from pathlib import Path
 
 from pydantic import Field
@@ -108,5 +109,12 @@ class Settings(BaseSettings):
 
     @property
     def local_server_url(self) -> str:
-        host = f"[{self.bind_host}]" if ":" in self.bind_host else self.bind_host
+        host_value = self.bind_host
+        try:
+            address = ipaddress.ip_address(host_value)
+            if address.version == 6 and address.is_loopback:
+                host_value = "::1"
+        except ValueError:
+            pass
+        host = f"[{host_value}]" if ":" in host_value else host_value
         return f"http://{host}:{self.bind_port}"

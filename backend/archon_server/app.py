@@ -42,6 +42,7 @@ from .services.telegram import TelegramBotClient, TelegramBridge
 from .services.kanban import KanbanService
 from .services.voice import VoiceService
 from .services.workspace import ProjectService, SessionService, PrimeSessionService
+from .workspace_provisioner import WorkspaceCheckoutProvisioner
 from .tasks import TaskEngine, TaskStore, hash_request_payload
 from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
 from .runner_ownership import RunnerOwnershipLock
@@ -130,6 +131,13 @@ class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     path: str | None = Field(default=None, max_length=1000)
     description: str = Field(default="", max_length=2000)
+
+
+class WorkspaceProvisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=200)
+    revision: str = Field(pattern=r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 
 
 class SessionProjectUpdate(BaseModel):
@@ -358,6 +366,22 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         settings.config_path, settings.profile_home / "provider_models_cache.json", settings.prime_auth_path
     )
     projects = ProjectService(settings.profile_home / "projects.db")
+    workspace_checkout_provisioner: WorkspaceCheckoutProvisioner | None = None
+
+    def workspace_checkout_service() -> WorkspaceCheckoutProvisioner:
+        nonlocal workspace_checkout_provisioner
+        if workspace_checkout_provisioner is None:
+            # The checkout location and owner are server-derived. This records a
+            # Git checkout profile only; it does not establish process or OS isolation.
+            workspace_checkout_provisioner = WorkspaceCheckoutProvisioner(
+                database=store.db,
+                projects=projects,
+                workspace_root=settings.data_dir.expanduser() / "workspaces",
+                owner_id=f"local-uid:{os.geteuid()}",
+                isolation_profile="git-checkout",
+            )
+        return workspace_checkout_provisioner
+
     sessions = SessionService(settings.profile_home / "state.db", projects, store.db)
     prime_sessions = PrimeSessionService(
         store.db,
@@ -856,6 +880,24 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         if not projects.delete(project_id):
             raise HTTPException(status_code=404, detail="Project not found")
         return {"ok": True, "files_preserved": True}
+
+    @app.post("/api/workspaces", dependencies=protected)
+    def provision_workspace(payload: WorkspaceProvisionRequest):
+        workspace = workspace_checkout_service().provision(
+            project_id=payload.project_id,
+            revision=payload.revision,
+            generation=1,
+        )
+        # Return only the persisted workspace identity and its authoritative root.
+        # The endpoint creates a checkout; it does not execute code in it.
+        return {"workspace": {
+            "workspace_id": workspace["workspace_id"],
+            "root": workspace["root"],
+            "project_id": workspace["project_id"],
+            "base_revision": workspace["base_revision"],
+            "head_revision": workspace["head_revision"],
+            "generation": workspace["generation"],
+        }}
 
     @app.get("/api/sessions", dependencies=protected)
     def get_sessions(limit: int = Query(120, ge=1, le=500), project_id: str | None = None):

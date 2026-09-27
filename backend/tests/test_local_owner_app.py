@@ -22,6 +22,11 @@ def pair(path):
         return json.loads(stream.readline())["credential"]
 
 
+def test_local_pairing_origin_canonicalizes_expanded_ipv6_loopback(tmp_path):
+    settings = Settings(data_dir=tmp_path, bind_host="0:0:0:0:0:0:0:1", bind_port=8787)
+    assert settings.local_server_url == "http://[::1]:8787"
+
+
 def test_local_owner_pairing_bootstraps_existing_api_without_blank_auth(tmp_path):
     settings = Settings(
         archon_root=tmp_path,
