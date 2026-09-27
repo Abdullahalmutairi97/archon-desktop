@@ -77,8 +77,9 @@ describe('backend transport', () => {
   it('maps trusted workspace console calls to fixed routes without retrying input', async () => {
     const workspaceId = `workspace-${'a'.repeat(32)}`
     const sessionId = `wterm-${'b'.repeat(32)}`
+    const attachId = `watt-${'c'.repeat(32)}`
     const fetcher = vi.fn<BackendFetch>(async (url, init) => response({ terminals: [] },
-      url.pathname.endsWith('/terminals') && init.method === 'POST' ? 201 : 200))
+      (url.pathname.endsWith('/terminals') || url.pathname.endsWith('/attach')) && init.method === 'POST' ? 201 : 200))
     const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
     const requests = [
       { operation: 'workspace.terminals.list', workspaceId } as const,
@@ -87,6 +88,11 @@ describe('backend transport', () => {
       { operation: 'workspace.terminals.input', workspaceId, sessionId, line: 'pwd' } as const,
       { operation: 'workspace.terminals.interrupt', workspaceId, sessionId } as const,
       { operation: 'workspace.terminals.stop', workspaceId, sessionId } as const,
+      { operation: 'workspace.terminals.attach.open', workspaceId, sessionId, expectedGeneration: 4, mode: 'control' } as const,
+      { operation: 'workspace.terminals.attach.claim', workspaceId, sessionId, ticket: attachId } as const,
+      { operation: 'workspace.terminals.attach.screen', workspaceId, sessionId, attachId, lines: 40 } as const,
+      { operation: 'workspace.terminals.attach.input', workspaceId, sessionId, attachId, events: [{ type: 'text', value: 'ls' }, { type: 'key', value: 'Enter' }] } as const,
+      { operation: 'workspace.terminals.attach.detach', workspaceId, sessionId, attachId } as const,
     ]
     for (const request of requests) await transport.invokeLocalCodex(request)
 
@@ -97,8 +103,26 @@ describe('backend transport', () => {
       [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/input`, 'POST', JSON.stringify({ line: 'pwd' })],
       [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/interrupt`, 'POST', undefined],
       [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}`, 'DELETE', JSON.stringify({ confirm: true })],
+      [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/attach`, 'POST', JSON.stringify({ expectedGeneration: 4, mode: 'control' })],
+      [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/attach/${attachId}/claim`, 'POST', undefined],
+      [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/attach/${attachId}/screen?lines=40`, 'GET', undefined],
+      [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/attach/${attachId}/input`, 'POST', JSON.stringify({ events: [{ type: 'text', value: 'ls' }, { type: 'key', value: 'Enter' }] })],
+      [`/api/local/workspaces/${workspaceId}/terminals/${sessionId}/attach/${attachId}`, 'DELETE', undefined],
     ])
     expect(fetcher.mock.calls.every(([, init]) => (init?.headers as Record<string, string>).Authorization === `Bearer ${localConnection.token}`)).toBe(true)
+  })
+
+  it('rejects disallowed interactive key frames before any request', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => response({ sent: true }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    await expect(transport.invokeLocalCodex({
+      operation: 'workspace.terminals.attach.input',
+      workspaceId: `workspace-${'a'.repeat(32)}`,
+      sessionId: `wterm-${'b'.repeat(32)}`,
+      attachId: `watt-${'c'.repeat(32)}`,
+      events: [{ type: 'key', value: 'F13' }],
+    } as never)).rejects.toMatchObject({ code: 'invalid_payload' })
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('does not retry ambiguous line input', async () => {

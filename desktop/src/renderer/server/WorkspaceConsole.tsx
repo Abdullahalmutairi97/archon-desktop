@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import type { WorkspaceConsoleBridge, WorkspaceConsoleScreenDto, WorkspaceConsoleTerminalDto } from '../../shared/bridge/types'
+import type { WorkspaceConsoleBridge, WorkspaceConsoleScreenDto, WorkspaceConsoleTerminalDto, WorkspaceConsoleKeyEvent, WorkspaceConsoleNamedKey } from '../../shared/bridge/types'
 import './WorkspaceConsole.css'
 
 export function WorkspaceConsole({
@@ -17,6 +17,8 @@ export function WorkspaceConsole({
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [screen, setScreen] = useState<WorkspaceConsoleScreenDto | null>(null)
   const [line, setLine] = useState('')
+  const [lease, setLease] = useState<{ attachId: string; mode: 'control' | 'read-only' } | null>(null)
+  const [interactiveLine, setInteractiveLine] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmStop, setConfirmStop] = useState(false)
   const [message, setMessage] = useState<{ kind: 'status' | 'error' | 'ambiguous'; text: string } | null>(null)
@@ -83,6 +85,7 @@ export function WorkspaceConsole({
   const selectedSessionRunning = terminals.some((item) => item.sessionId === sessionId && item.state === 'running')
   useEffect(() => {
     setScreen(null)
+    setLease(null)
     if (!sessionId) return
     void refreshScreen()
     if (!selectedSessionRunning) return
@@ -176,6 +179,80 @@ export function WorkspaceConsole({
   }
 
   const canInteract = pairingAvailable && terminals.some((item) => item.sessionId === sessionId && item.state === 'running')
+  const selectedRunning = canInteract
+
+  async function attachSession(mode: 'control' | 'read-only'): Promise<void> {
+    if (requestLock.current || !pairingAvailable || !sessionId || !selectedRunning) return
+    const requestedIdentity = identity
+    const requestedSessionId = sessionId
+    requestLock.current = true
+    setBusy(true)
+    setMessage(null)
+    try {
+      const ticket = await bridge.attach({ workspaceId, sessionId: requestedSessionId, expectedGeneration: generation, mode })
+      const claimed = await bridge.claim({ workspaceId, sessionId: requestedSessionId, ticket: ticket.ticket })
+      if (identityRef.current !== requestedIdentity || sessionIdRef.current !== requestedSessionId) return
+      setLease({ attachId: claimed.attachId, mode: claimed.mode })
+      setMessage({ kind: 'status', text: mode === 'control' ? 'Interactive control attached.' : 'Read-only attach open. Input stays disabled.' })
+    } catch {
+      if (identityRef.current === requestedIdentity && sessionIdRef.current === requestedSessionId) {
+        setMessage({ kind: 'error', text: 'Could not open an interactive attach. Another client may hold control, or the session changed. Refresh before retrying.' })
+      }
+    } finally {
+      requestLock.current = false
+      if (identityRef.current === requestedIdentity) setBusy(false)
+    }
+  }
+
+  async function detachSession(): Promise<void> {
+    const active = lease
+    if (!active || requestLock.current || !sessionId) return
+    const requestedIdentity = identity
+    const requestedSessionId = sessionId
+    requestLock.current = true
+    setBusy(true)
+    try {
+      await bridge.detach({ workspaceId, sessionId: requestedSessionId, attachId: active.attachId })
+      if (identityRef.current !== requestedIdentity || sessionIdRef.current !== requestedSessionId) return
+      setLease(null)
+      setMessage({ kind: 'status', text: 'Interactive attach released. The shell keeps running.' })
+    } catch {
+      if (identityRef.current === requestedIdentity && sessionIdRef.current === requestedSessionId) {
+        setMessage({ kind: 'error', text: 'Could not confirm the attach release. The lease may have expired. Refresh the session list.' })
+      }
+    } finally {
+      requestLock.current = false
+      if (identityRef.current === requestedIdentity) setBusy(false)
+    }
+  }
+
+  async function sendKeys(events: readonly WorkspaceConsoleKeyEvent[]): Promise<void> {
+    const active = lease
+    if (!active || active.mode !== 'control' || requestLock.current || !pairingAvailable || !sessionId) return
+    const requestedIdentity = identity
+    const requestedSessionId = sessionId
+    const requestedAttachId = active.attachId
+    requestLock.current = true
+    setBusy(true)
+    setMessage(null)
+    try {
+      await bridge.attachInput({ workspaceId, sessionId: requestedSessionId, attachId: requestedAttachId, events })
+      if (identityRef.current !== requestedIdentity || sessionIdRef.current !== requestedSessionId) return
+      if (await refreshScreen()) setMessage({ kind: 'status', text: 'Interactive input sent once.' })
+    } catch {
+      if (identityRef.current === requestedIdentity && sessionIdRef.current === requestedSessionId) {
+        setMessage({ kind: 'ambiguous', text: 'The interactive input may have reached the process, but the reply was not confirmed. It was not retried. Refresh the screen before deciding what to do next.' })
+      }
+    } finally {
+      requestLock.current = false
+      if (identityRef.current === requestedIdentity) setBusy(false)
+    }
+  }
+
+  const quickKeys: readonly { label: string; key: WorkspaceConsoleNamedKey }[] = [
+    { label: 'Tab', key: 'Tab' }, { label: '↑', key: 'Up' }, { label: '↓', key: 'Down' },
+    { label: 'Esc', key: 'Escape' }, { label: 'Ctrl-C', key: 'C-c' }, { label: 'Backspace', key: 'BSpace' },
+  ]
 
   return <section className="workspace-console" aria-label="Trusted same-user line console">
     <div className="workspace-console-heading">
@@ -209,5 +286,31 @@ export function WorkspaceConsole({
       <button type="submit" disabled={!canInteract || busy || !line || /[\u0000-\u001f\u007f]/u.test(line) || new TextEncoder().encode(line).byteLength > 4096}>{busy ? 'Working…' : 'Send line'}</button>
     </form>
     {message && <p className={`workspace-console-message console-${message.kind}`} role={message.kind === 'error' || message.kind === 'ambiguous' ? 'alert' : 'status'}>{message.text}</p>}
+    <div className="workspace-console-attach" aria-label="Interactive attach">
+      <h5>Interactive attach</h5>
+      <p>A one-use ticket opens a single input-control lease. Detaching never stops the shell. Read-only attach can watch but never type.</p>
+      {!lease && <div className="workspace-console-session-actions">
+        <button type="button" onClick={() => { void attachSession('control') }} disabled={!canInteract || busy}>Attach control</button>
+        <button type="button" onClick={() => { void attachSession('read-only') }} disabled={!canInteract || busy}>Attach read-only</button>
+      </div>}
+      {lease && <>
+        <p className="workspace-console-lease">Attached ({lease.mode}) · …{lease.attachId.slice(-6)}</p>
+        <div className="workspace-console-keys" aria-label="Control keys">
+          {quickKeys.map((entry) => <button key={entry.key} type="button" disabled={busy || lease.mode !== 'control'} onClick={() => { void sendKeys([{ type: 'key', value: entry.key }]) }}>{entry.label}</button>)}
+        </div>
+        <form className="workspace-console-input" onSubmit={(event) => {
+          event.preventDefault()
+          if (!interactiveLine) return
+          const pending = interactiveLine
+          setInteractiveLine('')
+          void sendKeys([{ type: 'text', value: pending }, { type: 'key', value: 'Enter' }])
+        }}>
+          <label htmlFor="workspace-console-interactive">Interactive input</label>
+          <input id="workspace-console-interactive" type="text" autoComplete="off" maxLength={1024} value={interactiveLine} onChange={(event) => setInteractiveLine(event.currentTarget.value)} disabled={!canInteract || busy || lease.mode !== 'control'} />
+          <button type="submit" disabled={!canInteract || busy || lease.mode !== 'control' || !interactiveLine || /[\u0000-\u001f\u007f]/u.test(interactiveLine) || new TextEncoder().encode(interactiveLine).byteLength > 1024}>Send keys</button>
+        </form>
+        <button type="button" onClick={() => { void detachSession() }} disabled={busy}>Detach</button>
+      </>}
+    </div>
   </section>
 }

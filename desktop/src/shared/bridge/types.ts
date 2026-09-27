@@ -223,6 +223,27 @@ export interface WorkspaceConsoleScreenDto {
   truncated: boolean
 }
 
+export type WorkspaceConsoleNamedKey =
+  | 'Up' | 'Down' | 'Left' | 'Right' | 'Home' | 'End' | 'PageUp' | 'PageDown'
+  | 'BSpace' | 'Tab' | 'BTab' | 'DC' | 'IC' | 'Escape' | 'Enter' | 'Space'
+  | 'C-c' | 'C-d' | 'C-z' | 'C-l' | 'C-a' | 'C-e' | 'C-u' | 'C-k' | 'C-w'
+
+export type WorkspaceConsoleKeyEvent =
+  | { readonly type: 'text'; readonly value: string }
+  | { readonly type: 'key'; readonly value: WorkspaceConsoleNamedKey }
+
+export interface WorkspaceConsoleAttachTicketDto {
+  ticket: string
+  mode: 'control' | 'read-only'
+  expiresAt: string
+}
+
+export interface WorkspaceConsoleAttachLeaseDto {
+  attachId: string
+  mode: 'control' | 'read-only'
+  expiresAt: string
+}
+
 export interface WorkspaceConsoleBridge {
   list(input: { workspaceId: string }): Promise<readonly WorkspaceConsoleTerminalDto[]>
   create(input: { workspaceId: string; expectedGeneration: number }): Promise<WorkspaceConsoleTerminalDto>
@@ -230,6 +251,11 @@ export interface WorkspaceConsoleBridge {
   sendLine(input: { workspaceId: string; sessionId: string; line: string }): Promise<boolean>
   interrupt(input: { workspaceId: string; sessionId: string }): Promise<boolean>
   stop(input: { workspaceId: string; sessionId: string }): Promise<boolean>
+  attach(input: { workspaceId: string; sessionId: string; expectedGeneration: number; mode: 'control' | 'read-only' }): Promise<WorkspaceConsoleAttachTicketDto>
+  claim(input: { workspaceId: string; sessionId: string; ticket: string }): Promise<WorkspaceConsoleAttachLeaseDto>
+  attachScreen(input: { workspaceId: string; sessionId: string; attachId: string; lines: number }): Promise<WorkspaceConsoleScreenDto>
+  attachInput(input: { workspaceId: string; sessionId: string; attachId: string; events: readonly WorkspaceConsoleKeyEvent[] }): Promise<boolean>
+  detach(input: { workspaceId: string; sessionId: string; attachId: string }): Promise<boolean>
 }
 
 export interface OperationMap {

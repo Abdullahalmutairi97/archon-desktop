@@ -17,6 +17,11 @@ describe('WorkspaceConsole', () => {
       sendLine: vi.fn(async () => true),
       interrupt: vi.fn(),
       stop: vi.fn(),
+      attach: vi.fn(),
+      claim: vi.fn(),
+      attachScreen: vi.fn(),
+      attachInput: vi.fn(),
+      detach: vi.fn(),
     }
 
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
@@ -43,6 +48,11 @@ describe('WorkspaceConsole', () => {
       sendLine: vi.fn(async () => { throw new Error('reply lost') }),
       interrupt: vi.fn(async () => true),
       stop: vi.fn(),
+      attach: vi.fn(),
+      claim: vi.fn(),
+      attachScreen: vi.fn(),
+      attachInput: vi.fn(),
+      detach: vi.fn(),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
     expect(await screen.findByText('ready')).toBeInTheDocument()
@@ -65,6 +75,11 @@ describe('WorkspaceConsole', () => {
       sendLine: vi.fn(),
       interrupt: vi.fn(async () => true),
       stop: vi.fn(),
+      attach: vi.fn(),
+      claim: vi.fn(),
+      attachScreen: vi.fn(),
+      attachInput: vi.fn(),
+      detach: vi.fn(),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
     expect(await screen.findByText('running command')).toBeInTheDocument()
@@ -88,6 +103,11 @@ describe('WorkspaceConsole', () => {
       sendLine: vi.fn(),
       interrupt: vi.fn(async () => { throw new Error('outcome unknown') }),
       stop: vi.fn(),
+      attach: vi.fn(),
+      claim: vi.fn(),
+      attachScreen: vi.fn(),
+      attachInput: vi.fn(),
+      detach: vi.fn(),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
     expect(await screen.findByText('running command')).toBeInTheDocument()
@@ -109,10 +129,73 @@ describe('WorkspaceConsole', () => {
       sendLine: vi.fn(),
       interrupt: vi.fn(),
       stop: vi.fn(),
+      attach: vi.fn(),
+      claim: vi.fn(),
+      attachScreen: vi.fn(),
+      attachInput: vi.fn(),
+      detach: vi.fn(),
     }
     render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
     expect(await screen.findByRole('button', { name: 'Interrupt command' })).toBeDisabled()
     expect(screen.getByRole('textbox', { name: 'Send one line' })).toBeDisabled()
     expect(bridge.interrupt).not.toHaveBeenCalled()
+  })
+
+  it('opens a one-use attach lease, sends a control key, and detaches without stopping the shell', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const sessionId = `wterm-${'b'.repeat(32)}`
+    const attachId = `watt-${'c'.repeat(32)}`
+    const bridge: WorkspaceConsoleBridge = {
+      list: vi.fn(async () => [{ sessionId, state: 'running' as const, createdAt: '2026-09-27T00:00:00Z' }]),
+      create: vi.fn(),
+      screen: vi.fn(async () => ({ text: 'pane', truncated: false })),
+      sendLine: vi.fn(),
+      interrupt: vi.fn(),
+      stop: vi.fn(),
+      attach: vi.fn(async () => ({ ticket: attachId, mode: 'control' as const, expiresAt: '2026-09-27T00:00:30Z' })),
+      claim: vi.fn(async () => ({ attachId, mode: 'control' as const, expiresAt: '2026-09-27T00:02:00Z' })),
+      attachScreen: vi.fn(),
+      attachInput: vi.fn(async () => true),
+      detach: vi.fn(async () => true),
+    }
+    render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach control' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Interactive control attached.')
+    expect(bridge.attach).toHaveBeenCalledWith({ workspaceId, sessionId, expectedGeneration: 3, mode: 'control' })
+    expect(bridge.claim).toHaveBeenCalledWith({ workspaceId, sessionId, ticket: attachId })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl-C' }))
+    await waitFor(() => expect(bridge.attachInput).toHaveBeenCalledWith({
+      workspaceId, sessionId, attachId, events: [{ type: 'key', value: 'C-c' }],
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detach' }))
+    await waitFor(() => expect(bridge.detach).toHaveBeenCalledWith({ workspaceId, sessionId, attachId }))
+    expect(bridge.stop).not.toHaveBeenCalled()
+  })
+
+  it('keeps input controls disabled for a read-only attach', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const sessionId = `wterm-${'b'.repeat(32)}`
+    const attachId = `watt-${'c'.repeat(32)}`
+    const bridge: WorkspaceConsoleBridge = {
+      list: vi.fn(async () => [{ sessionId, state: 'running' as const, createdAt: '2026-09-27T00:00:00Z' }]),
+      create: vi.fn(),
+      screen: vi.fn(async () => ({ text: 'pane', truncated: false })),
+      sendLine: vi.fn(),
+      interrupt: vi.fn(),
+      stop: vi.fn(),
+      attach: vi.fn(async () => ({ ticket: attachId, mode: 'read-only' as const, expiresAt: '2026-09-27T00:00:30Z' })),
+      claim: vi.fn(async () => ({ attachId, mode: 'read-only' as const, expiresAt: '2026-09-27T00:02:00Z' })),
+      attachScreen: vi.fn(),
+      attachInput: vi.fn(async () => true),
+      detach: vi.fn(async () => true),
+    }
+    render(<WorkspaceConsole bridge={bridge} workspaceId={workspaceId} generation={3} pairingAvailable />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach read-only' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Read-only attach open.')
+    expect(screen.getByLabelText('Interactive input')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Ctrl-C' })).toBeDisabled()
+    expect(bridge.attachInput).not.toHaveBeenCalled()
   })
 })

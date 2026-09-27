@@ -15,8 +15,11 @@ from archon_server.app import create_app
 from archon_server.config import Settings
 from archon_server.local_pairing import LOCAL_PAIRING_AUDIENCE
 from archon_server.services.workspace_terminal import (
+    WorkspaceTerminalAttachBusy,
+    WorkspaceTerminalAttachUnavailable,
     WorkspaceTerminalCapacity,
     WorkspaceTerminalInterruptOutcomeUnknown,
+    WorkspaceTerminalReadOnly,
     WorkspaceTerminalService,
     WorkspaceTerminalUnavailable,
 )
@@ -102,6 +105,8 @@ def _fake_tmux(tmp_path: Path) -> Path:
         + "        event = {'type': 'enter'}\n"
         + "    elif len(args) == 6 and args[5] == 'C-c':\n"
         + "        event = {'type': 'interrupt'}\n"
+        + "    elif len(args) == 6 and args[5] in {'Up','Down','Left','Right','Home','End','PageUp','PageDown','BSpace','Tab','BTab','DC','IC','Escape','Space','C-d','C-z','C-l','C-a','C-e','C-u','C-k','C-w'}:\n"
+        + "        event = {'type': 'key', 'value': args[5]}\n"
         + "    else:\n"
         + "        print('bad send-keys form', file=sys.stderr); raise SystemExit(64)\n"
         + "    try:\n"
@@ -430,6 +435,63 @@ def test_local_owner_workspace_terminal_api_contract(tmp_path, monkeypatch):
         assert sent.status_code == 200 and sent.json() == {"sent": True}
         assert client.post(f"{session_url}/input", headers=headers, json={"line": "echo a\necho b"}).status_code == 422
 
+        attach = client.post(
+            f"{session_url}/attach",
+            headers=headers,
+            json={"expectedGeneration": 2, "mode": "control"},
+        )
+        assert attach.status_code == 201
+        assert attach.headers["cache-control"] == "no-store"
+        ticket = attach.json()["attachment"]
+        assert set(ticket) == {"ticket", "mode", "expiresAt"}
+        assert ticket["mode"] == "control" and ticket["ticket"].startswith("watt-")
+        claimed = client.post(f"{session_url}/attach/{ticket['ticket']}/claim", headers=headers)
+        assert claimed.status_code == 200
+        lease = claimed.json()["attachment"]
+        assert lease["attachId"] == ticket["ticket"] and lease["mode"] == "control"
+        assert client.post(f"{session_url}/attach/{ticket['ticket']}/claim", headers=headers).status_code == 410
+        attached_screen = client.get(f"{session_url}/attach/{lease['attachId']}/screen?lines=40", headers=headers)
+        assert attached_screen.status_code == 200
+        assert attached_screen.json() == {"text": "fake pane output\n", "truncated": False}
+        attached_input = client.post(
+            f"{session_url}/attach/{lease['attachId']}/input",
+            headers=headers,
+            json={"events": [{"type": "text", "value": "echo hi"}, {"type": "key", "value": "Enter"}]},
+        )
+        assert attached_input.status_code == 200 and attached_input.json() == {"sent": True}
+        invalid_key = client.post(
+            f"{session_url}/attach/{lease['attachId']}/input",
+            headers=headers,
+            json={"events": [{"type": "key", "value": "F13"}]},
+        )
+        assert invalid_key.status_code == 400
+
+        read_only = client.post(
+            f"{session_url}/attach",
+            headers=headers,
+            json={"expectedGeneration": 2, "mode": "read-only"},
+        )
+        assert read_only.status_code == 201
+        read_only_lease = client.post(
+            f"{session_url}/attach/{read_only.json()['attachment']['ticket']}/claim",
+            headers=headers,
+        ).json()["attachment"]
+        denied = client.post(
+            f"{session_url}/attach/{read_only_lease['attachId']}/input",
+            headers=headers,
+            json={"events": [{"type": "key", "value": "Tab"}]},
+        )
+        assert denied.status_code == 403
+        assert client.request(
+            "DELETE", f"{session_url}/attach/{read_only_lease['attachId']}", headers=headers,
+        ).status_code == 200
+        assert client.request(
+            "DELETE", f"{session_url}/attach/{lease['attachId']}", headers=headers,
+        ).status_code == 200
+        assert client.request(
+            "DELETE", f"{session_url}/attach/{lease['attachId']}", headers=headers,
+        ).status_code == 410
+
         (tmp_path / "fail-enter").touch()
         uncertain = client.post(
             f"{session_url}/input",
@@ -452,3 +514,88 @@ def test_local_owner_workspace_terminal_api_contract(tmp_path, monkeypatch):
         client.app.state.local_workspace_terminals.tmux_executable = None
         unavailable = client.get(collection_url, headers=headers)
         assert unavailable.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_interactive_attach_one_use_ticket_and_control_lease(tmp_path):
+    service, _ = _service(tmp_path)
+    created = await service.create(WORKSPACE_ID, expected_generation=1)
+    session_id = created["sessionId"]
+    ticket = await service.open_attach(
+        WORKSPACE_ID, session_id, expected_generation=1, mode="control",
+    )
+    assert ticket["ticket"].startswith("watt-") and ticket["mode"] == "control"
+    lease = await service.claim_attach(WORKSPACE_ID, session_id, ticket["ticket"])
+    assert lease["attachId"] == ticket["ticket"] and lease["mode"] == "control"
+    with pytest.raises(WorkspaceTerminalAttachUnavailable):
+        await service.claim_attach(WORKSPACE_ID, session_id, ticket["ticket"])
+    screen = await service.attach_screen(WORKSPACE_ID, session_id, lease["attachId"], lines=40)
+    assert screen == {"text": "fake pane output\n", "truncated": False}
+    assert await service.attach_send(WORKSPACE_ID, session_id, lease["attachId"], [
+        {"type": "text", "value": "echo hi"},
+        {"type": "key", "value": "Enter"},
+    ]) == {"sent": True}
+    events = json.loads((tmp_path / "input.json").read_text(encoding="utf-8"))
+    assert events[-2] == {"type": "literal", "value": "echo hi"}
+    assert events[-1] == {"type": "enter"}
+    await service.detach_attach(WORKSPACE_ID, session_id, lease["attachId"])
+    with pytest.raises(WorkspaceTerminalAttachUnavailable):
+        await service.attach_screen(WORKSPACE_ID, session_id, lease["attachId"])
+    # Detaching one client never kills the surviving shell.
+    assert [row["sessionId"] for row in await service.list(WORKSPACE_ID)] == [session_id]
+
+
+@pytest.mark.asyncio
+async def test_interactive_attach_exclusive_control_and_read_only_denial(tmp_path):
+    service, _ = _service(tmp_path)
+    created = await service.create(WORKSPACE_ID, expected_generation=1)
+    session_id = created["sessionId"]
+    first = await service.open_attach(WORKSPACE_ID, session_id, expected_generation=1, mode="control")
+    await service.claim_attach(WORKSPACE_ID, session_id, first["ticket"])
+    second = await service.open_attach(WORKSPACE_ID, session_id, expected_generation=1, mode="control")
+    with pytest.raises(WorkspaceTerminalAttachBusy):
+        await service.claim_attach(WORKSPACE_ID, session_id, second["ticket"])
+    read_only = await service.open_attach(WORKSPACE_ID, session_id, expected_generation=1, mode="read-only")
+    lease = await service.claim_attach(WORKSPACE_ID, session_id, read_only["ticket"])
+    with pytest.raises(WorkspaceTerminalReadOnly):
+        await service.attach_send(WORKSPACE_ID, session_id, lease["attachId"], [
+            {"type": "key", "value": "C-c"},
+        ])
+    assert (await service.attach_screen(WORKSPACE_ID, session_id, lease["attachId"]))["text"]
+
+
+@pytest.mark.asyncio
+async def test_interactive_attach_rejects_disallowed_or_oversized_frames(tmp_path):
+    service, _ = _service(tmp_path)
+    created = await service.create(WORKSPACE_ID, expected_generation=1)
+    session_id = created["sessionId"]
+    ticket = await service.open_attach(WORKSPACE_ID, session_id, expected_generation=1, mode="control")
+    lease = (await service.claim_attach(WORKSPACE_ID, session_id, ticket["ticket"]))["attachId"]
+    with pytest.raises(ValueError):
+        await service.attach_send(WORKSPACE_ID, session_id, lease, [{"type": "key", "value": "F13"}])
+    with pytest.raises(ValueError):
+        await service.attach_send(WORKSPACE_ID, session_id, lease, [{"type": "text", "value": "bad\n"}])
+    with pytest.raises(ValueError):
+        await service.attach_send(WORKSPACE_ID, session_id, lease, [
+            {"type": "text", "value": "x" * 2000},
+        ])
+    with pytest.raises(ValueError):
+        await service.attach_send(WORKSPACE_ID, session_id, lease, [])
+    with pytest.raises(ValueError):
+        await service.attach_send(WORKSPACE_ID, session_id, lease, [
+            {"type": "key", "value": "Up", "extra": True},
+        ])
+
+
+@pytest.mark.asyncio
+async def test_interactive_attach_requires_matching_workspace_generation(tmp_path):
+    service, _ = _service(tmp_path)
+    created = await service.create(WORKSPACE_ID, expected_generation=1)
+    with pytest.raises(ValueError):
+        await service.open_attach(
+            WORKSPACE_ID, created["sessionId"], expected_generation=2, mode="control",
+        )
+    with pytest.raises(ValueError):
+        await service.open_attach(
+            WORKSPACE_ID, created["sessionId"], expected_generation=1, mode="write",
+        )

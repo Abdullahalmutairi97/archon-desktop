@@ -1,4 +1,5 @@
 import type { LocalCodexProxyRequest } from './localCodexProxy'
+import type { WorkspaceConsoleKeyEvent } from '../shared/bridge/types'
 import { WORKSPACE_CONSOLE_CHANNELS, parseWorkspaceConsoleBackendResponse, parseWorkspaceConsoleRequest } from '../shared/bridge/validation'
 import type { IpcRegistrar } from './registerBridge'
 import { assertBoundedIpcPayload } from './security/TrustedShellFrameGuard'
@@ -29,6 +30,16 @@ function proxyRequest(channel: string, input: Readonly<Record<string, unknown>>)
       return { operation: 'workspace.terminals.interrupt', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string }
     case WORKSPACE_CONSOLE_CHANNELS.stop:
       return { operation: 'workspace.terminals.stop', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string }
+    case WORKSPACE_CONSOLE_CHANNELS.attachOpen:
+      return { operation: 'workspace.terminals.attach.open', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string, expectedGeneration: input.expectedGeneration as number, mode: input.mode as 'control' | 'read-only' }
+    case WORKSPACE_CONSOLE_CHANNELS.attachClaim:
+      return { operation: 'workspace.terminals.attach.claim', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string, ticket: input.ticket as string }
+    case WORKSPACE_CONSOLE_CHANNELS.attachScreen:
+      return { operation: 'workspace.terminals.attach.screen', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string, attachId: input.attachId as string, lines: input.lines as number }
+    case WORKSPACE_CONSOLE_CHANNELS.attachInput:
+      return { operation: 'workspace.terminals.attach.input', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string, attachId: input.attachId as string, events: input.events as readonly WorkspaceConsoleKeyEvent[] }
+    case WORKSPACE_CONSOLE_CHANNELS.attachDetach:
+      return { operation: 'workspace.terminals.attach.detach', workspaceId: input.workspaceId as string, sessionId: input.sessionId as string, attachId: input.attachId as string }
     default:
       throw new TypeError('Unsupported workspace console operation.')
   }

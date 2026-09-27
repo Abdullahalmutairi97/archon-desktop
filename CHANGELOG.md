@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — interactive checkout attach
+
+- Add a one-use, short-lived attach ticket that redeems exactly once into a sliding, server-fenced input lease for a persisted checkout session. Tickets and leases are bounded, owner-checked and pruned on expiry; a workspace generation change refuses stale metadata.
+- Enforce a single control lease per session: a second control attach is refused while a read-only attach may still observe, and a read-only lease can never send text or control keys.
+- Add bounded interactive key frames (reviewed allowlist of named tmux keys plus literal UTF-8 text) with ordered, never-retried delivery. Detaching a client always leaves the surviving shell running.
+- Expose the attach lifecycle (open, claim, screen, input, detach) through the finite desktop bridge and a console panel that keeps input disabled for read-only attaches. The plain-text line console remains available.
+
 ## Unreleased — Phase 2C.2 read-only server collections
 
 - Add a separate Server data route for authenticated read-only project, session and task rows through the finite desktop bridge.

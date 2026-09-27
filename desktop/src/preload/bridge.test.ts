@@ -49,6 +49,44 @@ describe('preload bridge', () => {
     expect(invoke).toHaveBeenCalledTimes(3)
   })
 
+  it('exposes fixed interactive attach calls and rejects malformed frames', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const sessionId = `wterm-${'b'.repeat(32)}`
+    const attachId = `watt-${'c'.repeat(32)}`
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === WORKSPACE_CONSOLE_CHANNELS.attachOpen) return { ticket: attachId, mode: 'control', expiresAt: '2026-09-27T00:00:30Z' }
+      if (channel === WORKSPACE_CONSOLE_CHANNELS.attachClaim) return { attachId, mode: 'control', expiresAt: '2026-09-27T00:02:00Z' }
+      return true
+    })
+    const bridge = createDesktopBridge({ invoke })
+
+    await expect(bridge.workspaceConsole.attach({ workspaceId, sessionId, expectedGeneration: 3, mode: 'control' }))
+      .resolves.toEqual({ ticket: attachId, mode: 'control', expiresAt: '2026-09-27T00:00:30Z' })
+    await expect(bridge.workspaceConsole.claim({ workspaceId, sessionId, ticket: attachId }))
+      .resolves.toEqual({ attachId, mode: 'control', expiresAt: '2026-09-27T00:02:00Z' })
+    await expect(bridge.workspaceConsole.attachInput({
+      workspaceId, sessionId, attachId, events: [{ type: 'text', value: 'ls' }, { type: 'key', value: 'Up' }],
+    })).resolves.toBe(true)
+    await expect(bridge.workspaceConsole.detach({ workspaceId, sessionId, attachId })).resolves.toBe(true)
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      WORKSPACE_CONSOLE_CHANNELS.attachOpen,
+      WORKSPACE_CONSOLE_CHANNELS.attachClaim,
+      WORKSPACE_CONSOLE_CHANNELS.attachInput,
+      WORKSPACE_CONSOLE_CHANNELS.attachDetach,
+    ])
+
+    expect(() => bridge.workspaceConsole.attachInput({
+      workspaceId, sessionId, attachId, events: [{ type: 'key', value: 'F13' as never }],
+    })).toThrow(TypeError)
+    expect(() => bridge.workspaceConsole.attachInput({
+      workspaceId, sessionId, attachId, events: [{ type: 'text', value: 'bad\nframe' }],
+    })).toThrow(TypeError)
+    expect(() => bridge.workspaceConsole.attach({
+      workspaceId, sessionId, expectedGeneration: 3, mode: 'write' as never,
+    })).toThrow(TypeError)
+    expect(invoke).toHaveBeenCalledTimes(4)
+  })
+
   it('rejects unlisted operations and malformed payloads before IPC', async () => {
     const invoke = vi.fn(async () => ({}))
     const bridge = createDesktopBridge({ invoke })

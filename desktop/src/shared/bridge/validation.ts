@@ -36,6 +36,10 @@ import type {
   WorkspaceFileWritePayload,
   WorkspaceConsoleTerminalDto,
   WorkspaceConsoleScreenDto,
+  WorkspaceConsoleAttachTicketDto,
+  WorkspaceConsoleAttachLeaseDto,
+  WorkspaceConsoleKeyEvent,
+  WorkspaceConsoleNamedKey,
 } from './types'
 
 export const BRIDGE_CHANNELS = Object.freeze({
@@ -67,6 +71,11 @@ export const WORKSPACE_CONSOLE_CHANNELS = Object.freeze({
   sendLine: 'archon:workspace-console:send-line',
   interrupt: 'archon:workspace-console:interrupt',
   stop: 'archon:workspace-console:stop',
+  attachOpen: 'archon:workspace-console:attach-open',
+  attachClaim: 'archon:workspace-console:attach-claim',
+  attachScreen: 'archon:workspace-console:attach-screen',
+  attachInput: 'archon:workspace-console:attach-input',
+  attachDetach: 'archon:workspace-console:attach-detach',
 } as const)
 
 export type WorkspaceConsoleInvokeChannel = (typeof WORKSPACE_CONSOLE_CHANNELS)[keyof typeof WORKSPACE_CONSOLE_CHANNELS]
@@ -1070,6 +1079,13 @@ function boundedLocalResult<T>(value: T): T {
 const MAX_WORKSPACE_CONSOLE_TERMINALS = 16
 const MAX_WORKSPACE_CONSOLE_SCREEN_BYTES = 24 * 1024
 const MAX_WORKSPACE_CONSOLE_LINE_BYTES = 4096
+const MAX_WORKSPACE_CONSOLE_ATTACH_EVENTS = 32
+const MAX_WORKSPACE_CONSOLE_ATTACH_BYTES = 1024
+const WORKSPACE_CONSOLE_NAMED_KEYS = new Set<string>([
+  'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown',
+  'BSpace', 'Tab', 'BTab', 'DC', 'IC', 'Escape', 'Enter', 'Space',
+  'C-c', 'C-d', 'C-z', 'C-l', 'C-a', 'C-e', 'C-u', 'C-k', 'C-w',
+])
 
 function parseWorkspaceConsoleTerminal(value: unknown): WorkspaceConsoleTerminalDto {
   const record = exactObject(value, ['sessionId', 'state', 'createdAt'])
@@ -1078,6 +1094,45 @@ function parseWorkspaceConsoleTerminal(value: unknown): WorkspaceConsoleTerminal
     || typeof record.createdAt !== 'string' || record.createdAt.length > 64
     || !Number.isFinite(Date.parse(record.createdAt))) return fail()
   return Object.freeze({ sessionId: record.sessionId, state: record.state, createdAt: record.createdAt })
+}
+
+function parseWorkspaceConsoleAttachTicket(value: unknown): WorkspaceConsoleAttachTicketDto {
+  const record = exactObject(value, ['ticket', 'mode', 'expiresAt'])
+  if (typeof record.ticket !== 'string' || !/^watt-[0-9a-f]{32}$/u.test(record.ticket)
+    || (record.mode !== 'control' && record.mode !== 'read-only')
+    || typeof record.expiresAt !== 'string' || record.expiresAt.length > 64
+    || !Number.isFinite(Date.parse(record.expiresAt))) return fail()
+  return Object.freeze({ ticket: record.ticket, mode: record.mode, expiresAt: record.expiresAt })
+}
+
+function parseWorkspaceConsoleAttachLease(value: unknown): WorkspaceConsoleAttachLeaseDto {
+  const record = exactObject(value, ['attachId', 'mode', 'expiresAt'])
+  if (typeof record.attachId !== 'string' || !/^watt-[0-9a-f]{32}$/u.test(record.attachId)
+    || (record.mode !== 'control' && record.mode !== 'read-only')
+    || typeof record.expiresAt !== 'string' || record.expiresAt.length > 64
+    || !Number.isFinite(Date.parse(record.expiresAt))) return fail()
+  return Object.freeze({ attachId: record.attachId, mode: record.mode, expiresAt: record.expiresAt })
+}
+
+function workspaceConsoleKeyEvents(value: unknown): readonly WorkspaceConsoleKeyEvent[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_WORKSPACE_CONSOLE_ATTACH_EVENTS) return fail()
+  let total = 0
+  const events = value.map((item) => {
+    const event = exactObject(item, ['type', 'value'])
+    if (event.type === 'text') {
+      if (typeof event.value !== 'string' || event.value.length === 0
+        || /[\u0000-\u001f\u007f]/u.test(event.value)) return fail()
+      total += new TextEncoder().encode(event.value).byteLength
+      if (total > MAX_WORKSPACE_CONSOLE_ATTACH_BYTES) return fail()
+      return Object.freeze({ type: 'text' as const, value: event.value })
+    }
+    if (event.type === 'key') {
+      if (typeof event.value !== 'string' || !WORKSPACE_CONSOLE_NAMED_KEYS.has(event.value)) return fail()
+      return Object.freeze({ type: 'key' as const, value: event.value as WorkspaceConsoleNamedKey })
+    }
+    return fail()
+  })
+  return Object.freeze(events)
 }
 
 function workspaceConsoleInput(channel: unknown, value: unknown): Record<string, unknown> {
@@ -1114,6 +1169,45 @@ function workspaceConsoleInput(channel: unknown, value: unknown): Record<string,
       }
       return { workspaceId: record.workspaceId, sessionId: record.sessionId }
     }
+    case WORKSPACE_CONSOLE_CHANNELS.attachOpen: {
+      const record = exactObject(value, ['workspaceId', 'sessionId', 'expectedGeneration', 'mode'])
+      if (!workspaceFileId(record.workspaceId) || typeof record.sessionId !== 'string'
+        || !/^wterm-[0-9a-f]{32}$/u.test(record.sessionId)
+        || typeof record.expectedGeneration !== 'number' || !Number.isSafeInteger(record.expectedGeneration)
+        || record.expectedGeneration < 1
+        || (record.mode !== 'control' && record.mode !== 'read-only')) return fail()
+      return {
+        workspaceId: record.workspaceId, sessionId: record.sessionId,
+        expectedGeneration: record.expectedGeneration, mode: record.mode,
+      }
+    }
+    case WORKSPACE_CONSOLE_CHANNELS.attachClaim:
+    case WORKSPACE_CONSOLE_CHANNELS.attachScreen:
+    case WORKSPACE_CONSOLE_CHANNELS.attachInput:
+    case WORKSPACE_CONSOLE_CHANNELS.attachDetach: {
+      const allowed = channel === WORKSPACE_CONSOLE_CHANNELS.attachScreen ? ['workspaceId', 'sessionId', 'attachId', 'lines']
+        : channel === WORKSPACE_CONSOLE_CHANNELS.attachInput ? ['workspaceId', 'sessionId', 'attachId', 'events']
+          : ['workspaceId', 'sessionId', channel === WORKSPACE_CONSOLE_CHANNELS.attachClaim ? 'ticket' : 'attachId']
+      const record = exactObject(value, allowed)
+      if (!workspaceFileId(record.workspaceId) || typeof record.sessionId !== 'string'
+        || !/^wterm-[0-9a-f]{32}$/u.test(record.sessionId)) return fail()
+      if (channel === WORKSPACE_CONSOLE_CHANNELS.attachClaim) {
+        if (typeof record.ticket !== 'string' || !/^watt-[0-9a-f]{32}$/u.test(record.ticket)) return fail()
+        return { workspaceId: record.workspaceId, sessionId: record.sessionId, ticket: record.ticket }
+      }
+      if (typeof record.attachId !== 'string' || !/^watt-[0-9a-f]{32}$/u.test(record.attachId)) return fail()
+      if (channel === WORKSPACE_CONSOLE_CHANNELS.attachScreen) {
+        if (typeof record.lines !== 'number' || !Number.isInteger(record.lines) || record.lines < 1 || record.lines > 120) return fail()
+        return { workspaceId: record.workspaceId, sessionId: record.sessionId, attachId: record.attachId, lines: record.lines }
+      }
+      if (channel === WORKSPACE_CONSOLE_CHANNELS.attachInput) {
+        return {
+          workspaceId: record.workspaceId, sessionId: record.sessionId,
+          attachId: record.attachId, events: workspaceConsoleKeyEvents(record.events),
+        }
+      }
+      return { workspaceId: record.workspaceId, sessionId: record.sessionId, attachId: record.attachId }
+    }
     default:
       return fail()
   }
@@ -1140,15 +1234,30 @@ export function parseWorkspaceConsoleBackendResponse(channel: unknown, value: un
       const record = exactObject(value, ['terminal'])
       return parseWorkspaceConsoleTerminal(record.terminal)
     }
-    case WORKSPACE_CONSOLE_CHANNELS.screen: {
+    case WORKSPACE_CONSOLE_CHANNELS.screen:
+    case WORKSPACE_CONSOLE_CHANNELS.attachScreen: {
       const record = exactObject(value, ['text', 'truncated'])
       if (typeof record.text !== 'string' || new TextEncoder().encode(record.text).byteLength > MAX_WORKSPACE_CONSOLE_SCREEN_BYTES
         || typeof record.truncated !== 'boolean') return fail()
       return Object.freeze({ text: record.text, truncated: record.truncated }) satisfies WorkspaceConsoleScreenDto
     }
+    case WORKSPACE_CONSOLE_CHANNELS.attachOpen:
+      return parseWorkspaceConsoleAttachTicket(exactObject(value, ['attachment']).attachment)
+    case WORKSPACE_CONSOLE_CHANNELS.attachClaim:
+      return parseWorkspaceConsoleAttachLease(exactObject(value, ['attachment']).attachment)
     case WORKSPACE_CONSOLE_CHANNELS.sendLine: {
       const record = exactObject(value, ['sent'])
       if (record.sent !== true) return fail()
+      return true
+    }
+    case WORKSPACE_CONSOLE_CHANNELS.attachInput: {
+      const record = exactObject(value, ['sent'])
+      if (record.sent !== true) return fail()
+      return true
+    }
+    case WORKSPACE_CONSOLE_CHANNELS.attachDetach: {
+      const record = exactObject(value, ['ok'])
+      if (record.ok !== true) return fail()
       return true
     }
     case WORKSPACE_CONSOLE_CHANNELS.stop: {
@@ -1174,12 +1283,18 @@ export function parseWorkspaceConsoleResponse(channel: unknown, value: unknown):
     case WORKSPACE_CONSOLE_CHANNELS.create:
       return parseWorkspaceConsoleBackendResponse(channel, { terminal: value })
     case WORKSPACE_CONSOLE_CHANNELS.screen:
+    case WORKSPACE_CONSOLE_CHANNELS.attachScreen:
       return parseWorkspaceConsoleBackendResponse(channel, value)
     case WORKSPACE_CONSOLE_CHANNELS.sendLine:
     case WORKSPACE_CONSOLE_CHANNELS.interrupt:
     case WORKSPACE_CONSOLE_CHANNELS.stop:
+    case WORKSPACE_CONSOLE_CHANNELS.attachInput:
+    case WORKSPACE_CONSOLE_CHANNELS.attachDetach:
       if (value !== true) return fail()
       return true
+    case WORKSPACE_CONSOLE_CHANNELS.attachOpen:
+    case WORKSPACE_CONSOLE_CHANNELS.attachClaim:
+      return parseWorkspaceConsoleBackendResponse(channel, { attachment: value })
     default:
       return fail()
   }

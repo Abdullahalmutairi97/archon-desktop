@@ -14,7 +14,7 @@ import uuid
 from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,9 +75,12 @@ from .services.local_codex_worker import (
     LocalCodexWorkerError,
 )
 from .services.workspace_terminal import (
+    WorkspaceTerminalAttachBusy,
+    WorkspaceTerminalAttachUnavailable,
     WorkspaceTerminalCapacity,
     WorkspaceTerminalInterruptOutcomeUnknown,
     WorkspaceTerminalInputOutcomeUnknown,
+    WorkspaceTerminalReadOnly,
     WorkspaceTerminalService,
 )
 from .security import token_authorized, validate_server_security
@@ -232,6 +235,26 @@ class WorkspaceTerminalDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     confirm: bool = Field(strict=True)
+
+
+class WorkspaceTerminalKeyEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["text", "key"]
+    value: str = Field(min_length=1, max_length=1024)
+
+
+class WorkspaceTerminalAttachOpenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_generation: int = Field(alias="expectedGeneration", strict=True, ge=1)
+    mode: Literal["control", "read-only"]
+
+
+class WorkspaceTerminalAttachInputRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    events: list[WorkspaceTerminalKeyEvent] = Field(min_length=1, max_length=32)
 
 
 class WorkspaceFileWriteRequest(BaseModel):
@@ -970,6 +993,119 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             confirm=payload.confirm,
         )
         return {"ok": True}
+
+    @app.post(
+        "/api/local/workspaces/{workspace_id}/terminals/{session_id}/attach",
+        status_code=201,
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_terminal_attach_open(
+        workspace_id: str,
+        session_id: str,
+        payload: WorkspaceTerminalAttachOpenRequest,
+    ):
+        current_owner_workspace(workspace_id)
+        try:
+            attachment = await workspace_terminal_service().open_attach(
+                workspace_id,
+                session_id,
+                expected_generation=payload.expected_generation,
+                mode=payload.mode,
+            )
+        except WorkspaceTerminalCapacity as exc:
+            raise HTTPException(status_code=409, detail="Workspace terminal attach limit reached") from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Workspace identity or generation changed; refresh before attaching",
+            ) from exc
+        return JSONResponse(status_code=201, content={"attachment": attachment}, headers={"Cache-Control": "no-store"})
+
+    @app.post(
+        "/api/local/workspaces/{workspace_id}/terminals/{session_id}/attach/{attach_id}/claim",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_terminal_attach_claim(
+        workspace_id: str,
+        session_id: str,
+        attach_id: str,
+    ):
+        current_owner_workspace(workspace_id)
+        try:
+            attachment = await workspace_terminal_service().claim_attach(workspace_id, session_id, attach_id)
+        except WorkspaceTerminalAttachBusy as exc:
+            raise HTTPException(status_code=409, detail="Another client already holds interactive input control") from exc
+        except WorkspaceTerminalAttachUnavailable as exc:
+            raise HTTPException(status_code=410, detail="Attach ticket is unknown, already used, or expired") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail="Workspace terminal attach is unavailable") from exc
+        return JSONResponse(content={"attachment": attachment}, headers={"Cache-Control": "no-store"})
+
+    @app.get(
+        "/api/local/workspaces/{workspace_id}/terminals/{session_id}/attach/{attach_id}/screen",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_terminal_attach_screen(
+        workspace_id: str,
+        session_id: str,
+        attach_id: str,
+        lines: int = Query(80, ge=1, le=120),
+    ):
+        current_owner_workspace(workspace_id)
+        try:
+            result = await workspace_terminal_service().attach_screen(
+                workspace_id, session_id, attach_id, lines=lines,
+            )
+        except WorkspaceTerminalAttachUnavailable as exc:
+            raise HTTPException(status_code=410, detail="Attach lease is unknown, released, or expired") from exc
+        return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+    @app.post(
+        "/api/local/workspaces/{workspace_id}/terminals/{session_id}/attach/{attach_id}/input",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_terminal_attach_input(
+        workspace_id: str,
+        session_id: str,
+        attach_id: str,
+        payload: WorkspaceTerminalAttachInputRequest,
+    ):
+        current_owner_workspace(workspace_id)
+        events = [event.model_dump() for event in payload.events]
+        try:
+            await workspace_terminal_service().attach_send(workspace_id, session_id, attach_id, events)
+        except WorkspaceTerminalReadOnly as exc:
+            raise HTTPException(status_code=403, detail="Read-only attach may not send text or control keys") from exc
+        except WorkspaceTerminalAttachUnavailable as exc:
+            raise HTTPException(status_code=410, detail="Attach lease is unknown, released, or expired") from exc
+        except WorkspaceTerminalInputOutcomeUnknown:
+            return JSONResponse(
+                status_code=504,
+                content={
+                    "detail": "Terminal input outcome is unknown; do not retry automatically",
+                    "code": "workspace_terminal_input_outcome_unknown",
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid interactive input") from exc
+        return JSONResponse(content={"sent": True}, headers={"Cache-Control": "no-store"})
+
+    @app.delete(
+        "/api/local/workspaces/{workspace_id}/terminals/{session_id}/attach/{attach_id}",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_terminal_attach_detach(
+        workspace_id: str,
+        session_id: str,
+        attach_id: str,
+    ):
+        current_owner_workspace(workspace_id)
+        try:
+            await workspace_terminal_service().detach_attach(workspace_id, session_id, attach_id)
+        except WorkspaceTerminalAttachUnavailable as exc:
+            raise HTTPException(status_code=410, detail="Attach lease is unknown or already released") from exc
+        return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
 
     async def local_codex_call(method: str, params: dict[str, Any]):
         if local_codex_worker is None:

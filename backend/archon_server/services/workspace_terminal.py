@@ -16,7 +16,7 @@ import shutil
 import socket
 import stat
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,18 @@ _MAX_METADATA_BYTES = 16 * 1024
 _DEFAULT_MAX_SESSIONS = 16
 _MAX_SCREEN_BYTES = 24 * 1024
 _MAX_INPUT_BYTES = 4096
+_ATTACH_ID = re.compile(r"watt-[0-9a-f]{32}\Z")
+_MAX_ATTACHMENTS = 4
+_TICKET_SECONDS = 30.0
+_LEASE_SECONDS = 120.0
+_MAX_KEY_EVENTS = 32
+_MAX_KEY_BYTES = 1024
+# Interactive key frames are limited to a reviewed allowlist of named tmux keys.
+_ALLOWED_KEYS = frozenset({
+    "Up", "Down", "Left", "Right", "Home", "End", "PageUp", "PageDown",
+    "BSpace", "Tab", "BTab", "DC", "IC", "Escape", "Enter", "Space",
+    "C-c", "C-d", "C-z", "C-l", "C-a", "C-e", "C-u", "C-k", "C-w",
+})
 
 
 class WorkspaceTerminalError(RuntimeError):
@@ -52,6 +64,18 @@ class WorkspaceTerminalInputOutcomeUnknown(WorkspaceTerminalUnavailable):
 
 class WorkspaceTerminalInterruptOutcomeUnknown(WorkspaceTerminalUnavailable):
     """tmux may have delivered the one requested interrupt key."""
+
+
+class WorkspaceTerminalAttachUnavailable(WorkspaceTerminalError):
+    """An attach ticket or lease is unknown, already used, released, or expired."""
+
+
+class WorkspaceTerminalAttachBusy(WorkspaceTerminalError):
+    """Another client already holds interactive input control for the session."""
+
+
+class WorkspaceTerminalReadOnly(WorkspaceTerminalError):
+    """A read-only attach may not send text, control keys or input frames."""
 
 
 def _private_directory(path: str | os.PathLike[str], *, label: str) -> Path:
@@ -349,6 +373,349 @@ class WorkspaceTerminalService:
                     "Terminal interrupt outcome is unknown; do not retry automatically"
                 ) from exc
             return {"sent": True}
+
+    async def open_attach(
+        self,
+        workspace_id: str,
+        session_id: str,
+        *,
+        expected_generation: int,
+        mode: str,
+    ) -> dict[str, str]:
+        """Issue a one-use, short-lived attach ticket for one live session.
+
+        The ticket is redeemed exactly once with :meth:`claim_attach`. A
+        ``control`` ticket grants interactive input control; a ``read-only``
+        ticket may observe the pane but never send text or control frames.
+        """
+        if mode not in {"control", "read-only"}:
+            raise ValueError("mode must be 'control' or 'read-only'")
+        if (isinstance(expected_generation, bool) or not isinstance(expected_generation, int)
+                or expected_generation < 1):
+            raise ValueError("expected_generation must be a positive integer")
+        if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
+            raise ValueError("session_id is invalid")
+        async with self._lock:
+            workspace = self._resolve_workspace(workspace_id)
+            if workspace["generation"] != expected_generation:
+                raise ValueError("Workspace generation changed; refresh before attaching")
+            self._assert_tmux_available()
+            record = self._load_record(workspace)
+            await self._reconcile(workspace, record)
+            row = next((item for item in record["sessions"] if item["sessionId"] == session_id), None)
+            if row is None:
+                raise KeyError(session_id)
+            if row["state"] != "running":
+                raise ValueError("Workspace terminal is not ready")
+            attachments = self._load_attachments(workspace)
+            changed = self._prune_attachments(attachments)
+            if len(attachments["attachments"]) >= _MAX_ATTACHMENTS:
+                if changed:
+                    self._save_attachments(workspace, attachments)
+                raise WorkspaceTerminalCapacity("Workspace terminal attach limit reached")
+            now = datetime.now(timezone.utc)
+            entry = {
+                "attachId": "watt-" + uuid.uuid4().hex,
+                "mode": mode,
+                "sessionId": session_id,
+                "state": "ticket",
+                "createdAt": now.isoformat(),
+                "expiresAt": (now + timedelta(seconds=_TICKET_SECONDS)).isoformat(),
+            }
+            attachments["attachments"].append(entry)
+            self._save_attachments(workspace, attachments)
+            return {"ticket": entry["attachId"], "mode": mode, "expiresAt": entry["expiresAt"]}
+
+    async def claim_attach(self, workspace_id: str, session_id: str, ticket: str) -> dict[str, str]:
+        """Redeem a one-use attach ticket and establish a sliding lease."""
+        if not isinstance(ticket, str) or not _ATTACH_ID.fullmatch(ticket):
+            raise ValueError("attach ticket is invalid")
+        if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
+            raise ValueError("session_id is invalid")
+        async with self._lock:
+            workspace = self._resolve_workspace(workspace_id)
+            self._assert_tmux_available()
+            record = self._load_record(workspace)
+            await self._reconcile(workspace, record)
+            row = next((item for item in record["sessions"] if item["sessionId"] == session_id), None)
+            if row is None:
+                raise KeyError(session_id)
+            if row["state"] != "running":
+                raise ValueError("Workspace terminal is not ready")
+            attachments = self._load_attachments(workspace)
+            self._prune_attachments(attachments)
+            entry = next((item for item in attachments["attachments"]
+                          if item["attachId"] == ticket and item["sessionId"] == session_id), None)
+            if entry is None or entry["state"] != "ticket":
+                self._save_attachments(workspace, attachments)
+                raise WorkspaceTerminalAttachUnavailable(
+                    "Attach ticket is unknown, already used, or expired"
+                )
+            if entry["mode"] == "control" and any(
+                other["mode"] == "control" and other["state"] == "active"
+                for other in attachments["attachments"] if other["attachId"] != ticket
+            ):
+                self._save_attachments(workspace, attachments)
+                raise WorkspaceTerminalAttachBusy("Another client already holds interactive input control")
+            entry["state"] = "active"
+            entry["expiresAt"] = (datetime.now(timezone.utc) + timedelta(seconds=_LEASE_SECONDS)).isoformat()
+            self._save_attachments(workspace, attachments)
+            return {"attachId": entry["attachId"], "mode": entry["mode"], "expiresAt": entry["expiresAt"]}
+
+    async def attach_screen(
+        self, workspace_id: str, session_id: str, attach_id: str, *, lines: int = 80,
+    ) -> dict[str, Any]:
+        """Capture a bounded plain-text tail for one active attach lease."""
+        if isinstance(lines, bool) or not isinstance(lines, int) or not 1 <= lines <= 120:
+            raise ValueError("lines must be between 1 and 120")
+        if not isinstance(attach_id, str) or not _ATTACH_ID.fullmatch(attach_id):
+            raise ValueError("attach_id is invalid")
+        if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
+            raise ValueError("session_id is invalid")
+        async with self._lock:
+            workspace = self._resolve_workspace(workspace_id)
+            self._assert_tmux_available()
+            record = self._load_record(workspace)
+            await self._reconcile(workspace, record)
+            row = next((item for item in record["sessions"] if item["sessionId"] == session_id), None)
+            if row is None:
+                raise KeyError(session_id)
+            if row["state"] != "running":
+                raise ValueError("Workspace terminal is not ready")
+            attachments = self._load_attachments(workspace)
+            self._prune_attachments(attachments)
+            entry = self._active_attachment(attachments, session_id, attach_id)
+            socket_path = self._socket_path(workspace)
+            pane_id = await self._active_pane(socket_path, row["name"])
+            result = await self._run_tmux(
+                socket_path,
+                "capture-pane", "-p", "-S", f"-{lines}", "-t", pane_id,
+                stdout_limit=_MAX_SCREEN_BYTES,
+            )
+            if result["returncode"] != 0:
+                raise WorkspaceTerminalUnavailable("tmux could not capture the workspace terminal")
+            entry["expiresAt"] = (datetime.now(timezone.utc) + timedelta(seconds=_LEASE_SECONDS)).isoformat()
+            self._save_attachments(workspace, attachments)
+            return {"text": result["stdout"], "truncated": result["stdoutTruncated"]}
+
+    async def attach_send(
+        self, workspace_id: str, session_id: str, attach_id: str, events: Any,
+    ) -> dict[str, bool]:
+        """Send one bounded ordered batch of text/control frames from the control lease."""
+        if not isinstance(attach_id, str) or not _ATTACH_ID.fullmatch(attach_id):
+            raise ValueError("attach_id is invalid")
+        if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
+            raise ValueError("session_id is invalid")
+        normalized = self._validate_events(events)
+        async with self._lock:
+            workspace = self._resolve_workspace(workspace_id)
+            self._assert_tmux_available()
+            record = self._load_record(workspace)
+            await self._reconcile(workspace, record)
+            row = next((item for item in record["sessions"] if item["sessionId"] == session_id), None)
+            if row is None:
+                raise KeyError(session_id)
+            if row["state"] != "running":
+                raise ValueError("Workspace terminal is not ready")
+            attachments = self._load_attachments(workspace)
+            self._prune_attachments(attachments)
+            entry = self._active_attachment(attachments, session_id, attach_id)
+            if entry["mode"] != "control":
+                raise WorkspaceTerminalReadOnly("Read-only attach may not send text or control keys")
+            socket_path = self._socket_path(workspace)
+            pane_id = await self._active_pane(socket_path, row["name"])
+            try:
+                for kind, value in normalized:
+                    if kind == "text":
+                        result = await self._run_tmux(
+                            socket_path, "send-keys", "-t", pane_id, "-l", "--", value,
+                        )
+                    else:
+                        result = await self._run_tmux(socket_path, "send-keys", "-t", pane_id, value)
+                    if result["returncode"] != 0:
+                        raise WorkspaceTerminalInputOutcomeUnknown(
+                            "Terminal input outcome is unknown; do not retry automatically"
+                        )
+            except WorkspaceTerminalUnavailable as exc:
+                if isinstance(exc, WorkspaceTerminalInputOutcomeUnknown):
+                    raise
+                raise WorkspaceTerminalInputOutcomeUnknown(
+                    "Terminal input outcome is unknown; do not retry automatically"
+                ) from exc
+            entry["expiresAt"] = (datetime.now(timezone.utc) + timedelta(seconds=_LEASE_SECONDS)).isoformat()
+            self._save_attachments(workspace, attachments)
+            return {"sent": True}
+
+    async def detach_attach(self, workspace_id: str, session_id: str, attach_id: str) -> None:
+        """Release one attach lease without disturbing the surviving shell."""
+        if not isinstance(attach_id, str) or not _ATTACH_ID.fullmatch(attach_id):
+            raise ValueError("attach_id is invalid")
+        if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
+            raise ValueError("session_id is invalid")
+        async with self._lock:
+            workspace = self._resolve_workspace(workspace_id)
+            attachments = self._load_attachments(workspace)
+            self._prune_attachments(attachments)
+            remaining = [item for item in attachments["attachments"]
+                         if not (item["attachId"] == attach_id and item["sessionId"] == session_id)]
+            if len(remaining) == len(attachments["attachments"]):
+                self._save_attachments(workspace, attachments)
+                raise WorkspaceTerminalAttachUnavailable("Attach lease is unknown or already released")
+            attachments["attachments"] = remaining
+            self._save_attachments(workspace, attachments)
+
+    @staticmethod
+    def _validate_events(events: Any) -> list[tuple[str, str]]:
+        if not isinstance(events, list) or not events or len(events) > _MAX_KEY_EVENTS:
+            raise ValueError("events must be a non-empty bounded list")
+        normalized: list[tuple[str, str]] = []
+        total = 0
+        for event in events:
+            if not isinstance(event, dict) or set(event) != {"type", "value"}:
+                raise ValueError("each event needs exactly a type and value")
+            kind = event["type"]
+            value = event["value"]
+            if kind == "text":
+                if not isinstance(value, str) or not value:
+                    raise ValueError("text events need a non-empty string value")
+                if any(ord(char) < 32 or ord(char) == 127 for char in value):
+                    raise ValueError("text events must not contain control characters")
+                total += len(value.encode("utf-8"))
+                if total > _MAX_KEY_BYTES:
+                    raise ValueError("key input is too large")
+            elif kind == "key":
+                if not isinstance(value, str) or value not in _ALLOWED_KEYS:
+                    raise ValueError("key events must use an allowed key")
+            else:
+                raise ValueError("event type must be 'text' or 'key'")
+            normalized.append((kind, value))
+        return normalized
+
+    @staticmethod
+    def _active_attachment(attachments: dict[str, Any], session_id: str, attach_id: str) -> dict[str, Any]:
+        entry = next((item for item in attachments["attachments"]
+                      if item["attachId"] == attach_id and item["sessionId"] == session_id), None)
+        if entry is None or entry["state"] != "active":
+            raise WorkspaceTerminalAttachUnavailable("Attach lease is unknown, released, or expired")
+        return entry
+
+    def _attachments_path(self, workspace: dict[str, Any]) -> Path:
+        digest = hashlib.sha256(workspace["workspace_id"].encode("ascii")).hexdigest()
+        return self.metadata_root / (digest + ".attach.json")
+
+    @staticmethod
+    def _empty_attachments(workspace: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "workspaceId": workspace["workspace_id"],
+            "root": workspace["root"],
+            "generation": workspace["generation"],
+            "attachments": [],
+        }
+
+    def _load_attachments(self, workspace: dict[str, Any]) -> dict[str, Any]:
+        path = self._attachments_path(workspace)
+        try:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+        except FileNotFoundError:
+            return self._empty_attachments(workspace)
+        except OSError as exc:
+            raise WorkspaceTerminalUnavailable("Workspace attach metadata cannot be opened safely") from exc
+        try:
+            info = os.fstat(descriptor)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > _MAX_METADATA_BYTES):
+                raise WorkspaceTerminalUnavailable("Workspace attach metadata is unsafe or oversized")
+            payload = bytearray()
+            while len(payload) <= _MAX_METADATA_BYTES:
+                chunk = os.read(descriptor, min(4096, _MAX_METADATA_BYTES + 1 - len(payload)))
+                if not chunk:
+                    break
+                payload.extend(chunk)
+            if len(payload) > _MAX_METADATA_BYTES:
+                raise WorkspaceTerminalUnavailable("Workspace attach metadata is oversized")
+        finally:
+            os.close(descriptor)
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WorkspaceTerminalUnavailable("Workspace attach metadata is malformed") from exc
+        if not isinstance(data, dict) or set(data) != {
+            "version", "workspaceId", "root", "generation", "attachments",
+        } or data.get("version") != 1:
+            raise WorkspaceTerminalUnavailable("Workspace attach metadata has an unsupported schema")
+        if (data.get("workspaceId") != workspace["workspace_id"]
+                or data.get("root") != workspace["root"]
+                or data.get("generation") != workspace["generation"]):
+            raise ValueError("Workspace root or generation changed; refusing stale attach metadata")
+        rows = data.get("attachments")
+        if not isinstance(rows, list) or len(rows) > _MAX_ATTACHMENTS:
+            raise WorkspaceTerminalUnavailable("Workspace attach metadata exceeds its bound")
+        for row in rows:
+            if (not isinstance(row, dict)
+                    or set(row) != {"attachId", "mode", "sessionId", "state", "createdAt", "expiresAt"}
+                    or not isinstance(row.get("attachId"), str) or not _ATTACH_ID.fullmatch(row["attachId"])
+                    or row.get("mode") not in {"control", "read-only"}
+                    or not isinstance(row.get("sessionId"), str) or not _SESSION_ID.fullmatch(row["sessionId"])
+                    or row.get("state") not in {"ticket", "active"}
+                    or not isinstance(row.get("createdAt"), str) or len(row["createdAt"]) > 64
+                    or not isinstance(row.get("expiresAt"), str) or len(row["expiresAt"]) > 64):
+                raise WorkspaceTerminalUnavailable("Workspace attach metadata contains an invalid lease")
+        if len({row["attachId"] for row in rows}) != len(rows):
+            raise WorkspaceTerminalUnavailable("Workspace attach metadata contains duplicate leases")
+        return data
+
+    def _save_attachments(self, workspace: dict[str, Any], attachments: dict[str, Any]) -> None:
+        payload = json.dumps(attachments, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        if len(payload) > _MAX_METADATA_BYTES or len(attachments["attachments"]) > _MAX_ATTACHMENTS:
+            raise WorkspaceTerminalCapacity("Workspace attach metadata limit reached")
+        destination = self._attachments_path(workspace)
+        temporary = self.metadata_root / ("." + uuid.uuid4().hex + ".attach.tmp")
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+            )
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("short attach metadata write")
+                view = view[written:]
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = -1
+            os.replace(temporary, destination)
+            directory_fd = os.open(self.metadata_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError as exc:
+            raise WorkspaceTerminalUnavailable("Workspace attach metadata could not be persisted") from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _prune_attachments(attachments: dict[str, Any]) -> bool:
+        now = datetime.now(timezone.utc)
+        kept = []
+        changed = False
+        for row in attachments["attachments"]:
+            try:
+                expired = datetime.fromisoformat(row["expiresAt"]) <= now
+            except ValueError:
+                expired = True
+            if expired:
+                changed = True
+            else:
+                kept.append(row)
+        attachments["attachments"] = kept
+        return changed
 
     async def _active_pane(self, socket_path: Path, session_name: str) -> str:
         """Resolve exactly one active pane from the target generated session."""

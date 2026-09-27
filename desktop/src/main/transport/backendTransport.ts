@@ -686,6 +686,60 @@ function localCodexRequestDetails(request: LocalCodexProxyRequest): {
       if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
         || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)) break
       return { method: 'DELETE', path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}`, body: JSON.stringify({ confirm: true }) }
+    case 'workspace.terminals.attach.open':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)
+        || !Number.isSafeInteger(request.expectedGeneration) || request.expectedGeneration < 1
+        || (request.mode !== 'control' && request.mode !== 'read-only')) break
+      return {
+        method: 'POST',
+        path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}/attach`,
+        body: JSON.stringify({ expectedGeneration: request.expectedGeneration, mode: request.mode }),
+        expectedStatus: 201,
+      }
+    case 'workspace.terminals.attach.claim':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)
+        || !/^watt-[0-9a-f]{32}$/u.test(request.ticket)) break
+      return { method: 'POST', path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}/attach/${request.ticket}/claim` }
+    case 'workspace.terminals.attach.screen':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)
+        || !/^watt-[0-9a-f]{32}$/u.test(request.attachId)
+        || !Number.isInteger(request.lines) || request.lines < 1 || request.lines > 120) break
+      return { method: 'GET', path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}/attach/${request.attachId}/screen?lines=${request.lines}` }
+    case 'workspace.terminals.attach.input': {
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)
+        || !/^watt-[0-9a-f]{32}$/u.test(request.attachId)
+        || !Array.isArray(request.events) || request.events.length < 1 || request.events.length > 32) break
+      const namedKeys = new Set(['Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown',
+        'BSpace', 'Tab', 'BTab', 'DC', 'IC', 'Escape', 'Enter', 'Space',
+        'C-c', 'C-d', 'C-z', 'C-l', 'C-a', 'C-e', 'C-u', 'C-k', 'C-w'])
+      let total = 0
+      let valid = true
+      for (const event of request.events) {
+        if (!event || typeof event !== 'object' || Object.keys(event).length !== 2
+          || (event.type !== 'text' && event.type !== 'key')) { valid = false; break }
+        if (event.type === 'text') {
+          if (typeof event.value !== 'string' || event.value.length === 0
+            || /[\u0000-\u001f\u007f]/u.test(event.value)) { valid = false; break }
+          total += new TextEncoder().encode(event.value).byteLength
+          if (total > 1024) { valid = false; break }
+        } else if (typeof event.value !== 'string' || !namedKeys.has(event.value)) { valid = false; break }
+      }
+      if (!valid) break
+      return {
+        method: 'POST',
+        path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}/attach/${request.attachId}/input`,
+        body: JSON.stringify({ events: request.events }),
+      }
+    }
+    case 'workspace.terminals.attach.detach':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^wterm-[0-9a-f]{32}$/u.test(request.sessionId)
+        || !/^watt-[0-9a-f]{32}$/u.test(request.attachId)) break
+      return { method: 'DELETE', path: `/api/local/workspaces/${request.workspaceId}/terminals/${request.sessionId}/attach/${request.attachId}` }
   }
   throw new BackendTransportError('invalid_payload')
 }
