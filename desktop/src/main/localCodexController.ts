@@ -222,6 +222,10 @@ export class LocalCodexController {
     }
   }
 
+  get hasActiveWork(): boolean {
+    return !this.closed && (this.startReserved || this.hasActiveTurn())
+  }
+
   async listProjects(): Promise<readonly LocalCodexProjectDto[]> {
     this.assertOpen()
     const metadata = await this.options.metadata.read()

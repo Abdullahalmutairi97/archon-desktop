@@ -78,7 +78,9 @@ describe('main-owned local Codex controller', () => {
     const createRuntime = vi.fn()
     const controller = createController(async () => null, createRuntime)
     const start = controller.startTurn({ projectId, prompt: 'Do not start after close.' })
+    expect(controller.hasActiveWork).toBe(true)
     controller.close()
+    expect(controller.hasActiveWork).toBe(false)
     read.resolve(structuredClone(state))
 
     await expect(start).rejects.toThrow(/could not start/i)

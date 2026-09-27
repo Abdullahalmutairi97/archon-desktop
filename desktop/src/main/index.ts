@@ -23,6 +23,7 @@ import {
 } from './localCodexController'
 import { registerLocalCodex } from './registerLocalCodex'
 import type { LocalCodexIpcController } from './registerLocalCodex'
+import { minimizeInsteadOfClosingForActiveWork } from './windowLifecycle'
 
 const RECONSTRUCTION_PROFILE = 'archon-desktop-reconstruction-dev'
 
@@ -33,6 +34,7 @@ const trustedFrame = new TrustedShellFrameGuard()
 let mainWindow: BrowserWindow | undefined
 let localCodexController: LocalCodexController | undefined
 let unregisterLocalCodex: (() => void) | undefined
+let quitRequested = false
 
 function getRendererDevOrigin(): string | undefined {
   if (app.isPackaged) return undefined
@@ -99,6 +101,14 @@ function createMainWindow(): BrowserWindow {
   window.on('closed', () => {
     trustedFrame.unregister(window)
     if (mainWindow === window) mainWindow = undefined
+  })
+  window.on('close', (event) => {
+    minimizeInsteadOfClosingForActiveWork(
+      event,
+      window,
+      localCodexController?.hasActiveWork ?? false,
+      quitRequested,
+    )
   })
   window.webContents.on('will-navigate', (event, destination) => {
     if (!isAllowedReconstructionNavigation(destination, devOrigin, rendererFileUrl)) {
@@ -179,11 +189,18 @@ void app.whenReady().then(async () => {
   }, (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent), connection)
   createMainWindow()
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      createMainWindow()
+      return
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    else mainWindow.show()
+    mainWindow.focus()
   })
 })
 
 app.on('before-quit', () => {
+  quitRequested = true
   unregisterLocalCodex?.()
   unregisterLocalCodex = undefined
   localCodexController?.close()
