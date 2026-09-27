@@ -101,6 +101,25 @@ def test_capabilities_are_honest_and_availability_is_a_filesystem_probe(tmp_path
     assert registry.runner_for({'profile': 'prime'}) is registry.runners['prime']
 
 
+def test_manifest_publishes_a_read_only_digest_without_executing(tmp_path):
+    marker = tmp_path / 'ran'
+    executable = tmp_path / 'prime'
+    executable.write_text(f'#!/bin/sh\necho ran >> {marker}\n')
+    executable.chmod(0o700)
+    registry = RuntimeRegistry({'prime': RecordingRunner(executable)})
+    info = registry.describe()[0]
+    assert info['manifest_version'] == 1
+    assert isinstance(info['executable_digest'], str) and len(info['executable_digest']) == 64
+    assert info['version'] is None and info['version_verified'] is False
+    assert info['capabilities'] == {
+        'modalities': ['prompt'], 'resume': False, 'fork': False, 'steer': False,
+        'approval': False, 'read_only': False, 'chat_only': False,
+        'reconnect': 'task_event_replay', 'resource_formats': ['print'], 'transports': ['stdio'],
+    }
+    # Publishing the manifest must never execute the configured runtime.
+    assert not marker.exists()
+
+
 @pytest.mark.asyncio
 async def test_worker_persists_policy_failure_and_continues(tmp_path):
     store = TaskStore(Database(tmp_path / 'state.db'))

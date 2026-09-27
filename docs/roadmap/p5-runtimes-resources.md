@@ -8,7 +8,7 @@ Keep provider/model, runtime, harness and execution environment distinct. Use na
 
 ## Checklist
 
-- [ ] Publish adapter manifests with runtime version/executable digest, modalities, resume/fork/steer, approval/read-only/chat-only support, reconnect semantics and resource formats/transports. Installed identities for Prime/Pi/Codex/Hermes on the target host are recorded in releases/p5-runtime-availability.md; manifests and reproducibility are not yet published.
+- [ ] Publish adapter manifests with runtime version/executable digest, modalities, resume/fork/steer, approval/read-only/chat-only support, reconnect semantics and resource formats/transports. The registry now publishes a read-only executable digest and honest capability flags per runtime (never executing the runtime to probe a version); declared versions and the target-host identities are recorded in releases/p5-runtime-availability.md.
 - [ ] Add conformance fixtures for prompt/stream/cancel/auth/approval/unsupported/resume/error behavior; validate before admission and again when binary/config identity changes.
 - [ ] Pin and qualify Prime/Pi RPC, separate Hermes ACP registration and runner-owned Codex app-server stdio. Do not silently fall back across runtimes or assume untested remote transports.
 - [ ] Preserve imported native history restrictions until exact native resume mappings are validated. Reject cross-runtime or wrong-cwd resume.

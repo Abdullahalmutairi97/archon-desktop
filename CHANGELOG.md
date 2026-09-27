@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — runtime adapter manifests
+
+- Publish an adapter manifest per runtime: executable path, read-only SHA-256 digest, an optional declared version (never probed by executing the runtime), and honest capability flags (modalities, resume/fork/steer, approval/read-only/chat-only, reconnect, resource formats, transports — all unsupported for the print-based adapters). The digest is cached by file identity and computing it never runs the executable.
+
 ## Unreleased — aggregate service memory accounting
 
 - Enforce a workspace-wide memory budget across running services: starting a service whose declared budget would push the aggregate of running services over `max_total_memory_mb` (default 4096) is refused with a capacity error. Budgets are only used when the host actually enforces them (see below).

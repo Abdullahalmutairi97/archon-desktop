@@ -5,9 +5,53 @@ registry intentionally accepts only canonical runtimes and explicit aliases.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Any, Mapping
+
+
+_ADAPTER_MANIFEST_VERSION = 1
+# The authored Prime/Pi adapters use bounded print paths; every richer native
+# capability is unsupported until a verified protocol exists.
+_ADAPTER_CAPABILITIES: dict[str, Any] = {
+    'modalities': ['prompt'],
+    'resume': False,
+    'fork': False,
+    'steer': False,
+    'approval': False,
+    'read_only': False,
+    'chat_only': False,
+    'reconnect': 'task_event_replay',
+    'resource_formats': ['print'],
+    'transports': ['stdio'],
+}
+_FINGERPRINT_CACHE: dict[tuple[str, int, int], str | None] = {}
+
+
+def _fingerprint(path: Path) -> str | None:
+    """Return a read-only sha256 of an executable, cached by file identity.
+
+    This only reads the file; it never executes the configured runtime.
+    """
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    key = (str(path), int(info.st_mtime_ns), int(info.st_size))
+    if key in _FINGERPRINT_CACHE:
+        return _FINGERPRINT_CACHE[key]
+    digest: str | None = None
+    try:
+        hasher = hashlib.sha256()
+        with open(path, 'rb') as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                hasher.update(chunk)
+        digest = hasher.hexdigest()
+    except OSError:
+        digest = None
+    _FINGERPRINT_CACHE[key] = digest
+    return digest
 
 
 class RuntimeUnavailable(RuntimeError):
@@ -110,14 +154,26 @@ class RuntimeRegistry:
         result = []
         for runtime in self.runners:
             available, check = self._availability(runtime)
+            executable = getattr(self.runners[runtime], 'executable', None)
+            declared_version = getattr(self.runners[runtime], 'declared_version', None)
+            digest: str | None = None
+            if executable is not None:
+                try:
+                    digest = _fingerprint(Path(executable).expanduser())
+                except (OSError, ValueError, TypeError):
+                    digest = None
             result.append({
                 'id': runtime,
                 'aliases': sorted(alias for alias, target in self.aliases.items() if target == runtime),
                 'available': available,
                 'availability_check': check,
-                'version': None,
+                'executable': str(executable) if executable is not None else None,
+                'executable_digest': digest,
+                'version': declared_version if isinstance(declared_version, str) else None,
                 'version_verified': False,
-                'availability_note': 'Filesystem availability does not verify authentication, provider access, or native conformance.',
+                'manifest_version': _ADAPTER_MANIFEST_VERSION,
+                'capabilities': dict(_ADAPTER_CAPABILITIES),
+                'availability_note': 'Filesystem availability and a read-only digest do not verify authentication, provider access, or native conformance.',
                 'modes': [{'id': 'auto', 'label': 'Trusted execution', 'restricted': False}],
                 'chat_only': False,
                 'sandboxed': False,
