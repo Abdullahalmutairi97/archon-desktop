@@ -11,7 +11,7 @@ interface View { status: Status; turn?: LocalCodexTurnStatusDto; output: string;
 interface EarlyEvents { output?: string; terminal?: Terminal; approvals: LocalCodexApprovalDto[] }
 interface Session {
   api: LocalCodexBridge; alive: boolean; ready: boolean; busy: boolean; pending: boolean; ended: boolean; cancelRequested: boolean
-  projectId: string; turn?: LocalCodexTurnStatusDto; early: Map<string, EarlyEvents>; approvals: LocalCodexApprovalDto[]; restoring: boolean; statusCheckPending: boolean
+  projectId: string; turn?: LocalCodexTurnStatusDto; early: Map<string, EarlyEvents>; approvals: LocalCodexApprovalDto[]; restoring: boolean; recovered: boolean; statusCheckPending: boolean
 }
 const initialView = (): View => ({ status: 'idle', output: '', message: '', approvals: [] })
 const statusLabels: Record<Status, string> = {
@@ -189,6 +189,7 @@ export function LocalCodexPanel({
     current.projectId = status.projectId
     current.pending = false
     current.restoring = false
+    current.recovered = changedTurn ? recovered : current.recovered || recovered
     current.ended = status.state !== 'running'
     current.busy = status.state === 'running'
     if (changedTurn || status.state !== 'running') current.approvals = []
@@ -201,11 +202,12 @@ export function LocalCodexPanel({
       ...previous,
       turn,
       status: turnState(status.state),
+      output: changedTurn ? '' : previous.output,
       message: status.state === 'outcome_unknown'
         ? 'The backend accepted this turn but cannot confirm that it completed before the Codex worker stopped or restarted. It was not resumed.'
         : '',
       approvals: changedTurn || status.state !== 'running' ? [] : previous.approvals,
-      recovered,
+      recovered: current.recovered,
       statusCheckFailed: false,
     }))
 
@@ -281,7 +283,8 @@ export function LocalCodexPanel({
       }
       return
     }
-    if (!current.turn || eventTaskId !== current.turn.taskId || current.ended) {
+    if (!current.turn || eventTaskId !== current.turn.taskId
+      || (current.ended && !(current.recovered && event.type === 'turn.output'))) {
       if (event.type === 'approval.requested') deny(current.api, [event.approval])
       return
     }
@@ -310,7 +313,7 @@ export function LocalCodexPanel({
   useEffect(() => {
     setProjects([]); setSessions([]); setProjectId(''); setSelectedSessionId(''); setReady(false); setProjectsLoadFailed(false); setSessionsLoadFailed(false); setPicking(false); pickingRef.current = false; setView(initialView())
     if (!api) { session.current = null; return }
-    const current: Session = { api, alive: true, ready: false, busy: false, pending: false, ended: false, cancelRequested: false, projectId: '', early: new Map(), approvals: [], restoring: !!api.getLatestTurnStatus, statusCheckPending: false }
+    const current: Session = { api, alive: true, ready: false, busy: false, pending: false, ended: false, cancelRequested: false, projectId: '', early: new Map(), approvals: [], restoring: !!api.getLatestTurnStatus, recovered: false, statusCheckPending: false }
     session.current = current
     if (current.restoring) setView({ ...initialView(), status: 'checking' })
     let unsubscribe: (() => void) | undefined
@@ -395,7 +398,7 @@ export function LocalCodexPanel({
   async function startTurn() {
     const current = session.current
     if (!current?.ready || current.busy || pickingRef.current || !projects.some((item) => item.id === projectId) || !prompt.trim() || prompt.length > TEXT_LIMIT) return
-    current.busy = true; current.pending = true; current.ended = false; current.cancelRequested = false; current.turn = undefined
+    current.busy = true; current.pending = true; current.ended = false; current.cancelRequested = false; current.turn = undefined; current.recovered = false
     current.projectId = projectId; current.early.clear(); current.approvals = []
     setView({ ...initialView(), status: 'starting' })
     try {
@@ -465,7 +468,7 @@ export function LocalCodexPanel({
         <span className="local-codex-status" role="status">{!api ? 'Desktop connection unavailable' : statusLabels[view.status]}</span></header>
       <p className="local-codex-description">Start a new conversation by default, or choose an earlier conversation in this project to continue it. Review command and exact file-change approvals here.</p>
       {!api && <p>Open the desktop app to run Codex on this PC. Browser preview is offline.</p>}
-      {view.recovered && <p className="local-codex-message" role="status">Latest accepted turn status restored from the backend. Earlier output and pending approvals are not restored.</p>}
+      {view.recovered && <p className="local-codex-message" role="status">Latest accepted turn status restored from the backend. Retained output may replay if its journal event is still available; pending approvals are not restored.</p>}
       {view.statusCheckFailed && <p className="local-codex-message" role="alert">The backend status could not be refreshed. The displayed status may be stale.</p>}
       <form onSubmit={(event) => { event.preventDefault(); void startTurn() }}>
         <div className="local-codex-project-row"><label htmlFor={`${formId}-project`}>Local project
@@ -501,7 +504,7 @@ export function LocalCodexPanel({
       }}>Reset after checking</button></div>}
       {(view.turn || view.output) && <div className="local-codex-result"><div className="local-codex-result-heading"><h2>Turn output</h2>{view.turn && <code>{view.turn.taskId}</code>}
         {view.status === 'running' && session.current?.api.getTurnStatus && <button type="button" onClick={() => { const current = session.current; if (current) void refreshTurnStatus(current) }}>Refresh backend status</button>}</div>
-        <pre aria-label="Codex output">{view.output || (view.recovered && view.status !== 'running' ? 'Earlier turn output is not restored.' : 'Waiting for output…')}</pre><p>Output is limited to the latest service snapshot of 8,000 characters.</p></div>}
+        <pre aria-label="Codex output">{view.output || (view.recovered && view.status !== 'running' ? 'Earlier output may be unavailable if its journal event was evicted.' : 'Waiting for output…')}</pre><p>Output is limited to the latest service snapshot of 8,000 characters.</p></div>}
     </section>
     {approval && <ApprovalDialog key={approval.approvalId} approval={approval} answer={(allow) => answerApproval(approval, allow)} />}
   </>

@@ -50,6 +50,21 @@ async function start() {
 }
 
 describe('LocalCodexPanel', () => {
+  it('replays retained output for a completed accepted turn without restoring approvals', async () => {
+    const fake = fakeBridge()
+    fake.localCodex.getLatestTurnStatus.mockResolvedValue({ ...turn, state: 'completed' })
+    render(<LocalCodexPanel bridge={fake.bridge} active />)
+
+    expect(await screen.findByText('Completed')).toBeInTheDocument()
+    fake.emit({ type: 'turn.output', taskId: turn.taskId, text: 'Retained answer' })
+    expect(screen.getByLabelText('Codex output')).toHaveTextContent('Retained answer')
+    fake.emit({ type: 'turn.output', taskId: 'codex-task:unrelated', text: 'Wrong turn' })
+    expect(screen.getByLabelText('Codex output')).not.toHaveTextContent('Wrong turn')
+    fake.emit({ type: 'approval.requested', approval })
+    expect(fake.localCodex.answerApproval).toHaveBeenCalledWith({ approvalId: approval.approvalId, allow: false })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('restores an unknown backend outcome without resuming or claiming completion', async () => {
     const fake = fakeBridge()
     fake.localCodex.getLatestTurnStatus.mockResolvedValue({ ...turn, state: 'outcome_unknown' })
