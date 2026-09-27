@@ -28,6 +28,7 @@ export type LocalCodexProxyRequest =
   | { operation: 'workspace.services.start'; workspaceId: string; name: string }
   | { operation: 'workspace.services.stop'; workspaceId: string; name: string; confirm: boolean }
   | { operation: 'workspace.services.logs'; workspaceId: string; name: string; lines: number }
+  | { operation: 'workspace.services.preview.open'; workspaceId: string; name: string; expectedGeneration: number; portName: string | null }
 
 export interface LocalCodexProxyEventRecord {
   seq: number

@@ -25,7 +25,9 @@ import {
 } from './localCodexController'
 import { registerLocalCodex } from './registerLocalCodex'
 import { registerWorkspaceConsole } from './registerWorkspaceConsole'
+import { registerWorkspacePreview } from './registerWorkspacePreview'
 import { registerWorkspaceServices } from './registerWorkspaceServices'
+import { WorkspacePreviewController } from './workspacePreview'
 import type { LocalCodexIpcController } from './registerLocalCodex'
 import { LocalCodexBackendAdapter } from './localCodexBackendAdapter'
 import { minimizeInsteadOfClosingForActiveWork } from './windowLifecycle'
@@ -43,6 +45,8 @@ let localCodexOwnerLease: CodexOwnerLease | undefined
 let unregisterLocalCodex: (() => void) | undefined
 let unregisterWorkspaceConsole: (() => void) | undefined
 let unregisterWorkspaceServices: (() => void) | undefined
+let unregisterWorkspacePreview: (() => void) | undefined
+let workspacePreviewController: WorkspacePreviewController | undefined
 let quitRequested = false
 
 function getRendererDevOrigin(): string | undefined {
@@ -231,6 +235,19 @@ void app.whenReady().then(async () => {
     guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
     invokePairedLocalCodex: connection.invokePairedLocalCodex,
   })
+  workspacePreviewController = new WorkspacePreviewController(() => mainWindow)
+  unregisterWorkspacePreview = registerWorkspacePreview({
+    ipc: {
+      handle: (channel, handler) => ipcMain.handle(channel, (event, ...args) => handler(event, ...args)),
+      removeHandler: (channel) => ipcMain.removeHandler(channel),
+    },
+    guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
+    invokePairedLocalCodex: connection.invokePairedLocalCodex,
+    serverUrl: async () => (await connection.describe()).serverUrl,
+    open: async (url, bounds) => { await workspacePreviewController?.open(url, bounds) },
+    setBounds: (bounds) => workspacePreviewController?.setBounds(bounds) ?? false,
+    close: () => workspacePreviewController?.close() ?? false,
+  })
   registerBridgeHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, (event, ...args) => handler(event, ...args)),
     removeHandler: (channel) => ipcMain.removeHandler(channel),
@@ -255,6 +272,10 @@ app.on('before-quit', () => {
   unregisterWorkspaceConsole = undefined
   unregisterWorkspaceServices?.()
   unregisterWorkspaceServices = undefined
+  unregisterWorkspacePreview?.()
+  unregisterWorkspacePreview = undefined
+  workspacePreviewController?.close()
+  workspacePreviewController = undefined
   localCodexBackendAdapter?.close()
   localCodexBackendAdapter = undefined
   localCodexController?.close()

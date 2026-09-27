@@ -129,9 +129,11 @@ describe('backend transport', () => {
     const workspaceId = `workspace-${'a'.repeat(32)}`
     const service = { name: 'web', argv: ['/bin/echo'], cwd: '.', ports: [], restart: 'never', state: 'registered', exitCode: null, restarts: 0, health: 'unknown' }
     const fetcher = vi.fn<BackendFetch>(async (url, init) => response(
-      url.pathname.endsWith('/logs') ? { text: 'x', truncated: false }
-        : init?.method === 'GET' ? { services: [service] }
-          : url.pathname.endsWith('/start') || init?.method === 'PUT' ? { service } : { ok: true }))
+      url.pathname.endsWith('/preview') ? { preview: { ticket: `wprev-${'d'.repeat(32)}`, mode: 'read-only', expiresAt: '2026-09-27T00:10:00Z' } }
+        : url.pathname.endsWith('/logs') ? { text: 'x', truncated: false }
+          : init?.method === 'GET' ? { services: [service] }
+            : url.pathname.endsWith('/start') || init?.method === 'PUT' ? { service } : { ok: true },
+      url.pathname.endsWith('/preview') ? 201 : 200))
     const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
     const definition = {
       name: 'web', argv: ['/bin/echo'], cwd: '.', env: [], ports: [], health: null,
@@ -143,6 +145,7 @@ describe('backend transport', () => {
     await transport.invokeLocalCodex({ operation: 'workspace.services.stop', workspaceId, name: 'web', confirm: true })
     await transport.invokeLocalCodex({ operation: 'workspace.services.remove', workspaceId, name: 'web', confirm: true })
     await transport.invokeLocalCodex({ operation: 'workspace.services.logs', workspaceId, name: 'web', lines: 200 })
+    await transport.invokeLocalCodex({ operation: 'workspace.services.preview.open', workspaceId, name: 'web', expectedGeneration: 4, portName: null })
     expect(fetcher.mock.calls.map(([url, init]) => [url.pathname + url.search, init?.method, init?.body])).toEqual([
       [`/api/local/workspaces/${workspaceId}/services`, 'GET', undefined],
       [`/api/local/workspaces/${workspaceId}/services/web`, 'PUT', JSON.stringify(definition)],
@@ -150,6 +153,7 @@ describe('backend transport', () => {
       [`/api/local/workspaces/${workspaceId}/services/web/stop`, 'POST', JSON.stringify({ confirm: true })],
       [`/api/local/workspaces/${workspaceId}/services/web`, 'DELETE', JSON.stringify({ confirm: true })],
       [`/api/local/workspaces/${workspaceId}/services/web/logs?lines=200`, 'GET', undefined],
+      [`/api/local/workspaces/${workspaceId}/services/web/preview`, 'POST', JSON.stringify({ expectedGeneration: 4, portName: null })],
     ])
   })
 

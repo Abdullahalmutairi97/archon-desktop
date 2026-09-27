@@ -93,6 +93,14 @@ export const WORKSPACE_SERVICES_CHANNELS = Object.freeze({
 
 export type WorkspaceServicesInvokeChannel = (typeof WORKSPACE_SERVICES_CHANNELS)[keyof typeof WORKSPACE_SERVICES_CHANNELS]
 
+export const WORKSPACE_PREVIEW_CHANNELS = Object.freeze({
+  open: 'archon:workspace-preview:open',
+  bounds: 'archon:workspace-preview:bounds',
+  close: 'archon:workspace-preview:close',
+} as const)
+
+export type WorkspacePreviewInvokeChannel = (typeof WORKSPACE_PREVIEW_CHANNELS)[keyof typeof WORKSPACE_PREVIEW_CHANNELS]
+
 export type LocalCodexInvokeChannel = Exclude<(typeof LOCAL_CODEX_CHANNELS)[keyof typeof LOCAL_CODEX_CHANNELS], typeof LOCAL_CODEX_CHANNELS.event>
 
 export type BridgeChannel = (typeof BRIDGE_CHANNELS)[keyof typeof BRIDGE_CHANNELS]
@@ -1111,6 +1119,67 @@ const WORKSPACE_SERVICE_PORT_NAME = /^[a-z][a-z0-9-]{0,15}$/u
 const WORKSPACE_SERVICE_ENV_REFS = new Set<string>(['NODE_ENV', 'PYTHONUNBUFFERED'])
 const WORKSPACE_SERVICE_STATES = new Set<string>(['registered', 'starting', 'running', 'stopped', 'exited', 'failed'])
 const WORKSPACE_SERVICE_HEALTH = new Set<string>(['unknown', 'starting', 'healthy', 'unhealthy'])
+const MAX_WORKSPACE_PREVIEW_COORDINATE = 20000
+
+function workspacePreviewBounds(value: unknown): { x: number; y: number; width: number; height: number } {
+  const record = exactObject(value, ['x', 'y', 'width', 'height'])
+  const numbers = ['x', 'y', 'width', 'height'].map((key) => record[key])
+  if (numbers.some((item) => typeof item !== 'number' || !Number.isInteger(item))) return fail()
+  const [x, y, width, height] = numbers as number[]
+  if (Math.abs(x) > MAX_WORKSPACE_PREVIEW_COORDINATE || Math.abs(y) > MAX_WORKSPACE_PREVIEW_COORDINATE
+    || width < 1 || height < 1 || width > MAX_WORKSPACE_PREVIEW_COORDINATE || height > MAX_WORKSPACE_PREVIEW_COORDINATE) return fail()
+  return Object.freeze({ x, y, width, height })
+}
+
+/** Validate fixed preview IPC input before main opens the native preview view. */
+export function parseWorkspacePreviewRequest(channel: unknown, args: readonly unknown[]): Readonly<Record<string, unknown>> {
+  const safeArgs = readLocalArray(args, 1)
+  if (safeArgs.length !== 1 || !Object.values(WORKSPACE_PREVIEW_CHANNELS).includes(channel as WorkspacePreviewInvokeChannel)) return fail()
+  const value = safeArgs[0]
+  switch (channel) {
+    case WORKSPACE_PREVIEW_CHANNELS.open: {
+      const record = exactObject(value, ['workspaceId', 'name', 'expectedGeneration', 'portName', 'bounds'])
+      if (!workspaceFileId(record.workspaceId) || typeof record.expectedGeneration !== 'number'
+        || !Number.isSafeInteger(record.expectedGeneration) || record.expectedGeneration < 1) return fail()
+      if (record.portName !== null && (typeof record.portName !== 'string' || !/^[a-z][a-z0-9-]{0,15}$/u.test(record.portName))) return fail()
+      return Object.freeze({
+        workspaceId: record.workspaceId,
+        name: workspaceServiceName(record.name),
+        expectedGeneration: record.expectedGeneration,
+        portName: record.portName as string | null,
+        bounds: workspacePreviewBounds(record.bounds),
+      })
+    }
+    case WORKSPACE_PREVIEW_CHANNELS.bounds:
+      return Object.freeze({ bounds: workspacePreviewBounds(value) })
+    case WORKSPACE_PREVIEW_CHANNELS.close:
+      if (value !== undefined && value !== null && Object.keys(value as object).length !== 0) return fail()
+      return Object.freeze({})
+    default:
+      return fail()
+  }
+}
+
+/** Normalize preview results returned by the main process. */
+export function parseWorkspacePreviewResponse(channel: unknown, value: unknown): unknown {
+  switch (channel) {
+    case WORKSPACE_PREVIEW_CHANNELS.open: {
+      const record = exactObject(value, ['ticket', 'url', 'mode', 'expiresAt'])
+      if (typeof record.ticket !== 'string' || !/^wprev-[0-9a-f]{32}$/u.test(record.ticket)) return fail()
+      if (typeof record.url !== 'string' || record.url.length > 2048
+        || !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/api\/local\/preview\//u.test(record.url)) return fail()
+      if (record.mode !== 'read-only') return fail()
+      if (typeof record.expiresAt !== 'string' || record.expiresAt.length > 64 || !Number.isFinite(Date.parse(record.expiresAt))) return fail()
+      return Object.freeze({ ticket: record.ticket, url: record.url, mode: 'read-only' as const, expiresAt: record.expiresAt })
+    }
+    case WORKSPACE_PREVIEW_CHANNELS.bounds:
+    case WORKSPACE_PREVIEW_CHANNELS.close:
+      if (value !== true) return fail()
+      return true
+    default:
+      return fail()
+  }
+}
 
 function workspaceServiceName(value: unknown): string {
   if (typeof value !== 'string' || !WORKSPACE_SERVICE_NAME.test(value)) return fail()

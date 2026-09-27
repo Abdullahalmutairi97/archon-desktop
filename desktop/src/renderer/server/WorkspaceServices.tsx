@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { WorkspaceServiceDefinitionInput, WorkspaceServiceDto, WorkspaceServicesBridge } from '../../shared/bridge/types'
+import type { WorkspacePreviewBridge, WorkspaceServiceDefinitionInput, WorkspaceServiceDto, WorkspaceServicesBridge } from '../../shared/bridge/types'
 import './WorkspaceServices.css'
 
 const EMPTY_LOGS = { name: '', text: '', truncated: false }
 
 export function WorkspaceServices({
   bridge,
+  preview,
   workspaceId,
   generation,
   pairingAvailable,
 }: {
   bridge: WorkspaceServicesBridge
+  preview: WorkspacePreviewBridge
   workspaceId: string
   generation: number
   pairingAvailable: boolean
@@ -26,6 +28,8 @@ export function WorkspaceServices({
   const [message, setMessage] = useState<{ kind: 'status' | 'error'; text: string } | null>(null)
   const [pending, setPending] = useState<{ action: 'stop' | 'remove'; name: string } | null>(null)
   const [logs, setLogs] = useState<{ name: string; text: string; truncated: boolean }>(EMPTY_LOGS)
+  const [previewName, setPreviewName] = useState<string | null>(null)
+  const previewBox = useRef<HTMLDivElement | null>(null)
   const lock = useRef(false)
   const identity = `${workspaceId}:${generation}`
   const identityRef = useRef(identity)
@@ -49,10 +53,30 @@ export function WorkspaceServices({
     setServices([])
     setLogs(EMPTY_LOGS)
     setPending(null)
+    setPreviewName(null)
+    void preview.close()
     void refresh()
     const timer = window.setInterval(() => { void refresh() }, 5000)
     return () => window.clearInterval(timer)
   }, [refresh])
+
+  useEffect(() => {
+    if (!previewName) return
+    const box = previewBox.current
+    if (!box) return
+    const send = (): void => {
+      const rect = box.getBoundingClientRect()
+      void preview.bounds({
+        x: Math.round(rect.x), y: Math.round(rect.y),
+        width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)),
+      })
+    }
+    const observer = new ResizeObserver(send)
+    observer.observe(box)
+    window.addEventListener('resize', send)
+    send()
+    return () => { observer.disconnect(); window.removeEventListener('resize', send) }
+  }, [preview, previewName])
 
   function buildDefinition(): WorkspaceServiceDefinitionInput | null {
     const argv = [executable.trim(), ...argsText.split('\n').map((line) => line.trim()).filter(Boolean)]
@@ -135,6 +159,49 @@ export function WorkspaceServices({
     }
   }
 
+  async function openPreview(target: string): Promise<void> {
+    if (lock.current || !pairingAvailable) return
+    const requested = identity
+    lock.current = true
+    setBusy(true)
+    setMessage(null)
+    setPreviewName(target)
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+    const box = previewBox.current
+    if (!box) {
+      setPreviewName(null)
+      lock.current = false
+      setBusy(false)
+      return
+    }
+    const rect = box.getBoundingClientRect()
+    try {
+      await preview.open({
+        workspaceId, name: target, expectedGeneration: generation, portName: null,
+        bounds: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) },
+      })
+      if (identityRef.current !== requested) return
+      setMessage({ kind: 'status', text: `Preview opened for ${target}.` })
+    } catch {
+      if (identityRef.current === requested) {
+        setPreviewName(null)
+        setMessage({ kind: 'error', text: `Could not open a preview for ${target}. The service must be running and declare a port.` })
+      }
+    } finally {
+      lock.current = false
+      if (identityRef.current === requested) setBusy(false)
+    }
+  }
+
+  async function closePreview(): Promise<void> {
+    try {
+      await preview.close()
+    } catch {
+      // Closing an already-closed preview is not an error.
+    }
+    setPreviewName(null)
+  }
+
   async function viewLogs(target: string): Promise<void> {
     if (lock.current || !pairingAvailable) return
     const requested = identity
@@ -169,6 +236,7 @@ export function WorkspaceServices({
         {service.state !== 'running' && <button type="button" onClick={() => { void startService(service.name) }} disabled={busy || !pairingAvailable}>Start</button>}
         {service.state === 'running' && <button type="button" onClick={() => setPending({ action: 'stop', name: service.name })} disabled={busy}>Stop…</button>}
         <button type="button" onClick={() => { void viewLogs(service.name) }} disabled={busy}>Logs</button>
+        {service.ports.length > 0 && <button type="button" onClick={() => { void openPreview(service.name) }} disabled={busy || !pairingAvailable}>Preview</button>}
         <button type="button" onClick={() => setPending({ action: 'remove', name: service.name })} disabled={busy}>Remove…</button>
         {pending?.name === service.name && <span className="workspace-services-confirm">{pending.action === 'stop' ? 'Stop' : 'Remove'} {service.name}?
           <button type="button" onClick={() => { void confirmPending() }} disabled={busy}>Confirm</button>
@@ -186,6 +254,12 @@ export function WorkspaceServices({
       <label><span>Port</span><input value={portValue} onChange={(e) => setPortValue(e.currentTarget.value)} inputMode="numeric" placeholder="4173" /></label>
       <button type="button" onClick={() => { void define() }} disabled={!pairingAvailable || busy}>Register</button>
     </fieldset>
+    {previewName && <div className="workspace-preview" aria-label="Service preview">
+      <div className="workspace-preview-heading"><span>Preview · {previewName}</span>
+        <button type="button" onClick={() => { void closePreview() }}>Close preview</button>
+      </div>
+      <div ref={previewBox} className="workspace-preview-surface" aria-label="Sandboxed preview surface" />
+    </div>}
     {logs.name && <div className="workspace-services-logs" aria-label="Service logs">
       <div>{logs.name}{logs.truncated ? ' · showing the bounded tail' : ''}</div>
       <pre>{logs.text || 'No output captured.'}</pre>

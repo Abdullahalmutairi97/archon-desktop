@@ -292,6 +292,26 @@ export interface WorkspaceServiceLogsDto {
   truncated: boolean
 }
 
+export interface WorkspacePreviewBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface WorkspacePreviewOpenResult {
+  ticket: string
+  url: string
+  mode: 'read-only'
+  expiresAt: string
+}
+
+export interface WorkspacePreviewBridge {
+  open(input: { workspaceId: string; name: string; expectedGeneration: number; portName: string | null; bounds: WorkspacePreviewBounds }): Promise<WorkspacePreviewOpenResult>
+  bounds(input: WorkspacePreviewBounds): Promise<boolean>
+  close(): Promise<boolean>
+}
+
 export interface WorkspaceServicesBridge {
   list(input: { workspaceId: string }): Promise<readonly WorkspaceServiceDto[]>
   define(input: { workspaceId: string; definition: WorkspaceServiceDefinitionInput }): Promise<WorkspaceServiceDto>
@@ -405,6 +425,7 @@ export interface DesktopBridge {
   readonly localCodex: LocalCodexBridge
   readonly workspaceConsole: WorkspaceConsoleBridge
   readonly workspaceServices: WorkspaceServicesBridge
+  readonly workspacePreview: WorkspacePreviewBridge
 }
 
 /** Renderer-safe projection of a main-owned project registration. */

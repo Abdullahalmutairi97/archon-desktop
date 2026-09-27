@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createDesktopBridge } from './bridge'
-import { BRIDGE_CHANNELS, WORKSPACE_CONSOLE_CHANNELS, WORKSPACE_SERVICES_CHANNELS } from '../shared/bridge/validation'
+import { BRIDGE_CHANNELS, WORKSPACE_CONSOLE_CHANNELS, WORKSPACE_PREVIEW_CHANNELS, WORKSPACE_SERVICES_CHANNELS } from '../shared/bridge/validation'
 
 describe('preload bridge', () => {
   it('exposes only frozen finite methods and forwards canonical IPC calls', async () => {
@@ -11,7 +11,7 @@ describe('preload bridge', () => {
     expect(Object.isFrozen(bridge.connection)).toBe(true)
     expect(Object.isFrozen(bridge.api)).toBe(true)
     expect(Object.isFrozen(bridge.localCodex)).toBe(true)
-    expect(Object.keys(bridge).sort()).toEqual(['api', 'connection', 'localCodex', 'workspaceConsole', 'workspaceServices'])
+    expect(Object.keys(bridge).sort()).toEqual(['api', 'connection', 'localCodex', 'workspaceConsole', 'workspacePreview', 'workspaceServices'])
     expect(Object.keys(bridge.connection).sort()).toEqual(['describe', 'disconnect', 'probe', 'save'])
     expect(Object.keys(bridge.api)).toEqual(['invoke'])
     expect(Object.isFrozen(bridge.workspaceConsole)).toBe(true)
@@ -120,6 +120,30 @@ describe('preload bridge', () => {
       definition: { ...definition, env: ['ARCHON_TOKEN'] },
     })).toThrow(TypeError)
     expect(() => bridge.workspaceServices.logs({ workspaceId, name: 'web', lines: 999 })).toThrow(TypeError)
+  })
+
+  it('exposes fixed preview calls and rejects malformed bounds', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const ticket = `wprev-${'d'.repeat(32)}`
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === WORKSPACE_PREVIEW_CHANNELS.open) {
+        return { ticket, url: `http://127.0.0.1:9000/api/local/preview/${ticket}/`, mode: 'read-only', expiresAt: '2026-09-27T00:10:00Z' }
+      }
+      return true
+    })
+    const bridge = createDesktopBridge({ invoke })
+    const bounds = { x: 10, y: 20, width: 640, height: 480 }
+    await expect(bridge.workspacePreview.open({ workspaceId, name: 'web', expectedGeneration: 3, portName: null, bounds }))
+      .resolves.toEqual({ ticket, url: `http://127.0.0.1:9000/api/local/preview/${ticket}/`, mode: 'read-only', expiresAt: '2026-09-27T00:10:00Z' })
+    await expect(bridge.workspacePreview.bounds(bounds)).resolves.toBe(true)
+    await expect(bridge.workspacePreview.close()).resolves.toBe(true)
+    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      WORKSPACE_PREVIEW_CHANNELS.open,
+      WORKSPACE_PREVIEW_CHANNELS.bounds,
+      WORKSPACE_PREVIEW_CHANNELS.close,
+    ])
+    expect(() => bridge.workspacePreview.open({ workspaceId, name: 'web', expectedGeneration: 3, portName: 'Bad', bounds })).toThrow(TypeError)
+    expect(() => bridge.workspacePreview.bounds({ x: 0, y: 0, width: 0, height: 10 })).toThrow(TypeError)
   })
 
   it('rejects unlisted operations and malformed payloads before IPC', async () => {

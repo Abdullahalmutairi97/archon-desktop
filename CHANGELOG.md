@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — sandboxed native service preview
+
+- Add a main-process `WebContentsView` preview with its own storage partition, no Node integration, no Archon preload, window-open denied and same-preview navigation enforced. The renderer never builds a preview URL: main resolves a read-only ticket and the loopback URL from the backend.
+- Wire the preview through a finite `workspacePreview` bridge (open/bounds/close) and a Workspace services "Preview" control that reserves a surface and tracks its bounds. WebSocket/HMR forwarding and the hostile preview test matrix remain open.
+
 ## Unreleased — private preview gateway foundation
 
 - Add short-lived, read-only preview tickets bound to one workspace, registered service and declared port. The ticket-gated loopback proxy forwards only an allowlisted request-header set and never an Archon credential; it does not follow redirects off the preview origin, drops cross-origin redirects, strips response cookies and hop-by-hop headers, and bounds request (512 KiB) and response (2 MiB) bodies.

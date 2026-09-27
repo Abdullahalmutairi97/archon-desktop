@@ -445,6 +445,7 @@ function WorkspaceSection({
     {activeConsoleWorkspaceId && activeConsoleGeneration !== null && <WorkspaceServices
       key={`services:${activeConsoleWorkspaceId}:${activeConsoleGeneration}`}
       bridge={bridge.workspaceServices}
+      preview={bridge.workspacePreview}
       workspaceId={activeConsoleWorkspaceId}
       generation={activeConsoleGeneration}
       pairingAvailable={localCodexPairingAvailable}

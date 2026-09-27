@@ -51,3 +51,6 @@
 }
 .workspace-services-message.service-status { color: #7fd18f; }
 .workspace-services-message.service-error { color: #f08a8a; }
+.workspace-preview { margin-top: 0.5rem; }
+.workspace-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.8rem; }
+.workspace-preview-surface { height: 24rem; margin-top: 0.35rem; border: 1px solid var(--border, #2a2a2a); border-radius: 4px; background: #0b0b0b; }

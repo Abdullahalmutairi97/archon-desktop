@@ -768,6 +768,17 @@ function localCodexRequestDetails(request: LocalCodexProxyRequest): {
         || !/^[a-z][a-z0-9-]{0,31}$/u.test(request.name)
         || !Number.isInteger(request.lines) || request.lines < 1 || request.lines > 400) break
       return { method: 'GET', path: `/api/local/workspaces/${request.workspaceId}/services/${request.name}/logs?lines=${request.lines}` }
+    case 'workspace.services.preview.open':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !/^[a-z][a-z0-9-]{0,31}$/u.test(request.name)
+        || !Number.isSafeInteger(request.expectedGeneration) || request.expectedGeneration < 1
+        || (request.portName !== null && !/^[a-z][a-z0-9-]{0,15}$/u.test(request.portName))) break
+      return {
+        method: 'POST',
+        path: `/api/local/workspaces/${request.workspaceId}/services/${request.name}/preview`,
+        body: JSON.stringify({ expectedGeneration: request.expectedGeneration, portName: request.portName }),
+        expectedStatus: 201,
+      }
   }
   throw new BackendTransportError('invalid_payload')
 }
