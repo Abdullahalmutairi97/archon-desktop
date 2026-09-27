@@ -29,6 +29,26 @@ passed archive/version/anchor/syntax validation and wrote a candidate payload:
 The builder never installs, restarts or replaces the app. No production files,
 installed app payload, or release archives were changed.
 
+## Canonical comparison
+
+`node current/testing/canonical-compare.cjs <frozen.asar> [candidate.asar]` is the
+isolated canonical comparison. Against the frozen input it verifies all four
+`current/baseline.json` files byte-for-byte; against a rebuilt candidate it
+verifies the untouched files stay byte-identical and only the intended files
+change. Exit code is non-zero on any mismatch; no official hash is altered and
+no threshold is lowered.
+
+Result on 2026-09-27:
+
+- Frozen input: all four baseline files match (`package.json`, `dist/main/main.cjs`,
+  `dist/main/preload.cjs`, `dist/renderer/assets/index-DN77foUV.js`).
+- Candidate: `package.json` and `dist/main/preload.cjs` byte-identical to baseline;
+  `dist/main/main.cjs` and the renderer patched as intended; PeerJS bundled and the
+  renderer CSP includes `wss://0.peerjs.com`.
+
+This verifies the input identity and the patched change-set. It is not a native or
+visual parity claim.
+
 ## Limits
 
 - The candidate is an app payload, not an Electron installer or an official release.
