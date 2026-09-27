@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
@@ -8,6 +8,8 @@ import {
 import { createConnectionService } from './connectionService'
 import { registerBridgeHandlers } from './registerBridge'
 import { TrustedShellFrameGuard, type TrustedShellIpcEvent } from './security/TrustedShellFrameGuard'
+import { CredentialStore } from './storage/credentialStore'
+import { ProfileStore } from './storage/profileStore'
 import { BackendTransport } from './transport/backendTransport'
 
 const RECONSTRUCTION_PROFILE = 'archon-desktop-reconstruction-dev'
@@ -16,7 +18,6 @@ app.setName('Archon Desktop Reconstruction')
 app.setPath('userData', join(app.getPath('appData'), RECONSTRUCTION_PROFILE))
 
 const trustedFrame = new TrustedShellFrameGuard()
-const connection = createConnectionService(new BackendTransport())
 
 function getRendererDevOrigin(): string | undefined {
   if (app.isPackaged) return undefined
@@ -94,7 +95,13 @@ function createMainWindow(): BrowserWindow {
   return window
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  const profileStore = new ProfileStore({ profileRoot: app.getPath('userData') })
+  const credentialStore = new CredentialStore({
+    profileRoot: profileStore.paths.profileRoot,
+    safeStorage,
+  })
+  const connection = await createConnectionService(new BackendTransport(), credentialStore)
   registerBridgeHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, (event, ...args) => handler(event, ...args)),
     removeHandler: (channel) => ipcMain.removeHandler(channel),

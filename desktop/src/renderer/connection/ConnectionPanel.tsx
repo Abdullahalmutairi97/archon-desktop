@@ -12,9 +12,19 @@ interface ServerOverview {
 const connectionFailure = 'Connection check failed. Verify the address and token.'
 const overviewFailure = 'The read-only server overview is unavailable.'
 
+function storageHint(description: ConnectionDescription | null): string {
+  if (description?.storageMode === 'protected' && description.configured) {
+    return 'The connection is stored with OS-protected storage. The token stays in the desktop main process.'
+  }
+  if (description?.storageMode === 'unavailable') {
+    return 'Saved connection storage could not be read. Its record was left unchanged; disconnect to clear it.'
+  }
+  return 'The token is held in main-process memory and must be entered again after a restart.'
+}
+
 function statusLabel(description: ConnectionDescription | null, probe: ConnectionProbeResult | null): string {
   if (!description?.configured) return 'Disconnected'
-  if (!probe) return 'Saved in memory'
+  if (!probe) return 'Configured · not checked'
   if (!probe.ok) return probe.error?.code === 'unauthorized' ? 'Access rejected' : 'Connection unavailable'
   return probe.readiness?.dispatch_ready === true ? 'Dispatch ready' : 'Dispatch unavailable'
 }
@@ -69,7 +79,7 @@ export function ConnectionPanel({ bridge }: { bridge?: DesktopBridge }) {
 
   async function connect(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
-    if (!bridge || busy || !serverUrl.trim() || !token) return
+    if (!bridge || busy || description?.storageMode === 'unavailable' || !serverUrl.trim() || !token) return
     const id = ++serial.current
     const enteredToken = token
     setToken('')
@@ -110,7 +120,7 @@ export function ConnectionPanel({ bridge }: { bridge?: DesktopBridge }) {
   }
 
   async function disconnect(): Promise<void> {
-    if (!bridge || busy || !description?.configured) return
+    if (!bridge || busy || (!description?.configured && description?.storageMode !== 'unavailable')) return
     const id = ++serial.current
     setBusy(true)
     setToken('')
@@ -138,8 +148,8 @@ export function ConnectionPanel({ bridge }: { bridge?: DesktopBridge }) {
         <input id="connection-url" type="url" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://archon.example" autoComplete="url" disabled={!bridge || busy} />
         <label htmlFor="connection-token">Device token</label>
         <input id="connection-token" type="password" value={token} onChange={(event) => setToken(event.target.value)} autoComplete="new-password" disabled={!bridge || busy} />
-        <p className="connection-hint">The token is held in main-process memory and must be entered again after a restart.</p>
-        <div className="connection-actions"><button className="connection-primary" type="submit" disabled={!bridge || busy || !serverUrl.trim() || !token}>Connect</button><button type="button" onClick={() => { void refresh() }} disabled={!bridge || busy || !description?.configured}>Check again</button><button type="button" onClick={() => { void disconnect() }} disabled={!bridge || busy || !description?.configured}>Disconnect</button></div>
+        <p className="connection-hint">{storageHint(description)}</p>
+        <div className="connection-actions"><button className="connection-primary" type="submit" disabled={!bridge || busy || description?.storageMode === 'unavailable' || !serverUrl.trim() || !token}>Connect</button><button type="button" onClick={() => { void refresh() }} disabled={!bridge || busy || !description?.configured}>Check again</button><button type="button" onClick={() => { void disconnect() }} disabled={!bridge || busy || (!description?.configured && description?.storageMode !== 'unavailable')}>{description?.storageMode === 'unavailable' && !description.configured ? 'Clear saved record' : 'Disconnect'}</button></div>
       </form>
       <section className="connection-card connection-status-card" aria-label="Read-only connection status">
         <div className="connection-card-heading"><h2>Backend status</h2><span className="fixture-tag">NO COMMANDS</span></div>

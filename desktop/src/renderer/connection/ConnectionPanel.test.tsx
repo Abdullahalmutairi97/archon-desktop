@@ -1,13 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { DesktopBridge } from '../../shared/bridge/types'
+import type { ConnectionDescription, DesktopBridge } from '../../shared/bridge/types'
 import { ConnectionPanel } from './ConnectionPanel'
 
 afterEach(cleanup)
 
 function fakeBridge() {
   const connection = {
-    describe: vi.fn(async () => ({ serverUrl: null, configured: false, storageMode: 'memory' as const, generation: 0 })),
+    describe: vi.fn(async (): Promise<ConnectionDescription> => ({ serverUrl: null, configured: false, storageMode: 'memory', generation: 0 })),
     save: vi.fn(async () => ({
       description: { serverUrl: 'http://127.0.0.1:8000', configured: true, storageMode: 'memory' as const, generation: 1 },
       probe: { ok: true, readiness: { dispatch_ready: false } },
@@ -69,7 +69,32 @@ describe('connection panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
     await screen.findByRole('alert')
     expect(screen.queryByText('Dispatch ready')).not.toBeInTheDocument()
-    expect(screen.getByText('Saved in memory')).toBeInTheDocument()
+    expect(screen.getByText('Configured · not checked')).toBeInTheDocument()
     unmount()
+  })
+
+  it('shows protected persistence only when the main bridge reports it', async () => {
+    const { bridge, connection } = fakeBridge()
+    connection.describe.mockResolvedValue({
+      serverUrl: 'https://archon.example', configured: true, storageMode: 'protected', generation: 3,
+    })
+    render(<ConnectionPanel bridge={bridge} />)
+    expect(await screen.findByText(/stored with OS-protected storage/i)).toBeInTheDocument()
+    expect(screen.getByText('Configured · not checked')).toBeInTheDocument()
+    expect(screen.queryByText(/must be entered again after a restart/i)).not.toBeInTheDocument()
+  })
+
+  it('allows clearing a saved record that could not be read', async () => {
+    const { bridge, connection } = fakeBridge()
+    connection.describe.mockResolvedValue({
+      serverUrl: null, configured: false, storageMode: 'unavailable', generation: 0,
+    })
+    render(<ConnectionPanel bridge={bridge} />)
+    await screen.findByText(/saved connection storage could not be read/i)
+    fireEvent.change(screen.getByLabelText('Server address'), { target: { value: 'https://archon.example' } })
+    fireEvent.change(screen.getByLabelText('Device token'), { target: { value: 'TOKEN_SENTINEL' } })
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled()
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear saved record' }))
+    await waitFor(() => expect(connection.disconnect).toHaveBeenCalledTimes(1))
   })
 })

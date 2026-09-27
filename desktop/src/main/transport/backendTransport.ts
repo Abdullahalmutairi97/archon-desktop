@@ -180,6 +180,11 @@ function validateConnection(input: BackendConnectionInput): { origin: string; ba
   }
 }
 
+/** Validate before any credential persistence or transport mutation occurs. */
+export function validateBackendConnectionInput(input: BackendConnectionInput): void {
+  validateConnection(input)
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const prototype = Object.getPrototypeOf(value)
