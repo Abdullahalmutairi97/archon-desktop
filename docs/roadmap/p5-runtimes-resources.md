@@ -15,12 +15,12 @@ Keep provider/model, runtime, harness and execution environment distinct. Use na
 - [ ] Normalize allowlisted events with attempt/runner/generation identity. Malformed/unknown native events become diagnostics, not false completion.
 - [ ] Bound, redact, encrypt, restrict and expire optional diagnostic capture; disable raw capture when credentials cannot reliably be excluded.
 - [ ] Bind approvals to action digest, attempt/native request, workspace generation and current policy. Deny stale/replayed/unauthorized/time-expired decisions; cancellation remains requested until termination is confirmed.
-- [ ] Add scoped provider/native authentication states and secret references without copying personal auth files between users.
+- [ ] Add scoped provider/native authentication states and secret references without copying personal auth files between users. Owner-registered secret references and a scoped per-provider authentication state (`unavailable` / `unverified` / `verified`) are reported by `/api/local/secrets/references` and `/api/local/secrets/auth-states`; a state is derived from a resolvable reference plus a completed brokered call, i.e. it never claims provider capability or quota. Native auth-file hand-off between users remains open.
 - [ ] Create resource definitions, assignments, install requests, immutable per-attempt snapshots, update/rollback pins and effective configuration provenance.
 - [ ] Enforce hard policy before project/user/workspace/agent overrides; narrower scopes cannot widen denied permissions or secrets.
 - [ ] Implement runtime-specific MCP transport/auth translators and versioned skill materialization. Inventory/configuration is not proof of connection; unsupported transports/formats are rejected.
 - [ ] Approve managed executable installation/provisioning. Treat skill scripts as executable code and Markdown instructions as untrusted guidance rather than permission enforcement.
-- [ ] For secret-backed restricted actions, use an isolated credential-holding broker that checks principal/tool/arguments/epoch, or equivalently enforced upstream credential scopes. Workspace code must not read broader credentials/process state or bypass the authorized channel with shell/direct HTTP.
+- [ ] For secret-backed restricted actions, use an isolated credential-holding broker that checks principal/tool/arguments/epoch, or equivalently enforced upstream credential scopes. Workspace code must not read broader credentials/process state or bypass the authorized channel with shell/direct HTTP. An isolated broker now holds this server's own environment-supplied credentials: an action needs a single-use grant bound to the principal, tool, exact-argument digest, attempt, workspace generation and ledger epoch, the broker performs the upstream HTTPS call itself and redacts the value from the bounded result, and the decision trail is owner-only. It is a capability boundary inside the server process, not an OS sandbox: no tool/MCP adapter consumes it yet, and bypass through a named tool versus shell/direct HTTP is not yet demonstrated.
 - [ ] Stop/restart affected sessions when cached resources cannot be safely revoked. Never forward Archon credentials to MCP servers.
 - [ ] Derive runtime/resource choices in the existing UI from capability/auth states and publish a tested compatibility table.
 
@@ -28,7 +28,7 @@ Keep provider/model, runtime, harness and execution environment distinct. Use na
 
 - [ ] Each enabled pinned runtime completes a small file/test turn in its assigned workspace; auth/cancel/recovery/unsupported behaviors match the advertised matrix.
 - [ ] Malformed JSONL, subprocess loss, timeout/approval replay and indirect denied execution paths have regression coverage.
-- [ ] A forbidden secret-backed operation fails through both the named tool and shell/direct HTTP; broker/process isolation or upstream scopes prevent the effect.
+- [ ] A forbidden secret-backed operation fails through both the named tool and shell/direct HTTP; broker/process isolation or upstream scopes prevent the effect. Partially covered: binding, replay, expiry, epoch and generation denials and redaction have regression tests. The two-channel (named tool versus shell/direct HTTP) bypass check is still open.
 - [ ] No cross-user auth or secret values appear in API/UI/logs. Resource scope precedence, incompatible transport, update rollback and active revocation pass.
 - [ ] Compatibility records include binary/version/digest, date, fixture/native evidence and limits. Unavailable credentials mark that adapter unverified, never ready.
 

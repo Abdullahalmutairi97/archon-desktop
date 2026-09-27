@@ -112,6 +112,20 @@ from .workspace_write_lease import (
     WorkspaceWriteLeaseNotHolder,
     WorkspaceWriteLeaseUnavailable,
 )
+from .secret_broker import (
+    DEFAULT_TTL_SECONDS as SECRET_GRANT_DEFAULT_TTL_SECONDS,
+    MAX_GRANT_TTL_SECONDS as SECRET_GRANT_MAX_TTL_SECONDS,
+    BrokerTransport,
+    SecretBroker,
+    SecretBrokerError,
+    SecretBrokerUnavailable,
+    SecretGrantRejected,
+    SecretReferenceExists,
+    SecretReferenceUnknown,
+    SecretTransportError,
+    SecretValueUnavailable,
+    SecretWorkspaceUnknown,
+)
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
 
@@ -120,6 +134,7 @@ logger = logging.getLogger(__name__)
 workspace_file_write_lock = threading.Lock()
 WEBSOCKET_AUTH_TIMEOUT_SECONDS = 5.0
 LOCAL_TASK_RUNNER_ID = "archon-desktop-local"
+_RUNNER_PRINCIPAL = re.compile(r"runner-[0-9a-f]{32}\Z")
 LOCAL_CODEX_PROJECT_ID = re.compile(r"^codex-project:[A-Za-z0-9._:-]{1,242}$")
 LOCAL_CODEX_TASK_ID = re.compile(r"^codex-task:[A-Za-z0-9._:-]{1,245}$")
 LOCAL_CODEX_SESSION_ID = re.compile(r"^codex:[A-Za-z0-9._:-]{1,250}$")
@@ -373,6 +388,41 @@ class WorkspaceCodeServerRequest(BaseModel):
     port: int = Field(strict=True, ge=1024, le=65535)
 
 
+class SecretReferenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    reference: str = Field(min_length=3, max_length=64)
+    provider: str = Field(min_length=1, max_length=32)
+    purpose: str = Field(min_length=1, max_length=200)
+    source_key: str = Field(alias="sourceKey", min_length=3, max_length=64)
+    endpoint: str = Field(min_length=8, max_length=300)
+    auth_header: Literal["authorization", "x-api-key"] = Field(default="authorization", alias="authHeader")
+    auth_prefix: Literal["Bearer ", ""] = Field(default="Bearer ", alias="authPrefix")
+
+
+class SecretGrantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    reference: str = Field(min_length=3, max_length=64)
+    tool: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any]
+    attempt_id: str = Field(alias="attemptId", min_length=1, max_length=128)
+    workspace_id: str = Field(alias="workspaceId", min_length=1, max_length=64)
+    delegate_principal: str | None = Field(default=None, alias="delegatePrincipal", max_length=128)
+    ttl_seconds: int | None = Field(
+        default=None, alias="ttlSeconds", strict=True, ge=5, le=SECRET_GRANT_MAX_TTL_SECONDS
+    )
+
+
+class SecretInvokeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    grant_token: str = Field(alias="grantToken", min_length=16, max_length=128)
+    tool: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any]
+    attempt_id: str = Field(alias="attemptId", min_length=1, max_length=128)
+
+
 class WorkspaceWriteLeaseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -606,7 +656,12 @@ def _sse_event_batch(store: TaskStore, cursor: int, limit: int = 512) -> tuple[i
     return cursor, frames
 
 
-def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    runner=None,
+    *,
+    secret_transport: BrokerTransport | None = None,
+) -> FastAPI:
     settings = settings or Settings()
     validate_server_security(settings)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -635,6 +690,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     runner_outbox: RunnerOutbox | None = None
     runner_results: RunnerResultLedger | None = None
     workspace_write_leases: WorkspaceWriteLease | None = None
+    secret_broker: SecretBroker | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
         settings.runner_journal_path.lstat()
@@ -685,6 +741,19 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
 
     def workspace_owner_id() -> str:
         return f"local-uid:{os.geteuid()}"
+
+    def workspace_generation_lookup(workspace_id: str) -> int | None:
+        """Return the current generation of an owner-registered workspace, else None."""
+        try:
+            workspace = store.db.get_workspace(workspace_id)
+        except (KeyError, ValueError):
+            return None
+        if workspace.get("owner_id") != workspace_owner_id():
+            return None
+        generation = workspace.get("generation")
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+            return None
+        return generation
 
     def workspace_identity(workspace: Mapping[str, Any]) -> dict[str, Any]:
         return {
@@ -828,6 +897,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         nonlocal runner_outbox
         nonlocal runner_results
         nonlocal workspace_write_leases
+        nonlocal secret_broker
         runner_ownership.acquire()
         try:
             if pairing_broker is not None:
@@ -853,6 +923,14 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 runner_outbox = RunnerOutbox(data_root / "runner-outbox")
                 runner_results = RunnerResultLedger(data_root / "runner-results")
                 workspace_write_leases = WorkspaceWriteLease(data_root / "workspace-write-leases")
+                # The broker holds provider credentials this process already
+                # received from the service manager's external environment file.
+                # It resolves values itself and never returns them.
+                secret_broker = SecretBroker(
+                    data_root / "secret-broker",
+                    generation_lookup=workspace_generation_lookup,
+                    transport=secret_transport,
+                )
             if settings.local_codex_enabled:
                 local_codex_event_journal = LocalCodexEventJournal(
                     settings.runner_journal_path.parent / "local-codex-events.sqlite3"
@@ -886,6 +964,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             app.state.runner_outbox = runner_outbox
             app.state.runner_results = runner_results
             app.state.workspace_write_leases = workspace_write_leases
+            app.state.secret_broker = secret_broker
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -1342,6 +1421,162 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
 
+    async def brokered_secret_result(broker: SecretBroker, *, principal: str, payload: SecretInvokeRequest):
+        """Run one brokered call off the event loop and map denials to bounded responses."""
+        try:
+            result = await asyncio.to_thread(
+                broker.invoke,
+                grant_token=payload.grant_token,
+                principal=principal,
+                tool=payload.tool,
+                arguments=payload.arguments,
+                attempt_id=payload.attempt_id,
+            )
+        except SecretGrantRejected as exc:
+            return JSONResponse(
+                status_code=exc.status,
+                content={"detail": str(exc), "code": "secret_grant_rejected", "reason": exc.reason},
+                headers={"Cache-Control": "no-store"},
+            )
+        except SecretValueUnavailable as exc:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": str(exc), "code": "secret_value_unavailable"},
+                headers={"Cache-Control": "no-store"},
+            )
+        except SecretTransportError as exc:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "detail": str(exc),
+                    "code": "secret_upstream_failed",
+                    "retry": "the grant is consumed; mint a new grant to retry",
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        except SecretBrokerUnavailable as exc:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": str(exc), "code": "secret_broker_unavailable"},
+                headers={"Cache-Control": "no-store"},
+            )
+        except (SecretBrokerError, ValueError) as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": str(exc), "code": "secret_request_rejected"},
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+    def secret_broker_service() -> SecretBroker:
+        if secret_broker is None:
+            raise HTTPException(status_code=503, detail="The secret broker is unavailable")
+        return secret_broker
+
+    @app.get("/api/local/secrets/references", dependencies=[Depends(require_local_owner)])
+    async def local_secret_references():
+        try:
+            broker = secret_broker_service()
+            return JSONResponse(
+                content={"references": broker.list_references(), "epoch": broker.epoch()},
+                headers={"Cache-Control": "no-store"},
+            )
+        except SecretBrokerUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/local/secrets/references", status_code=201, dependencies=[Depends(require_local_owner)])
+    async def local_secret_reference_register(payload: SecretReferenceRequest):
+        """Register how to reach one upstream secret. The value is never read here."""
+        try:
+            row = secret_broker_service().register_reference(
+                payload.reference,
+                provider=payload.provider,
+                purpose=payload.purpose,
+                source_key=payload.source_key,
+                endpoint=payload.endpoint,
+                auth_header=payload.auth_header,
+                auth_prefix=payload.auth_prefix,
+            )
+        except SecretReferenceExists as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except SecretBrokerUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (SecretBrokerError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(status_code=201, content={"reference": row}, headers={"Cache-Control": "no-store"})
+
+    @app.delete("/api/local/secrets/references/{reference}", dependencies=[Depends(require_local_owner)])
+    async def local_secret_reference_revoke(reference: str):
+        """Revoke a reference: bump the epoch and invalidate every outstanding grant."""
+        try:
+            result = secret_broker_service().revoke_reference(reference)
+        except SecretReferenceUnknown as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except SecretBrokerUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/local/secrets/auth-states", dependencies=[Depends(require_local_owner)])
+    async def local_secret_auth_states():
+        """Scoped provider authentication states. Never returns a credential."""
+        try:
+            return JSONResponse(content=secret_broker_service().auth_states(), headers={"Cache-Control": "no-store"})
+        except SecretBrokerUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/local/secrets/audit", dependencies=[Depends(require_local_owner)])
+    async def local_secret_audit(limit: int = Query(32, ge=1, le=128)):
+        """Bounded decision trail: principal, tool, digest and reason, never a value."""
+        try:
+            entries = secret_broker_service().audit(limit)
+        except SecretBrokerUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(
+            content={"audit": entries, "secretValuesExposed": False}, headers={"Cache-Control": "no-store"}
+        )
+
+    @app.post("/api/local/secrets/grants", status_code=201, dependencies=[Depends(require_local_owner)])
+    async def local_secret_grant(payload: SecretGrantRequest, principal=Depends(require_local_owner)):
+        """Mint one single-use grant for an exact action, bound to this principal."""
+        current_owner_workspace(payload.workspace_id)
+        delegate = payload.delegate_principal
+        if delegate is not None:
+            if not _RUNNER_PRINCIPAL.fullmatch(delegate):
+                raise HTTPException(status_code=400, detail="Delegate principal must be an enrolled runner")
+            if not any(row["runnerId"] == delegate for row in runner_enrollment_service().list()):
+                raise HTTPException(status_code=404, detail="Delegate runner is not enrolled")
+        try:
+            minted = secret_broker_service().mint_grant(
+                principal=principal["principal_id"],
+                reference=payload.reference,
+                tool=payload.tool,
+                arguments=payload.arguments,
+                attempt_id=payload.attempt_id,
+                workspace_id=payload.workspace_id,
+                delegate_principal=delegate,
+                ttl_seconds=payload.ttl_seconds,
+            )
+        except (SecretWorkspaceUnknown, SecretReferenceUnknown) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except SecretBrokerUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (SecretBrokerError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(status_code=201, content=minted, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/local/secrets/invoke", dependencies=[Depends(require_local_owner)])
+    async def local_secret_invoke(payload: SecretInvokeRequest, principal=Depends(require_local_owner)):
+        """Perform one brokered action. The caller never receives the credential."""
+        return await brokered_secret_result(
+            secret_broker_service(),
+            principal=principal["principal_id"],
+            payload=payload,
+        )
+
     def workspace_service_manager() -> WorkspaceServiceManager:
         if local_workspace_services is None:
             raise HTTPException(status_code=503, detail="Workspace services are unavailable")
@@ -1644,6 +1879,18 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             runner_enrollment_service().authenticate(runner_id, secret)
         except RunnerAuthenticationError as exc:
             raise HTTPException(status_code=401, detail="Runner credentials are invalid") from exc
+
+    @app.post("/api/runners/{runner_id}/secret-invoke")
+    async def runner_secret_invoke(
+        runner_id: str,
+        payload: SecretInvokeRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        """An enrolled runner redeems a grant minted for it; the credential stays here."""
+        authenticate_runner(runner_id, authorization)
+        return await brokered_secret_result(
+            secret_broker_service(), principal=runner_id, payload=payload
+        )
 
     @app.post("/api/local/runners/{runner_id}/enqueue", dependencies=[Depends(require_local_owner)])
     async def local_runner_enqueue(runner_id: str, payload: RunnerEnqueueRequest):

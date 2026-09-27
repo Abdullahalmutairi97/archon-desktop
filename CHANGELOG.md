@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — secret broker
+
+- Add an isolated credential-holding broker for secret-backed actions. A credential stays in the server process environment and is addressed by an operator-registered reference; no value is persisted, returned, logged or copied into a child environment. An action needs a single-use grant bound to the principal, tool name, digest of the exact arguments, attempt id, workspace identity plus its current generation and the ledger epoch. The broker re-checks that binding, performs the upstream HTTPS request itself over an allowlisted request shape, consumes the grant before the call starts (an ambiguous failure is never retried silently), redacts the credential from the bounded result and audits every decision. Owner-only `/api/local/secrets/*` endpoints register and revoke references, report scoped provider auth states and read the bounded decision trail; an enrolled runner redeems a grant minted for it over its own authenticated channel (`/api/runners/{id}/secret-invoke`). Ledger state is a bounded, schema-validated, private (0600) document.
+
 ## Unreleased — workspace write lease
 
 - Add an exclusive, expiring single-writer lease per workspace in a private bounded ledger: the owner can acquire, inspect and release it, a second holder is refused while a live lease is held, the current holder may renew, and an expired lease does not block a new holder. This is the coordination primitive a handoff needs before write access moves.
