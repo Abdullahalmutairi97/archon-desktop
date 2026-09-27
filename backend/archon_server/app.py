@@ -368,6 +368,19 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     projects = ProjectService(settings.profile_home / "projects.db")
     workspace_checkout_provisioner: WorkspaceCheckoutProvisioner | None = None
 
+    def workspace_owner_id() -> str:
+        return f"local-uid:{os.geteuid()}"
+
+    def workspace_identity(workspace: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "workspace_id": workspace["workspace_id"],
+            "root": workspace["root"],
+            "project_id": workspace["project_id"],
+            "base_revision": workspace["base_revision"],
+            "head_revision": workspace["head_revision"],
+            "generation": workspace["generation"],
+        }
+
     def workspace_checkout_service() -> WorkspaceCheckoutProvisioner:
         nonlocal workspace_checkout_provisioner
         if workspace_checkout_provisioner is None:
@@ -377,7 +390,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 database=store.db,
                 projects=projects,
                 workspace_root=settings.data_dir.expanduser() / "workspaces",
-                owner_id=f"local-uid:{os.geteuid()}",
+                owner_id=workspace_owner_id(),
                 isolation_profile="git-checkout",
             )
         return workspace_checkout_provisioner
@@ -881,6 +894,21 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         return {"ok": True, "files_preserved": True}
 
+    @app.get("/api/workspaces", dependencies=protected)
+    def list_workspaces(limit: int = Query(100, ge=1, le=500)):
+        workspaces = store.db.list_workspaces(owner_id=workspace_owner_id(), limit=limit)
+        return {"workspaces": [workspace_identity(workspace) for workspace in workspaces]}
+
+    @app.get("/api/workspaces/{workspace_id}", dependencies=protected)
+    def get_workspace(workspace_id: str):
+        try:
+            workspace = store.db.get_workspace(workspace_id)
+        except (KeyError, ValueError):
+            raise HTTPException(status_code=404, detail="Workspace not found") from None
+        if workspace["owner_id"] != workspace_owner_id():
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        return {"workspace": workspace_identity(workspace)}
+
     @app.post("/api/workspaces", dependencies=protected)
     def provision_workspace(payload: WorkspaceProvisionRequest):
         workspace = workspace_checkout_service().provision(
@@ -890,14 +918,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         )
         # Return only the persisted workspace identity and its authoritative root.
         # The endpoint creates a checkout; it does not execute code in it.
-        return {"workspace": {
-            "workspace_id": workspace["workspace_id"],
-            "root": workspace["root"],
-            "project_id": workspace["project_id"],
-            "base_revision": workspace["base_revision"],
-            "head_revision": workspace["head_revision"],
-            "generation": workspace["generation"],
-        }}
+        return {"workspace": workspace_identity(workspace)}
 
     @app.get("/api/sessions", dependencies=protected)
     def get_sessions(limit: int = Query(120, ge=1, le=500), project_id: str | None = None):

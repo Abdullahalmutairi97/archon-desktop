@@ -554,6 +554,19 @@ class Database:
             raise KeyError(workspace_id)
         return dict(row)
 
+    def list_workspaces(self, owner_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        """List a bounded page of workspaces for one server-selected owner."""
+        owner_id = _workspace_text(owner_id, "owner_id", limit=200)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("limit must be an integer between 1 and 500")
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM workspaces WHERE owner_id=?
+                   ORDER BY created_at DESC, workspace_id LIMIT ?""",
+                (owner_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def map_native_session(
         self,
         workspace_id: str,

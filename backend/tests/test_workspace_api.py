@@ -64,9 +64,15 @@ def test_workspace_provision_api_creates_registered_revision_pinned_checkout(tmp
             headers=headers,
             json={"project_id": project["id"], "revision": revision},
         )
+        workspace = response.json()["workspace"]
+        detail_response = client.get(f"/api/workspaces/{workspace['workspace_id']}", headers=headers)
+        list_response = client.get("/api/workspaces", headers=headers)
 
     assert response.status_code == 200
-    workspace = response.json()["workspace"]
+    assert detail_response.status_code == 200
+    assert detail_response.json() == {"workspace": workspace}
+    assert list_response.status_code == 200
+    assert list_response.json() == {"workspaces": [workspace]}
     root = Path(workspace["root"])
     assert root.is_relative_to((settings.data_dir / "workspaces").resolve())
     assert root != source.resolve()
@@ -123,3 +129,31 @@ def test_workspace_provision_api_rejects_unregistered_project(tmp_path):
 
     assert response.status_code == 400
     assert "registered project" in response.json()["detail"]
+
+
+def test_workspace_reads_hide_workspaces_owned_by_another_server_identity(tmp_path):
+    settings = _settings(tmp_path)
+    foreign_root = tmp_path / "foreign-workspace-root"
+    foreign_root.mkdir(mode=0o700)
+    database = Database(settings.database_path)
+    foreign = database.create_workspace(
+        workspace_id="workspace-foreign-owner",
+        root=str(foreign_root),
+        owner_id="different-server-owner",
+        project_id="project-foreign",
+        base_revision="a" * 40,
+        head_revision="a" * 40,
+        generation=1,
+        isolation_profile="git-checkout",
+    )
+    headers = {"Authorization": "Bearer workspace-api-token"}
+
+    with TestClient(create_app(settings)) as client:
+        detail_response = client.get(f"/api/workspaces/{foreign['workspace_id']}", headers=headers)
+        list_response = client.get(
+            "/api/workspaces?owner_id=different-server-owner", headers=headers,
+        )
+
+    assert detail_response.status_code == 404
+    assert list_response.status_code == 200
+    assert list_response.json() == {"workspaces": []}
