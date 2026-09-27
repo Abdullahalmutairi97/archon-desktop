@@ -38,6 +38,11 @@ jobs:
         working-directory: /
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Trust the checked-out workspace for package provenance
+        working-directory: /
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse --verify HEAD
       - run: npm ci
       - run: npm run ci
       - name: Show source and emitted-file SHA-256 inventory
