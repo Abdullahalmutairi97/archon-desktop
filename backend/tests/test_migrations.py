@@ -44,15 +44,16 @@ def test_versioned_migration_preserves_history_and_verifiable_backup_restores_le
     original_schema = schema(path)
     db = Database(path)
     with db.connect() as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 2
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 3
         ledger = conn.execute('SELECT version,checksum FROM schema_migrations').fetchall()
         assert [(r[0], r[1]) for r in ledger] == [
-            (1, db_module.MIGRATION_CHECKSUM), (2, db_module.MIGRATION_CHECKSUMS[2])
+            (1, db_module.MIGRATION_CHECKSUM), (2, db_module.MIGRATION_CHECKSUMS[2]),
+            (3, db_module.MIGRATION_CHECKSUMS[3]),
         ]
         assert conn.execute('SELECT request_hash FROM tasks').fetchall()[0][0] is None
         assert [tuple(r) for r in conn.execute('SELECT id,status,session_id FROM tasks ORDER BY id')] == [
             ('active', 'running', 'prime-active'), ('pending', 'queued', 'native-session-123')]
-    snapshots = list(tmp_path.glob('state.db.pre-v2-*.sqlite3'))
+    snapshots = list(tmp_path.glob('state.db.pre-v3-*.sqlite3'))
     assert len(snapshots) == 1
     assert stat.S_IMODE(snapshots[0].stat().st_mode) == 0o600
     assert db.migration_backup == snapshots[0]
@@ -67,7 +68,7 @@ def test_versioned_migration_preserves_history_and_verifiable_backup_restores_le
     for table, expected in original.items():
         assert rows(restored, table) == expected
     Database(path)
-    assert list(tmp_path.glob('state.db.pre-v2-*.sqlite3')) == snapshots
+    assert list(tmp_path.glob('state.db.pre-v3-*.sqlite3')) == snapshots
 
 
 def test_new_database_needs_no_snapshot(tmp_path):
@@ -132,7 +133,7 @@ def test_failed_migration_rolls_back_all_schema_and_data(tmp_path, monkeypatch):
     assert len(list(tmp_path.glob('*.sqlite3'))) == 1
 
 
-def test_v1_upgrade_creates_one_pre_v2_wal_inclusive_snapshot(tmp_path):
+def test_v1_upgrade_creates_one_pre_v3_wal_inclusive_snapshot(tmp_path):
     path = tmp_path / 'v1.db'
     seed_legacy(path)
     with sqlite3.connect(path) as conn:
@@ -150,14 +151,14 @@ def test_v1_upgrade_creates_one_pre_v2_wal_inclusive_snapshot(tmp_path):
 
     db = Database(path)
     assert db.migration_backup is not None
-    assert db.migration_backup.name.startswith('v1.db.pre-v2-')
+    assert db.migration_backup.name.startswith('v1.db.pre-v3-')
     assert stat.S_IMODE(db.migration_backup.stat().st_mode) == 0o600
     with sqlite3.connect(db.migration_backup) as backup:
         assert backup.execute('PRAGMA user_version').fetchone()[0] == 1
         assert backup.execute("SELECT prompt FROM tasks WHERE id='pending'").fetchone()[0] == 'committed in v1 WAL'
-    assert len(list(tmp_path.glob('v1.db.pre-v2-*.sqlite3'))) == 1
+    assert len(list(tmp_path.glob('v1.db.pre-v3-*.sqlite3'))) == 1
     Database(path)
-    assert len(list(tmp_path.glob('v1.db.pre-v2-*.sqlite3'))) == 1
+    assert len(list(tmp_path.glob('v1.db.pre-v3-*.sqlite3'))) == 1
 
 
 def test_v2_migration_failure_rolls_back_v1_schema_and_ledger(tmp_path, monkeypatch):
@@ -315,6 +316,162 @@ def test_v2_reopen_rejects_missing_attempt_uniqueness_without_repair(tmp_path):
     assert rows(path, "schema_migrations") == ledger
 
 
+def test_v3_creates_durable_immutable_runner_receipts_and_generation_state(tmp_path):
+    path = tmp_path / "state.db"
+    Database(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        receipt_info = conn.execute("PRAGMA table_info(runner_event_receipts)").fetchall()
+        assert [row[1] for row in receipt_info] == [
+            "runner_id", "journal_generation", "runner_seq", "envelope_json",
+            "disposition", "event_seq", "created_at",
+        ]
+        assert tuple(row[1] for row in sorted((row for row in receipt_info if row[5]), key=lambda row: row[5])) == (
+            "runner_id", "journal_generation", "runner_seq",
+        )
+        state_info = conn.execute("PRAGMA table_info(runner_generation_state)").fetchall()
+        assert [row[1] for row in state_info] == ["runner_id", "active_generation", "last_runner_seq"]
+        assert tuple(row[1] for row in state_info if row[5]) == ("runner_id",)
+        assert conn.execute("PRAGMA foreign_key_list(runner_event_receipts)").fetchall() == []
+
+        indexes = conn.execute("PRAGMA index_list(runner_event_receipts)").fetchall()
+        event_seq_indexes = [row for row in indexes if row[2] and row[4]]
+        assert len(event_seq_indexes) == 1
+        assert conn.execute(
+            f'PRAGMA index_info("{event_seq_indexes[0][1]}")'
+        ).fetchall()[0][2] == "event_seq"
+
+        task_id = "history-to-delete"
+        conn.execute(
+            "INSERT INTO tasks(id,prompt,status,created_at,updated_at) VALUES (?,?,?, ?, ?)",
+            (task_id, "preserve receipts", "completed", "a", "a"),
+        )
+        event_seq = conn.execute(
+            "INSERT INTO events(task_id,type,data_json,created_at) VALUES (?,?,?,?) RETURNING seq",
+            (task_id, "runner.event", "{}", "a"),
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO runner_event_receipts VALUES (?,?,?,?,?,?,?)",
+            ("runner-a", 4, 8, '{"seq":8}', "accepted", event_seq, "a"),
+        )
+        # Stale receipts have no corresponding coordinator event, so NULLs
+        # remain repeatable under the partial unique event_seq index.
+        conn.executemany(
+            "INSERT INTO runner_event_receipts VALUES (?,?,?,?,?,?,?)",
+            [("runner-a", 3, 8, '{"seq":8}', "stale", None, "a"),
+             ("runner-b", 1, 2, '{"seq":2}', "stale", None, "a")],
+        )
+        conn.execute("INSERT INTO runner_generation_state VALUES (?,?,?)", ("runner-a", 4, 8))
+
+        invalid_receipts = [
+            ("runner-c", 0, 1, "{}", "stale", None, "a"),
+            ("runner-c", 1, 0, "{}", "stale", None, "a"),
+            ("runner-c", 1, 1, "{}", "unknown", None, "a"),
+            ("runner-c", 1, 1, "{}", "accepted", None, "a"),
+            ("runner-c", 1, 1, "{}", "accepted", 0, "a"),
+            ("runner-c", 1, 1, "{}", "stale", event_seq, "a"),
+        ]
+        for receipt in invalid_receipts:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO runner_event_receipts VALUES (?,?,?,?,?,?,?)", receipt,
+                )
+        for state in (("runner-b", 0, 0), ("runner-b", 1, -1)):
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute("INSERT INTO runner_generation_state VALUES (?,?,?)", state)
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO runner_event_receipts VALUES (?,?,?,?,?,?,?)",
+                ("runner-b", 2, 1, '{"seq":1}', "accepted", event_seq, "a"),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "UPDATE runner_event_receipts SET envelope_json='{}' WHERE runner_id='runner-a' AND journal_generation=4 AND runner_seq=8"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "UPDATE runner_event_receipts SET disposition='stale',event_seq=NULL WHERE runner_id='runner-a' AND journal_generation=4 AND runner_seq=8"
+            )
+
+        conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        assert conn.execute(
+            "SELECT disposition,event_seq FROM runner_event_receipts WHERE runner_id='runner-a' AND journal_generation=4"
+        ).fetchone() == ("accepted", event_seq)
+        conn.execute(
+            "DELETE FROM runner_event_receipts WHERE runner_id='runner-b' AND journal_generation=1"
+        )
+
+
+@pytest.mark.parametrize("tamper", ["index", "trigger"])
+def test_v3_reopen_rejects_missing_runner_receipt_object_without_repair(tmp_path, tamper):
+    path = tmp_path / "state.db"
+    Database(path)
+    with sqlite3.connect(path) as conn:
+        if tamper == "index":
+            conn.execute("DROP INDEX idx_runner_event_receipts_event_seq")
+        else:
+            conn.execute("DROP TRIGGER runner_event_receipts_immutable")
+    before = schema(path)
+    ledger = rows(path, "schema_migrations")
+
+    with pytest.raises(RuntimeError, match="schema|immutable"):
+        Database(path)
+
+    assert schema(path) == before
+    assert rows(path, "schema_migrations") == ledger
+
+
+def test_v3_reopen_rejects_altered_runner_receipt_trigger_without_repair(tmp_path):
+    path = tmp_path / "state.db"
+    Database(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP TRIGGER runner_event_receipts_immutable")
+        conn.execute(
+            "CREATE TRIGGER runner_event_receipts_immutable BEFORE UPDATE ON runner_event_receipts BEGIN SELECT 1; END"
+        )
+    before = schema(path)
+
+    with pytest.raises(RuntimeError, match="altered"):
+        Database(path)
+
+    assert schema(path) == before
+
+
+def test_v3_reopen_rejects_nonpartial_runner_event_index_without_repair(tmp_path):
+    path = tmp_path / "state.db"
+    Database(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP INDEX idx_runner_event_receipts_event_seq")
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_runner_event_receipts_event_seq ON runner_event_receipts(event_seq)"
+        )
+    before = schema(path)
+
+    with pytest.raises(RuntimeError, match="index"):
+        Database(path)
+
+    assert schema(path) == before
+
+
+def test_v3_reopen_rejects_missing_runner_generation_check_without_repair(tmp_path):
+    path = tmp_path / "state.db"
+    Database(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP TABLE runner_generation_state")
+        conn.execute(
+            "CREATE TABLE runner_generation_state (runner_id TEXT PRIMARY KEY, active_generation INTEGER NOT NULL, last_runner_seq INTEGER NOT NULL CHECK(last_runner_seq>=0))"
+        )
+    before = schema(path)
+    ledger = rows(path, "schema_migrations")
+
+    with pytest.raises(RuntimeError, match="schema"):
+        Database(path)
+
+    assert schema(path) == before
+    assert rows(path, "schema_migrations") == ledger
+
+
 def test_frozen_v1_database_code_accepts_v1_snapshot_and_refuses_v2_database(tmp_path):
     fixtures = Path(__file__).resolve().parent / "fixtures"
     old_db_path = fixtures / "published_v1_db.py"
@@ -435,7 +592,7 @@ def test_parallel_initializers_migrate_only_once(tmp_path):
     seed_legacy(path)
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda _: Database(path), range(4)))
-    assert len(rows(path, 'schema_migrations')) == 2
+    assert len(rows(path, 'schema_migrations')) == 3
     assert len(list(tmp_path.glob('*.sqlite3'))) == 1
 
 

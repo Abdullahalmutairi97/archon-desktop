@@ -15,6 +15,7 @@ from .runtimes import RuntimeRegistry
 
 
 MAX_EVENT_TEXT = 4096
+MAX_RUNNER_ENVELOPE_BYTES = 64 * 1024
 _PROJECT_UNSET = object()
 _EVENT_TRUNCATION_MARKER = "\n…[truncated]"
 _RECOVERY_GUIDANCE = (
@@ -100,6 +101,41 @@ def _decode_event(row) -> dict[str, Any]:
         attempt_id = None
     return {"seq": row["seq"], "task_id": row["task_id"], "type": row["type"],
             "data": data, "created_at": row["created_at"], "attempt_id": attempt_id}
+
+
+def _canonical_runner_envelope(task_id: str, attempt_id: str, event_type: str,
+                               data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    if not isinstance(task_id, str) or not task_id.strip() or len(task_id) > 200:
+        raise ValueError("Runner event task id must be a non-empty string of at most 200 characters")
+    if not isinstance(attempt_id, str) or not attempt_id.strip() or len(attempt_id) > 200:
+        raise ValueError("Runner event requires a captured non-empty attempt id of at most 200 characters")
+    if not isinstance(event_type, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", event_type):
+        raise ValueError("Runner event type must be a safe ASCII event name of at most 128 characters")
+    if event_type.startswith("task."):
+        raise ValueError("Runner event type cannot use the reserved task.* namespace")
+    if not isinstance(data, dict):
+        raise ValueError("Runner event data must be an object")
+    envelope = {
+        "task_id": task_id,
+        "attempt_id": attempt_id,
+        "event_type": event_type,
+        "data": data,
+    }
+    try:
+        envelope_json = json.dumps(
+            envelope, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+        )
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise ValueError("Runner event envelope must contain only JSON values") from exc
+    try:
+        encoded_envelope = envelope_json.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Runner event envelope must contain only valid UTF-8 values") from exc
+    if len(encoded_envelope) > MAX_RUNNER_ENVELOPE_BYTES:
+        raise ValueError("Runner event envelope exceeds the 64 KiB limit")
+    # Decode the canonical form so downstream event persistence uses the exact
+    # bounded JSON value that was fingerprinted in the durable receipt.
+    return envelope_json, json.loads(envelope_json)["data"]
 
 
 class Runner(Protocol):
@@ -374,6 +410,144 @@ class TaskStore:
                     return False
             self._append_event(conn, task_id, event_type, data, attempt_id=attempt_id)
             return True
+
+    def _deliver_runner_journal_event(
+        self,
+        runner_id: str,
+        journal_generation: int,
+        runner_seq: int,
+        *,
+        task_id: str,
+        attempt_id: str,
+        event_type: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Atomically record a runner delivery and, when current, its task event.
+
+        ``task_id`` and ``attempt_id`` are captured by the server when it starts
+        the runner; they are deliberately separate from the runner event data.
+        A stale attempt still consumes its contiguous runner sequence and gets a
+        durable receipt, but it cannot append a task event or keep session-binding
+        side effects.
+        """
+        if not isinstance(runner_id, str) or not runner_id.strip():
+            raise ValueError("runner_id must be a non-empty string")
+        try:
+            runner_id_bytes = runner_id.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("runner_id must be valid UTF-8") from exc
+        if len(runner_id_bytes) > 256:
+            raise ValueError("runner_id must be at most 256 UTF-8 bytes")
+        if (isinstance(journal_generation, bool) or not isinstance(journal_generation, int)
+                or journal_generation < 1):
+            raise ValueError("journal_generation must be a positive integer")
+        if isinstance(runner_seq, bool) or not isinstance(runner_seq, int) or runner_seq < 1:
+            raise ValueError("runner sequence must be a positive integer")
+
+        envelope_json, canonical_data = _canonical_runner_envelope(
+            task_id, attempt_id, event_type, data,
+        )
+        receipt_key = (runner_id, journal_generation, runner_seq)
+
+        def outcome(row) -> dict[str, Any]:
+            event_seq = row["event_seq"]
+            return {
+                "runner_id": runner_id,
+                "journal_generation": journal_generation,
+                "runner_seq": runner_seq,
+                "disposition": row["disposition"],
+                "event_seq": int(event_seq) if event_seq is not None else None,
+            }
+
+        with self.db.transaction() as conn:
+            state = conn.execute(
+                "SELECT active_generation,last_runner_seq FROM runner_generation_state WHERE runner_id=?",
+                (runner_id,),
+            ).fetchone()
+            receipt = conn.execute(
+                """SELECT envelope_json,disposition,event_seq FROM runner_event_receipts
+                   WHERE runner_id=? AND journal_generation=? AND runner_seq=?""",
+                receipt_key,
+            ).fetchone()
+
+            if state is None:
+                if receipt is not None:
+                    raise ValueError("Runner delivery state is missing for an existing receipt")
+                if journal_generation != 1:
+                    raise ValueError("A runner must start at journal generation 1")
+                if runner_seq != 1:
+                    raise ValueError("Runner sequence gap: a new generation must start at sequence 1")
+                conn.execute(
+                    "INSERT INTO runner_generation_state(runner_id,active_generation,last_runner_seq) "
+                    "VALUES (?,1,0)",
+                    (runner_id,),
+                )
+                last_runner_seq = 0
+            else:
+                active_generation = int(state["active_generation"])
+                if journal_generation != active_generation:
+                    raise ValueError("Runner journal generation is stale or has not been activated")
+                if receipt is not None:
+                    if receipt["envelope_json"] != envelope_json:
+                        raise ValueError("Runner event receipt conflicts with a different envelope")
+                    return outcome(receipt)
+                last_runner_seq = int(state["last_runner_seq"])
+                if runner_seq <= last_runner_seq:
+                    raise ValueError("Missing runner receipt for an already-consumed sequence")
+                if runner_seq != last_runner_seq + 1:
+                    raise ValueError("Runner sequence gap")
+
+            active_attempt = self._matching_attempt(conn, task_id, attempt_id)
+            disposition = "stale"
+            event_seq: int | None = None
+            if active_attempt is not None:
+                attached = True
+                announced_session = canonical_data.get("session_id")
+                if event_type == "session" and announced_session:
+                    # The existing attachment helper can insert project state
+                    # before its guarded task update. Keep that provisional
+                    # write isolated so a rejected announcement leaves only a
+                    # stale receipt and does not commit partial binding state.
+                    conn.execute("SAVEPOINT runner_session_attachment")
+                    try:
+                        attached = self._attach_provisional_session(
+                            conn, task_id, active_attempt, str(announced_session), utcnow(),
+                        )
+                    except BaseException:
+                        conn.execute("ROLLBACK TO SAVEPOINT runner_session_attachment")
+                        conn.execute("RELEASE SAVEPOINT runner_session_attachment")
+                        raise
+                    else:
+                        if not attached:
+                            conn.execute("ROLLBACK TO SAVEPOINT runner_session_attachment")
+                        conn.execute("RELEASE SAVEPOINT runner_session_attachment")
+                if attached:
+                    event_seq = self._append_event(
+                        conn, task_id, event_type, canonical_data, attempt_id=attempt_id,
+                    )
+                    disposition = "accepted"
+
+            now = utcnow()
+            conn.execute(
+                """INSERT INTO runner_event_receipts
+                   (runner_id,journal_generation,runner_seq,envelope_json,disposition,event_seq,created_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (*receipt_key, envelope_json, disposition, event_seq, now),
+            )
+            updated = conn.execute(
+                """UPDATE runner_generation_state SET last_runner_seq=?
+                   WHERE runner_id=? AND active_generation=? AND last_runner_seq=?""",
+                (runner_seq, runner_id, journal_generation, last_runner_seq),
+            ).rowcount
+            if updated != 1:
+                raise RuntimeError("Runner generation state changed during journal delivery")
+            return {
+                "runner_id": runner_id,
+                "journal_generation": journal_generation,
+                "runner_seq": runner_seq,
+                "disposition": disposition,
+                "event_seq": event_seq,
+            }
 
     def get(self, task_id: str) -> dict[str, Any]:
         with self.db.connect() as conn:

@@ -13,16 +13,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from .migrations import v001, v002
+from .migrations import v001, v002, v003
 
 SCHEMA = v001.SCHEMA
-MIGRATION_VERSION = 2
+MIGRATION_VERSION = 3
 MIGRATION_CHECKSUM = hashlib.sha256(Path(v001.__file__).read_bytes()).hexdigest()
 MIGRATION_CHECKSUMS = {
     1: MIGRATION_CHECKSUM,
     2: hashlib.sha256(Path(v002.__file__).read_bytes()).hexdigest(),
+    3: hashlib.sha256(Path(v003.__file__).read_bytes()).hexdigest(),
 }
-MIGRATIONS = {1: v001, 2: v002}
+MIGRATIONS = {1: v001, 2: v002, 3: v003}
 MIGRATION_LOCK_TIMEOUT = 30.0
 SNAPSHOT_TIMEOUT = 30.0
 
@@ -101,11 +102,29 @@ def _table_sql(conn: sqlite3.Connection, table: str) -> str:
     return row[0] if row else ""
 
 
+def _require_table_sql(conn: sqlite3.Connection, table: str, expected_sql: str) -> None:
+    if _sql_tokens(_table_sql(conn, table)) != _sql_tokens(expected_sql):
+        raise RuntimeError(f"Database schema differs from its migration ledger: missing or altered table {table}")
+
+
 def _require_table_primary_key(conn: sqlite3.Connection, table: str, columns: tuple[str, ...]) -> None:
     info = conn.execute(f"PRAGMA table_info({table})").fetchall()
     actual = tuple(row[1] for row in sorted((row for row in info if row[5]), key=lambda row: row[5]))
     if actual != columns:
         raise RuntimeError(f"Database schema differs from its migration ledger: malformed {table} primary key")
+
+
+def _require_exact_table_columns(
+    conn: sqlite3.Connection,
+    table: str,
+    columns: tuple[tuple[str, str, int, str | None, int], ...],
+) -> None:
+    actual = tuple(
+        (row[1], str(row[2]).upper(), row[3], row[4], row[5])
+        for row in conn.execute(f"PRAGMA table_info({table})")
+    )
+    if actual != columns:
+        raise RuntimeError(f"Database schema differs from its migration ledger: malformed {table} columns")
 
 
 def _has_unique_index(conn: sqlite3.Connection, table: str, columns: tuple[str, ...]) -> bool:
@@ -133,6 +152,14 @@ def _require_trigger(conn: sqlite3.Connection, name: str, expected_sql: str) -> 
     ).fetchone()
     if row is None or _sql_tokens(row[0]) != _sql_tokens(expected_sql):
         raise RuntimeError(f"Database schema differs from its migration ledger: missing or altered immutable trigger {name}")
+
+
+def _require_index(conn: sqlite3.Connection, name: str, expected_sql: str) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,),
+    ).fetchone()
+    if row is None or _sql_tokens(row[0]) != _sql_tokens(expected_sql):
+        raise RuntimeError(f"Database schema differs from its migration ledger: missing or altered index {name}")
 
 
 def _validate_schema_shape(conn: sqlite3.Connection, version: int) -> None:
@@ -226,6 +253,61 @@ def _validate_schema_shape(conn: sqlite3.Connection, version: int) -> None:
               AND (NEW.runtime_id IS NOT OLD.runtime_id OR NEW.cwd IS NOT OLD.cwd)
             BEGIN SELECT RAISE(ABORT, 'verified session ownership is immutable'); END
         """)
+
+    if version >= 3:
+        _validate_columns(conn, "runner_event_receipts", {
+            "runner_id", "journal_generation", "runner_seq", "envelope_json",
+            "disposition", "event_seq", "created_at",
+        })
+        _validate_columns(conn, "runner_generation_state", {
+            "runner_id", "active_generation", "last_runner_seq",
+        })
+        _require_exact_table_columns(conn, "runner_event_receipts", (
+            ("runner_id", "TEXT", 1, None, 1),
+            ("journal_generation", "INTEGER", 1, None, 2),
+            ("runner_seq", "INTEGER", 1, None, 3),
+            ("envelope_json", "TEXT", 1, None, 0),
+            ("disposition", "TEXT", 1, None, 0),
+            ("event_seq", "INTEGER", 0, None, 0),
+            ("created_at", "TEXT", 1, None, 0),
+        ))
+        _require_exact_table_columns(conn, "runner_generation_state", (
+            ("runner_id", "TEXT", 1, None, 1),
+            ("active_generation", "INTEGER", 1, None, 0),
+            ("last_runner_seq", "INTEGER", 1, None, 0),
+        ))
+        _require_table_primary_key(
+            conn, "runner_event_receipts", ("runner_id", "journal_generation", "runner_seq"),
+        )
+        _require_table_primary_key(conn, "runner_generation_state", ("runner_id",))
+        if _foreign_keys(conn, "runner_event_receipts") or _foreign_keys(conn, "runner_generation_state"):
+            raise RuntimeError("Database schema differs from its migration ledger: runner delivery tables must not reference other data")
+
+        _require_table_sql(conn, "runner_event_receipts", v003.RUNNER_EVENT_RECEIPTS_SQL)
+        receipts_sql = _sql_tokens(_table_sql(conn, "runner_event_receipts"))
+        for constraint in (
+            "CHECK(journal_generation > 0)",
+            "CHECK(runner_seq > 0)",
+            "CHECK(disposition IN ('accepted','stale'))",
+            "CHECK((disposition='accepted' AND event_seq IS NOT NULL AND event_seq > 0) OR (disposition='stale' AND event_seq IS NULL))",
+        ):
+            if _sql_tokens(constraint) not in receipts_sql:
+                raise RuntimeError("Database schema differs from its migration ledger: malformed runner_event_receipts constraints")
+        _require_table_sql(conn, "runner_generation_state", v003.RUNNER_GENERATION_STATE_SQL)
+        generation_sql = _sql_tokens(_table_sql(conn, "runner_generation_state"))
+        for constraint in (
+            "CHECK(active_generation > 0)",
+            "CHECK(last_runner_seq >= 0)",
+        ):
+            if _sql_tokens(constraint) not in generation_sql:
+                raise RuntimeError("Database schema differs from its migration ledger: malformed runner_generation_state constraints")
+
+        _require_index(
+            conn, "idx_runner_event_receipts_event_seq", v003.RUNNER_EVENT_SEQ_INDEX_SQL,
+        )
+        _require_trigger(
+            conn, "runner_event_receipts_immutable", v003.RUNNER_EVENT_RECEIPTS_TRIGGER_SQL,
+        )
 
 
 def _snapshot(path: Path, destination_version: int) -> Path:
