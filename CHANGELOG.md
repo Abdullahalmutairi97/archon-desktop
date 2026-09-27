@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — remote runner claim/ack transport
+
+- Add a durable per-runner outbox: the coordinator enqueues work for an enrolled runner (owner-only, deduplicated by event key), and the runner claims unacknowledged entries over its own authenticated channel and acknowledges them by sequence. Entries are generation-fenced, bounded, and survive a restart on either side until acknowledged.
+
 ## Unreleased — runner enrollment and authenticated channel
 
 - Enroll named task runners into a private (0600) ledger; each enrollment returns a one-time-shown secret stored only as a salted SHA-256 digest and compared in constant time. Owner-only `/api/local/runners` endpoints enroll, list and revoke; `/api/runners/{id}/heartbeat` authenticates an enrolled runner with its own secret, separate from the owner token. The ledger is bounded, schema-validated and rejects tampering.

@@ -104,6 +104,7 @@ from .runner_enrollment import (
     RunnerEnrollmentUnavailable,
     RunnerNotFound,
 )
+from .runner_outbox import RunnerOutbox, RunnerOutboxError, RunnerOutboxUnavailable
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
 
@@ -323,6 +324,25 @@ class RunnerEnrollRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=32)
+
+
+class RunnerEnqueueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    event_key: str = Field(alias="eventKey", min_length=1, max_length=128)
+    payload: Any
+
+
+class RunnerClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int | None = Field(default=None, strict=True, ge=1, le=64)
+
+
+class RunnerAckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    runner_seq: int = Field(alias="runnerSeq", strict=True, ge=1)
 
 
 class WorkspaceFileWriteRequest(BaseModel):
@@ -571,6 +591,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     local_workspace_services: WorkspaceServiceManager | None = None
     local_workspace_preview: WorkspacePreviewGateway | None = None
     runner_enrollments: RunnerEnrollmentService | None = None
+    runner_outbox: RunnerOutbox | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
         settings.runner_journal_path.lstat()
@@ -761,6 +782,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         nonlocal local_workspace_services
         nonlocal local_workspace_preview
         nonlocal runner_enrollments
+        nonlocal runner_outbox
         runner_ownership.acquire()
         try:
             if pairing_broker is not None:
@@ -783,6 +805,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 )
                 local_workspace_preview = WorkspacePreviewGateway(local_workspace_services)
                 runner_enrollments = RunnerEnrollmentService(data_root / "runner-enrollments")
+                runner_outbox = RunnerOutbox(data_root / "runner-outbox")
             if settings.local_codex_enabled:
                 local_codex_event_journal = LocalCodexEventJournal(
                     settings.runner_journal_path.parent / "local-codex-events.sqlite3"
@@ -813,6 +836,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             app.state.local_workspace_services = local_workspace_services
             app.state.local_workspace_preview = local_workspace_preview
             app.state.runner_enrollments = runner_enrollments
+            app.state.runner_outbox = runner_outbox
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -1477,6 +1501,56 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         except RunnerEnrollmentUnavailable as exc:
             raise HTTPException(status_code=503, detail="Runner enrollment is unavailable") from exc
         return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+    def runner_outbox_service() -> RunnerOutbox:
+        if runner_outbox is None:
+            raise HTTPException(status_code=503, detail="Runner outbox is unavailable")
+        return runner_outbox
+
+    def authenticate_runner(runner_id: str, authorization: str | None) -> None:
+        secret = authorization[len("Bearer "):] if authorization and authorization.startswith("Bearer ") else ""
+        try:
+            runner_enrollment_service().authenticate(runner_id, secret)
+        except RunnerAuthenticationError as exc:
+            raise HTTPException(status_code=401, detail="Runner credentials are invalid") from exc
+
+    @app.post("/api/local/runners/{runner_id}/enqueue", dependencies=[Depends(require_local_owner)])
+    async def local_runner_enqueue(runner_id: str, payload: RunnerEnqueueRequest):
+        if not any(row["runnerId"] == runner_id for row in runner_enrollment_service().list()):
+            raise HTTPException(status_code=404, detail="Runner is not enrolled")
+        try:
+            entry = runner_outbox_service().enqueue(runner_id, payload.event_key, payload.payload)
+        except (RunnerOutboxError, RunnerOutboxUnavailable) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(status_code=201, content={"entry": entry}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/runners/{runner_id}/claim")
+    async def runner_claim(
+        runner_id: str,
+        payload: RunnerClaimRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        authenticate_runner(runner_id, authorization)
+        try:
+            events = runner_outbox_service().claim(runner_id, payload.limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content={"events": events}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/runners/{runner_id}/ack")
+    async def runner_ack(
+        runner_id: str,
+        payload: RunnerAckRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        authenticate_runner(runner_id, authorization)
+        try:
+            runner_outbox_service().acknowledge(runner_id, payload.runner_seq)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
 
     async def local_codex_call(method: str, params: dict[str, Any]):
         if local_codex_worker is None:
