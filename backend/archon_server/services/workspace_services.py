@@ -20,7 +20,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
+import subprocess
 import urllib.request
 import uuid
 from collections import deque
@@ -39,6 +41,15 @@ _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _MAX_METADATA_BYTES = 64 * 1024
 _DEFAULT_MAX_SERVICES = 8
 _DEFAULT_MAX_TOTAL_MEMORY_MB = 4096
+_MEMORY_PROBE_MB = 16
+_MEMORY_PROBE_SCRIPT = (
+    "b=[]\n"
+    "for i in range(64):\n"
+    " c=bytearray(1024*1024)\n"
+    " for j in range(0,len(c),4096): c[j]=1\n"
+    " b.append(c)\n"
+    "print('allocated')\n"
+)
 _MAX_ARGV = 32
 _MAX_ARG_BYTES = 1024
 _MAX_PORTS = 4
@@ -126,6 +137,7 @@ class WorkspaceServiceManager:
         max_total_memory_mb: int = _DEFAULT_MAX_TOTAL_MEMORY_MB,
         spawn: SpawnProcess | None = None,
         health_probe: HealthProbe | None = None,
+        memory_enforcement: bool | None = None,
     ):
         if not isinstance(owner_id, str) or not owner_id.strip() or len(owner_id) > 200:
             raise ValueError("owner_id is invalid")
@@ -141,6 +153,7 @@ class WorkspaceServiceManager:
         self.max_total_memory_mb = max_total_memory_mb
         self._spawn = spawn or asyncio.create_subprocess_exec
         self._health_probe = health_probe or _default_health_probe
+        self._memory_enforcement = memory_enforcement
         self._lock = asyncio.Lock()
         self._runtime: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -207,6 +220,10 @@ class WorkspaceServiceManager:
             if runtime is not None and runtime["state"] in {"starting", "running"}:
                 raise WorkspaceServiceConflict("Service is already running")
             if entry.get("memoryLimitMb") is not None:
+                if not await self._ensure_memory_enforcement():
+                    raise WorkspaceServiceUnavailable(
+                        "Memory budget enforcement is unavailable on this host; the service was not started"
+                    )
                 reserved = sum(
                     item["memoryLimitMb"] for item in record["services"]
                     if item.get("memoryLimitMb") is not None
@@ -325,6 +342,39 @@ class WorkspaceServiceManager:
         except Exception:
             runtime["state"] = "failed"
             raise WorkspaceServiceUnavailable("Service could not be started")
+
+    async def _ensure_memory_enforcement(self) -> bool:
+        """Probe once whether a user scope actually enforces MemoryMax on this host.
+
+        Reading `memory.max` is insufficient: some hosts set the value without
+        enforcing it, so the probe runs a bounded allocation that must be killed.
+        Enforcement is treated as unavailable unless that is observed.
+        """
+        if self._memory_enforcement is None:
+            self._memory_enforcement = await self._probe_memory_enforcement()
+        return self._memory_enforcement
+
+    @staticmethod
+    async def _probe_memory_enforcement() -> bool:
+        if shutil.which("systemd-run") is None or shutil.which("python3") is None:
+            return False
+
+        def run() -> bool:
+            try:
+                result = subprocess.run(
+                    [
+                        "systemd-run", "--user", "--scope", "--quiet",
+                        "-p", f"MemoryMax={_MEMORY_PROBE_MB}M",
+                        "--", "python3", "-c", _MEMORY_PROBE_SCRIPT,
+                    ],
+                    capture_output=True,
+                    timeout=25,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return False
+            return result.returncode != 0
+
+        return await asyncio.to_thread(run)
 
     async def _spawn_child(self, runtime: dict[str, Any], entry: dict[str, Any], cwd: Path, env: dict[str, str]) -> None:
         command = list(entry["argv"])

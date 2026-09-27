@@ -2,7 +2,7 @@
 
 ## Unreleased — aggregate service memory accounting
 
-- Enforce a workspace-wide memory budget across running services: starting a service whose declared budget would push the aggregate of running services over `max_total_memory_mb` (default 4096) is refused with a capacity error.
+- Enforce a workspace-wide memory budget across running services: starting a service whose declared budget would push the aggregate of running services over `max_total_memory_mb` (default 4096) is refused with a capacity error. Budgets are only used when the host actually enforces them (see below).
 
 ## Unreleased — editor draft recovery
 
@@ -36,7 +36,7 @@
 
 ## Unreleased — enforced service memory budget
 
-- Launch a service that declares `memoryLimitMb` under `systemd-run --user --scope -p MemoryMax=<n>M` (cgroup v2) instead of an unbounded process; a service without a budget keeps the plain argv launch.
+- Launch a service that declares `memoryLimitMb` under `systemd-run --user --scope -p MemoryMax=<n>M` (cgroup v2) instead of an unbounded process; a service without a budget keeps the plain argv launch. A behavioral probe verifies that a scope actually kills an over-budget allocation before any budgeted service starts; on hosts that set `memory.max` without enforcing it (observed here) a budgeted service is refused (fail closed) rather than launched unbounded.
 
 ## Unreleased — managed service health state
 

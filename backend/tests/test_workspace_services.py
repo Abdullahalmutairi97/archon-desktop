@@ -18,6 +18,7 @@ from archon_server.services.workspace_services import (
     WorkspaceServiceConflict,
     WorkspaceServiceManager,
     WorkspaceServiceNotFound,
+    WorkspaceServiceUnavailable,
 )
 
 
@@ -25,7 +26,8 @@ OWNER_ID = "local-uid:1000"
 WORKSPACE_ID = "workspace-0123456789abcdef0123456789abcdef"
 
 
-def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 4096) -> WorkspaceServiceManager:
+def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 4096,
+             memory_enforcement: bool | None = None) -> WorkspaceServiceManager:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(exist_ok=True)
     database = Database(tmp_path / "database.sqlite3")
@@ -46,6 +48,7 @@ def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 40
         state_root=tmp_path / "private-state",
         health_probe=health_probe,
         max_total_memory_mb=max_total_memory_mb,
+        memory_enforcement=memory_enforcement,
     )
 
 
@@ -162,6 +165,7 @@ async def test_declared_memory_budget_launches_under_a_scope(tmp_path):
     await manager.define(WORKSPACE_ID, _definition(
         name="limited", argv=["/bin/echo", "hi"], memoryLimitMb=128,
     ))
+    manager._memory_enforcement = True
     await manager.start(WORKSPACE_ID, "limited")
     assert spawned and spawned[0][:6] == [
         "systemd-run", "--user", "--scope", "--collect", "--quiet", "-p",
@@ -293,13 +297,25 @@ async def test_aggregate_memory_budget_is_enforced(tmp_path):
     async def fake_spawn(*_argv, **_kwargs):
         return FakeProcess()
 
-    manager = _manager(tmp_path, max_total_memory_mb=256)
+    manager = _manager(tmp_path, max_total_memory_mb=256, memory_enforcement=True)
     manager._spawn = fake_spawn
     await manager.define(WORKSPACE_ID, _definition(name="a", argv=["/bin/sleep", "5"], memoryLimitMb=200))
     await manager.define(WORKSPACE_ID, _definition(name="b", argv=["/bin/sleep", "5"], memoryLimitMb=200))
     await manager.start(WORKSPACE_ID, "a")
     with pytest.raises(WorkspaceServiceCapacity):
         await manager.start(WORKSPACE_ID, "b")
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_declared_memory_budget_fails_closed_when_unenforced(tmp_path):
+    manager = _manager(tmp_path, memory_enforcement=False)
+    await manager.define(WORKSPACE_ID, _definition(name="limited", argv=["/bin/echo"], memoryLimitMb=128))
+    with pytest.raises(WorkspaceServiceUnavailable):
+        await manager.start(WORKSPACE_ID, "limited")
+    # A service without a declared budget still starts.
+    await manager.define(WORKSPACE_ID, _definition(name="plain", argv=["/bin/sleep", "5"]))
+    await manager.start(WORKSPACE_ID, "plain")
     await manager.shutdown()
 
 
