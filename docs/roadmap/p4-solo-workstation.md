@@ -6,6 +6,10 @@
 
 Integrate workspace-hosted code-server, persistent tmux and managed application services into the existing Files/IDE/Browser/Terminal workbench. Keep the lightweight artifact viewer. Reconcile any recovered earlier IDE decision before selecting an equivalent supported implementation. Begin with pinned Python and TypeScript language/debug profiles.
 
+## Next usable slices
+
+Prioritize an authenticated interactive attach to the existing checkout shell, then a private managed-service preview with a real workspace-owned process and health state. Those two slices let one person run and inspect a built app without leaving Archon. Keep the current small-file editor available meanwhile. Code-server, language extensions, debugger integration and editor draft recovery follow after that path works; they remain P4 exit gates, not prerequisites for the first usable solo workflow. Do not expose an arbitrary console URL as a substitute for the service gateway or weaken preview isolation to speed up the UI.
+
 ## Checklist
 
 - [ ] Launch code-server on demand inside the workspace; pin supported extensions and verify licensing/source. Show unknown/unsupported language features honestly.
