@@ -10,7 +10,7 @@ This backlog turns the 21 September 2026 repository audit and revised implementa
 | --- | --- | --- | --- |
 | [P1 — Trustworthy execution baseline](p1-execution-baseline.md) | Honest admission, modes, locks, recovery, credentials and readiness | Existing backend and isolated fixtures | Backend source complete through #18; native qualification remains |
 | [P2 — Maintainable source build](p2-source-build.md) | Build the actual desktop from authored source and preserve UI behavior | P1D source contract; native qualification before delivery | P2A #19, P2B.1 #20, P2C.1 #21 and P2B.2 #22 published; P2C.2 Server data route in review |
-| [P3 — Workspaces and persistent runner](p3-workspaces-runner.md) | Protected solo bootstrap; one workspace identity; work outlives UI | P1; P2 before desktop delivery | Not started |
+| [P3 — Workspaces and persistent runner](p3-workspaces-runner.md) | Protected solo bootstrap; one workspace identity; work outlives UI | P1; P2 before desktop delivery | In progress |
 | [P4 — Full solo workstation](p4-solo-workstation.md) | Full IDE, persistent terminal and managed private previews | P2 and P3 | Not started |
 | [P5 — Runtime and resource parity](p5-runtimes-resources.md) | Honest Hermes/Pi/Prime/Codex adapters; scoped MCP and skills | P3; P4 for integrated UX | Not started |
 | [P6 — Collaboration for friends](p6-collaboration.md) | Individual users, shared activity, reviews and scoped service access | P3–P5 and demonstrated enforcement | Not started |

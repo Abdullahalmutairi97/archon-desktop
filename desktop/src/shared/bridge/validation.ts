@@ -23,6 +23,7 @@ import type {
   TaskRecord,
   TaskSubmitPayload,
   TasksListPayload,
+  WorkspaceRecord,
 } from './types'
 
 export const BRIDGE_CHANNELS = Object.freeze({
@@ -59,6 +60,7 @@ const operationNames = Object.freeze([
   'tasks.get',
   'tasks.events',
   'tasks.cancel',
+  'workspaces.list',
 ] as const satisfies readonly OperationName[])
 
 const channels = new Set<string>(Object.values(BRIDGE_CHANNELS))
@@ -252,6 +254,7 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
     case 'projects.list':
     case 'events.cursor':
     case 'runtimes.list':
+    case 'workspaces.list':
       return Object.freeze([operation, parseEmptyPayload(payload)])
     case 'sessions.list':
       return Object.freeze([operation, parseSessionsPayload(payload)])
@@ -442,6 +445,36 @@ function parseTaskRecord(value: unknown): TaskRecord {
   return record as TaskRecord
 }
 
+function isCanonicalWorkspaceRoot(value: unknown): value is string {
+  if (!boundedString(value, MAX_LOCAL_PATH_LENGTH) || !value.startsWith('/') || /[\u0001-\u001f\u007f-\u009f]/u.test(value)) return false
+  if (value === '/') return true
+  if (value.endsWith('/')) return false
+  return value.slice(1).split('/').every((component) => component.length > 0 && component !== '.' && component !== '..')
+}
+
+function workspaceText(value: unknown, maxLength: number): value is string {
+  return boundedString(value, maxLength) && value === value.trim() && !/[\u0001-\u001f\u007f-\u009f]/u.test(value)
+}
+
+function parseWorkspaceRecord(value: unknown): WorkspaceRecord {
+  const record = exactObject(value, [
+    'workspace_id', 'root', 'project_id', 'base_revision', 'head_revision', 'generation',
+  ])
+  if (!workspaceText(record.workspace_id, 200) || !isCanonicalWorkspaceRoot(record.root)) return fail()
+  if (record.project_id !== null && !workspaceText(record.project_id, MAX_PROJECT_ID_LENGTH)) return fail()
+  if (record.base_revision !== null && !workspaceText(record.base_revision, 256)) return fail()
+  if (record.head_revision !== null && !workspaceText(record.head_revision, 256)) return fail()
+  if (typeof record.generation !== 'number' || !Number.isSafeInteger(record.generation) || record.generation < 1) return fail()
+  return Object.freeze({
+    workspace_id: record.workspace_id,
+    root: record.root,
+    project_id: record.project_id,
+    base_revision: record.base_revision,
+    head_revision: record.head_revision,
+    generation: record.generation,
+  })
+}
+
 function parseTaskEvent(value: unknown): TaskEventRecord {
   const record = boundedJsonRecord(value)
   if (typeof record.seq !== 'number' || !Number.isSafeInteger(record.seq) || record.seq < 1) return fail()
@@ -465,6 +498,13 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       const list = parseBoundedJson(record[key], { nodes: 0, estimatedBytes: 0, seen: new WeakSet<object>() })
       if (!Array.isArray(list) || list.some((item) => !isRecord(item))) return fail()
       return Object.freeze({ [key]: list }) as OperationMap[OperationName]['result']
+    }
+    case 'workspaces.list': {
+      const record = exactObject(value, ['workspaces'])
+      if (!Array.isArray(record.workspaces) || record.workspaces.length > MAX_LIST_LIMIT) return fail()
+      const list = parseBoundedJson(record.workspaces, { nodes: 0, estimatedBytes: 0, seen: new WeakSet<object>() })
+      if (!Array.isArray(list)) return fail()
+      return Object.freeze({ workspaces: Object.freeze(list.map(parseWorkspaceRecord)) })
     }
     case 'events.cursor': {
       const record = exactObject(value, ['cursor'])

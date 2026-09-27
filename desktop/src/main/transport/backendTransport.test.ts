@@ -61,6 +61,7 @@ describe('backend transport', () => {
       'sessions.list',
       'tasks.list',
       'events.cursor',
+      'workspaces.list',
     ])
     expect(TASK_OPERATIONS).toEqual([
       'runtimes.list', 'tasks.submit', 'tasks.get', 'tasks.events', 'tasks.cancel',
@@ -257,6 +258,23 @@ describe('backend transport', () => {
     expect(String(requestUrl)).toBe('http://127.0.0.1:8000/api/projects')
     expect(init?.method).toBe('GET')
     expect(init?.redirect).toBe('manual')
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+  })
+
+  it('loads server-managed workspaces through one fixed read-only route', async () => {
+    const workspace = {
+      workspace_id: 'workspace-123', root: '/srv/archon/workspaces/workspace-123',
+      project_id: 'project-1', base_revision: 'a'.repeat(40), head_revision: 'a'.repeat(40), generation: 1,
+    }
+    const fetcher = vi.fn<BackendFetch>(async () => response({ workspaces: [workspace] }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.list', {})).resolves.toEqual({ workspaces: [workspace] })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    const [url, init] = fetcher.mock.calls[0]
+    expect(String(url)).toBe('http://127.0.0.1:8000/api/workspaces')
+    expect(init?.method).toBe('GET')
+    expect(init?.body).toBeUndefined()
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
   })
 

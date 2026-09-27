@@ -20,11 +20,12 @@ function fakeBridge(invoke: (operation: string) => Promise<unknown>) {
   return { bridge, apiInvoke }
 }
 
-function collections(projects: unknown[] = [], sessions: unknown[] = [], tasks: unknown[] = []) {
+function collections(projects: unknown[] = [], sessions: unknown[] = [], tasks: unknown[] = [], workspaces: unknown[] = []) {
   return (operation: string) => {
     if (operation === 'projects.list') return Promise.resolve({ projects })
     if (operation === 'sessions.list') return Promise.resolve({ sessions })
     if (operation === 'tasks.list') return Promise.resolve({ tasks })
+    if (operation === 'workspaces.list') return Promise.resolve({ workspaces })
     return Promise.reject(new Error(`Unexpected operation: ${operation}`))
   }
 }
@@ -80,8 +81,8 @@ describe('ServerCollections', () => {
     expect(container.textContent).not.toContain('PRIVATE_PROMPT')
     expect(container.textContent).not.toContain('PRIVATE_COMMAND')
     expect(apiInvoke.mock.calls.map(([operation]) => operation).filter((operation) =>
-      ['projects.list', 'sessions.list', 'tasks.list'].includes(operation)).sort()).toEqual([
-      'projects.list', 'sessions.list', 'tasks.list',
+      ['projects.list', 'sessions.list', 'tasks.list', 'workspaces.list'].includes(operation)).sort()).toEqual([
+      'projects.list', 'sessions.list', 'tasks.list', 'workspaces.list',
     ])
   })
 
@@ -98,16 +99,65 @@ describe('ServerCollections', () => {
     const section = screen.getByRole('region', { name: 'SERVER SESSIONS' })
     expect(within(section).getAllByRole('listitem')).toHaveLength(120)
     expect(within(section).getByText('120 shown')).toBeInTheDocument()
-    expect(screen.getByText(/server may cap session and task lists/i)).toBeInTheDocument()
+    expect(screen.getByText(/server may cap session, task and workspace lists/i)).toBeInTheDocument()
+  })
+
+  it('shows server-managed workspace identity and states that native isolation is not enabled', async () => {
+    const workspace = {
+      workspace_id: 'workspace-123',
+      root: '/srv/archon/workspaces/workspace-123',
+      project_id: 'project-1',
+      base_revision: 'a'.repeat(40),
+      head_revision: 'b'.repeat(40),
+      generation: 3,
+    }
+    const { bridge } = fakeBridge(collections([], [], [], [workspace]))
+
+    render(<ServerCollections bridge={bridge} connection={connection()} />)
+
+    const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
+    expect(within(section).getByText('workspace-123')).toBeInTheDocument()
+    expect(within(section).getByText('Project: project-1 · Generation: 3')).toBeInTheDocument()
+    expect(within(section).getByText(`Base revision: ${'a'.repeat(40)}`)).toBeInTheDocument()
+    expect(within(section).getByText(`Head revision: ${'b'.repeat(40)}`)).toBeInTheDocument()
+    expect(within(section).getByText(`Authoritative root: ${workspace.root}`)).toBeInTheDocument()
+    expect(within(section).getByText('Git checkout; native execution isolation not yet enabled')).toBeInTheDocument()
+  })
+
+  it('keeps existing server data available when an older server has no workspace endpoint', async () => {
+    let workspaceAvailable = false
+    const { bridge, apiInvoke } = fakeBridge((operation) => {
+      if (operation === 'workspaces.list') {
+        return workspaceAvailable
+          ? Promise.resolve({ workspaces: [] })
+          : Promise.reject(new Error('not found'))
+      }
+      return collections([{ id: 'project-1', name: 'Existing server project' }], [], [])(operation)
+    })
+
+    render(<ServerCollections bridge={bridge} connection={connection()} />)
+
+    expect(await screen.findByText('Existing server project')).toBeInTheDocument()
+    const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
+    expect(within(section).getByRole('alert')).toHaveTextContent('Workspace data is unavailable for this server connection.')
+    expect(screen.getByText('SERVER connected · data loaded')).toBeInTheDocument()
+
+    workspaceAvailable = true
+    fireEvent.click(within(section).getByRole('button', { name: 'Retry workspaces' }))
+    expect(await within(section).findByText('No server workspaces returned.')).toBeInTheDocument()
+    expect(apiInvoke.mock.calls.filter(([operation]) => ['projects.list', 'sessions.list', 'tasks.list'].includes(operation))).toHaveLength(3)
+    expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.list')).toHaveLength(2)
   })
 
   it('ignores late responses from a previous generation', async () => {
     const oldProjects = deferred<unknown>()
     const oldSessions = deferred<unknown>()
     const oldTasks = deferred<unknown>()
+    const oldWorkspaces = deferred<unknown>()
     let generation = 1
     const pendingOld = new Map<string, DeferredValue>([
       ['projects.list', oldProjects], ['sessions.list', oldSessions], ['tasks.list', oldTasks],
+      ['workspaces.list', oldWorkspaces],
     ])
     const { bridge, apiInvoke } = fakeBridge((operation) => {
       if (generation === 1) return pendingOld.get(operation)!.promise
@@ -115,7 +165,7 @@ describe('ServerCollections', () => {
     })
     const { rerender } = render(<ServerCollections bridge={bridge} connection={connection(true, 1)} />)
 
-    await waitFor(() => expect(apiInvoke).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(apiInvoke).toHaveBeenCalledTimes(4))
     generation = 2
     rerender(<ServerCollections bridge={bridge} connection={connection(true, 2)} />)
 
@@ -125,6 +175,7 @@ describe('ServerCollections', () => {
     oldProjects.resolve({ projects: [{ id: 'old-project', name: 'Old server project' }] })
     oldSessions.resolve({ sessions: [] })
     oldTasks.resolve({ tasks: [] })
+    oldWorkspaces.resolve({ workspaces: [] })
     await waitFor(() => expect(screen.queryByText('Old server project')).not.toBeInTheDocument())
     expect(screen.getByText('New server project')).toBeInTheDocument()
   })
@@ -133,9 +184,11 @@ describe('ServerCollections', () => {
     const newProjects = deferred<unknown>()
     const newSessions = deferred<unknown>()
     const newTasks = deferred<unknown>()
+    const newWorkspaces = deferred<unknown>()
     let generation = 1
     const pendingNew = new Map<string, DeferredValue>([
       ['projects.list', newProjects], ['sessions.list', newSessions], ['tasks.list', newTasks],
+      ['workspaces.list', newWorkspaces],
     ])
     const { bridge, apiInvoke } = fakeBridge((operation) => {
       if (generation === 1) return collections([{ id: 'old-project', name: 'Previous server project' }], [], [])(operation)
@@ -150,10 +203,12 @@ describe('ServerCollections', () => {
     expect(screen.queryByText('Previous server project')).not.toBeInTheDocument()
     expect(screen.getByText('SERVER data loading')).toBeInTheDocument()
     expect(apiInvoke.mock.calls.filter(([operation]) => ['projects.list', 'sessions.list', 'tasks.list'].includes(operation))).toHaveLength(6)
+    expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.list')).toHaveLength(2)
 
     newProjects.resolve({ projects: [{ id: 'new-project', name: 'Current server project' }] })
     newSessions.resolve({ sessions: [] })
     newTasks.resolve({ tasks: [] })
+    newWorkspaces.resolve({ workspaces: [] })
     expect(await screen.findByText('Current server project')).toBeInTheDocument()
   })
 
@@ -166,7 +221,7 @@ describe('ServerCollections', () => {
 
     expect(screen.getByText('SERVER disconnected')).toBeInTheDocument()
     expect(screen.queryByText('Project from server')).not.toBeInTheDocument()
-    expect(apiInvoke.mock.calls.filter(([operation]) => ['projects.list', 'sessions.list', 'tasks.list'].includes(operation))).toHaveLength(3)
+    expect(apiInvoke.mock.calls.filter(([operation]) => ['projects.list', 'sessions.list', 'tasks.list', 'workspaces.list'].includes(operation))).toHaveLength(4)
   })
 
   it('shows an unavailable state when any read fails and offers a retry', async () => {
@@ -184,6 +239,7 @@ describe('ServerCollections', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry SERVER data' }))
     expect(await screen.findByText('Project after retry')).toBeInTheDocument()
     expect(apiInvoke.mock.calls.filter(([operation]) => ['projects.list', 'sessions.list', 'tasks.list'].includes(operation))).toHaveLength(6)
+    expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.list')).toHaveLength(1)
   })
 
   it('shows access rejection and directs the user to re-enter the token instead of retrying', async () => {
@@ -198,6 +254,6 @@ describe('ServerCollections', () => {
     expect(await screen.findByText('SERVER access rejected')).toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('Return to Connection to re-enter the server token.')
     expect(screen.queryByRole('button', { name: 'Retry SERVER data' })).not.toBeInTheDocument()
-    expect(apiInvoke).toHaveBeenCalledTimes(3)
+    expect(apiInvoke).toHaveBeenCalledTimes(4)
   })
 })

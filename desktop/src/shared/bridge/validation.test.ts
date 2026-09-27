@@ -46,6 +46,7 @@ describe('finite desktop bridge validation', () => {
       projectId: 'p-1', limit: 500,
     })
     expect(parseOperationRequest('tasks.list', { limit: 1 })).toEqual(['tasks.list', { limit: 1 }])
+    expect(parseOperationRequest('workspaces.list', {})).toEqual(['workspaces.list', {}])
     for (const [operation, payload] of [
       ['not-an-operation', {}],
       ['readiness', { url: 'http://localhost' }],
@@ -53,6 +54,7 @@ describe('finite desktop bridge validation', () => {
       ['sessions.list', { limit: 501 }],
       ['tasks.list', { limit: 0 }],
       ['events.cursor', { after: 12 }],
+      ['workspaces.list', { limit: 501 }],
     ] as const) {
       expect(() => parseOperationRequest(operation, payload)).toThrow(TypeError)
     }
@@ -189,6 +191,34 @@ describe('finite desktop bridge validation', () => {
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { events: Array.from({ length: 1001 }, () => event) }, 'tasks.events'))
       .toThrow(TypeError)
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { ok: false }, 'tasks.cancel')).toThrow(TypeError)
+  })
+
+  it('validates bounded server workspace identity rows for display', () => {
+    const workspace = {
+      workspace_id: 'workspace-123',
+      root: '/srv/archon/workspaces/workspace-123',
+      project_id: 'project-known',
+      base_revision: 'a'.repeat(40),
+      head_revision: 'b'.repeat(40),
+      generation: 2,
+    }
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { workspaces: [workspace] }, 'workspaces.list'))
+      .toEqual({ workspaces: [workspace] })
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      workspaces: [{ ...workspace, project_id: null, base_revision: null, head_revision: null }],
+    }, 'workspaces.list')).toMatchObject({ workspaces: [{ project_id: null, base_revision: null, head_revision: null }] })
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      workspaces: [{ ...workspace, generation: 0 }],
+    }, 'workspaces.list')).toThrow(TypeError)
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      workspaces: [{ ...workspace, root: '../outside' }],
+    }, 'workspaces.list')).toThrow(TypeError)
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      workspaces: [{ ...workspace, token: 'sentinel-token' }],
+    }, 'workspaces.list')).toThrow(TypeError)
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      workspaces: Array.from({ length: 501 }, () => workspace),
+    }, 'workspaces.list')).toThrow(TypeError)
   })
 
   it('exposes local Codex through fixed operations with bounded renderer payloads', () => {

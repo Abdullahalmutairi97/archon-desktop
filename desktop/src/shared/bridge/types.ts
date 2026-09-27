@@ -91,6 +91,16 @@ export type TaskEventRecord = JsonRecord & {
   attempt_id: string | null
 }
 
+/** Server-owned Git checkout identity. Paths are authoritative server paths, for display only. */
+export type WorkspaceRecord = JsonRecord & {
+  workspace_id: string
+  root: string
+  project_id: string | null
+  base_revision: string | null
+  head_revision: string | null
+  generation: number
+}
+
 export interface TaskSubmitPayload {
   projectId: string
   prompt: string
@@ -124,6 +134,10 @@ export interface OperationMap {
   'events.cursor': {
     payload: EmptyPayload
     result: { cursor: number }
+  }
+  'workspaces.list': {
+    payload: EmptyPayload
+    result: { workspaces: readonly WorkspaceRecord[] }
   }
   'runtimes.list': {
     payload: EmptyPayload

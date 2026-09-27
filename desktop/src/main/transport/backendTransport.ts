@@ -18,6 +18,7 @@ export const READ_ONLY_OPERATIONS: readonly OperationName[] = Object.freeze([
   'sessions.list',
   'tasks.list',
   'events.cursor',
+  'workspaces.list',
 ])
 
 export const TASK_OPERATIONS: readonly OperationName[] = Object.freeze([
@@ -39,6 +40,7 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'tasks.get': 'GET',
   'tasks.events': 'GET',
   'tasks.cancel': 'POST',
+  'workspaces.list': 'GET',
 })
 
 export const MAX_BACKEND_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -63,6 +65,7 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'tasks.get': '/api/tasks',
   'tasks.events': '/api/tasks',
   'tasks.cancel': '/api/tasks',
+  'workspaces.list': '/api/workspaces',
 })
 
 const SAFE_MESSAGES = Object.freeze({

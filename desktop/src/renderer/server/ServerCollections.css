@@ -145,6 +145,43 @@
 
 .server-collection-empty { padding: 9px 2px 3px; }
 
+.server-workspace-status {
+  margin: 0 0 7px;
+  color: var(--quiet, #77736d);
+  font-size: calc(9px * var(--font-scale, 1));
+  line-height: 1.5;
+}
+
+.server-workspace-row code {
+  overflow-wrap: anywhere;
+  color: var(--muted, #96928c);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: calc(9px * var(--font-scale, 1));
+  white-space: normal;
+}
+
+.server-workspace-unavailable {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 2px 3px;
+  color: var(--muted, #96928c);
+  font-size: calc(9px * var(--font-scale, 1));
+  line-height: 1.5;
+}
+
+.server-workspace-unavailable button {
+  min-height: 25px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong, #484541);
+  border-radius: var(--radius, 5px);
+  background: var(--surface-2, #292929);
+  color: var(--text, #e8e5e0);
+  cursor: pointer;
+  font-size: inherit;
+}
+
 @media (max-width: 700px) {
   .server-collections { padding: 16px; }
   .server-collections-header { flex-direction: column; }
