@@ -5,6 +5,10 @@ checkout, the coordinator must be able to name exactly one holder. This service
 provides a bounded, expiring, owner-issued lease in a private (0600) ledger.
 Handing write access over requires the current holder to release first; an
 expired lease does not block a new holder.
+
+The key is the registered workspace id. This service validates the key's shape
+only, because the caller has already resolved and owner-checked the workspace;
+the bounded charset keeps the ledger a plain, line-free JSON object.
 """
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-_WORKSPACE_ID = re.compile(r"workspace-[0-9a-f]{32}\Z")
+_WORKSPACE_ID = re.compile(r"workspace-[A-Za-z0-9._-]{1,190}\Z")
 _HOLDER = re.compile(r"[A-Za-z0-9._:/-]{1,128}\Z")
 _MAX_LEASES = 128
 _MAX_METADATA_BYTES = 64 * 1024

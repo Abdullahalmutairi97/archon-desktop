@@ -389,7 +389,7 @@ def test_workspace_file_create_is_blocked_while_a_task_uses_the_workspace(tmp_pa
 def test_workspace_file_create_cleans_up_when_file_sync_fails(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     root = _register_workspace(settings)
-    real_fsync = workspace_files.os.fsync
+    real_os = workspace_files.os
     fsync_calls = 0
 
     def fail_first_fsync(descriptor):
@@ -397,10 +397,24 @@ def test_workspace_file_create_cleans_up_when_file_sync_fails(tmp_path, monkeypa
         fsync_calls += 1
         if fsync_calls == 1:
             raise OSError("simulated file sync failure")
-        return real_fsync(descriptor)
+        return real_os.fsync(descriptor)
+
+    class _CountingOs:
+        """The file service's own view of `os`, so only its syncs are counted.
+
+        Other server-owned ledgers (for example the workspace write lease) sync
+        their state in the same request and must not consume this injected
+        failure, which the module-global `os.fsync` patch did.
+        """
+
+        def __getattr__(self, name):
+            return getattr(real_os, name)
+
+        def fsync(self, descriptor):
+            return fail_first_fsync(descriptor)
 
     with TestClient(create_app(settings)) as client:
-        monkeypatch.setattr(workspace_files.os, "fsync", fail_first_fsync)
+        monkeypatch.setattr(workspace_files, "os", _CountingOs())
         response = client.post(
             "/api/workspaces/workspace-files-test/files/create",
             headers=HEADERS,

@@ -271,6 +271,9 @@ def test_generation_and_ttl_are_validated(tmp_path):
             _mint(broker, ttl_seconds=ttl)
     with pytest.raises(ValueError):
         _mint(broker, delegate_principal="bad principal")
+    # A request shape the broker could never perform is refused at mint time.
+    with pytest.raises(ValueError):
+        _mint(broker, arguments={"method": "TRACE", "path": "/v1/x"})
 
 
 def test_delegate_grant_is_bound_to_its_principal(tmp_path):
@@ -346,6 +349,93 @@ def test_upstream_status_below_200_is_not_verified(tmp_path):
     assert result["ok"] is False and result["status"] == 401
     assert broker.audit(1)[0]["reason"] == "upstream_status"
     assert broker.auth_states()["providers"][0]["state"] == "unverified"
+
+
+def test_reflected_value_is_redacted_in_keys_and_scalars(tmp_path):
+    """A credential echoed as an object key or a raw scalar must not survive."""
+    def transport(_request: dict) -> dict:
+        body = json.dumps({
+            SECRET_VALUE: "reflected as a key",
+            "nested": {SECRET_VALUE.lower(): [{"inner": SECRET_VALUE}]},
+        }).encode("utf-8")
+        return {"status": 200, "headers": {"content-type": "application/json"}, "body": body, "truncated": False}
+
+    broker = _broker(tmp_path, transport=transport)
+    _register(broker)
+    result = _invoke(broker, _mint(broker)["grantToken"])
+    assert SECRET_VALUE not in json.dumps(result)
+    assert result["redacted"] is True
+    assert "[REDACTED]" in json.dumps(result["body"])
+
+    numeric = _broker(tmp_path / "numeric", transport=lambda _request: {
+        "status": 200, "headers": {"content-type": "application/json"},
+        "body": json.dumps({"echo": 12345678, "text": "12345678"}).encode("utf-8"), "truncated": False,
+    }, values={"ARCHON_TEST_NUMERIC_KEY": "12345678"})
+    numeric.register_reference(
+        "numeric-ref", provider="other", purpose="numeric echo",
+        source_key="ARCHON_TEST_NUMERIC_KEY", endpoint="https://api.example.com",
+    )
+    token = numeric.mint_grant(
+        principal=PRINCIPAL, reference="numeric-ref", tool=TOOL, arguments=ARGUMENTS,
+        attempt_id=ATTEMPT, workspace_id=WORKSPACE_ID,
+    )["grantToken"]
+    echoed = _invoke(numeric, token)
+    assert echoed["body"] == {"echo": "[REDACTED]", "text": "[REDACTED]"}
+    assert echoed["redacted"] is True
+
+
+def test_an_oversized_response_body_is_withheld_instead_of_trimmed(tmp_path):
+    """A redacted prefix can cut a credential in half, so the body is dropped."""
+    padded = b" " * (_MAX_RESPONSE_BYTES - 4) + SECRET_VALUE.encode("utf-8") + b"tail"
+    broker = _broker(tmp_path, transport=lambda _request: {
+        "status": 200, "headers": {"content-type": "text/plain"},
+        "body": padded, "truncated": False,
+    })
+    _register(broker)
+    result = _invoke(broker, _mint(broker)["grantToken"])
+    assert result["ok"] is True
+    assert result["truncated"] is True
+    assert result["body"] is None and result["bodyEncoding"] == "truncated"
+    assert SECRET_VALUE not in json.dumps(result)
+    assert SECRET_VALUE[:8] not in json.dumps(result)
+
+
+def test_default_transport_ignores_ambient_proxy_configuration(monkeypatch):
+    """A configured http(s)_proxy must not become a third party in the call path."""
+    import http.server
+    import threading
+
+    seen: list[str] = []
+
+    class _Proxy(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def do_GET(self):  # noqa: N802 - stdlib naming
+            seen.append(self.path)
+            self.send_response(502)
+            self.end_headers()
+
+    proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Proxy)
+    target = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Proxy)
+    threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (proxy, target)]
+    for thread in threads:
+        thread.start()
+    try:
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{proxy.server_port}")
+        monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy.server_port}")
+        response = _default_transport({
+            "method": "GET", "url": f"http://127.0.0.1:{target.server_port}/direct",
+            "headers": {}, "body": None, "timeoutSeconds": 5.0,
+        })
+        assert response["status"] == 502
+        assert seen == ["/direct"], "the request must not travel through the ambient proxy"
+    finally:
+        for server in (proxy, target):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=5)
 
 
 def test_request_shape_is_bounded(tmp_path):
@@ -460,6 +550,30 @@ def test_ledger_is_private_and_rejects_tampering(tmp_path):
     with pytest.raises(SecretBrokerUnavailable):
         broker.list_references()
     path.write_bytes(b"not json")
+    with pytest.raises(SecretBrokerUnavailable):
+        broker.list_references()
+    # A structurally unusable endpoint or audit row in a rewritten ledger is
+    # refused on read rather than turned into a credential-bearing call, and it
+    # is refused as an unsafe ledger instead of raising an unhandled error.
+    # This validates ledger structure; it is not integrity against a writer that
+    # already shares this account's file access.
+    path.unlink()
+    _register(broker)
+    tampered = json.loads(path.read_bytes())
+    reference = tampered["references"]["provider-api"]
+    for endpoint in ("https://collector.example.net/v1", "http://collector.example.net"):
+        reference["endpoint"] = endpoint
+        path.write_bytes(json.dumps(tampered).encode("utf-8"))
+        with pytest.raises(SecretBrokerUnavailable):
+            broker.list_references()
+    reference["endpoint"] = "https://api.deepseek.com"
+    tampered["audit"] = [{
+        "at": "2026-01-01T00:00:00+00:00", "decision": ["allowed"],
+        "reason": None, "principal": PRINCIPAL, "reference": None, "provider": None,
+        "tool": TOOL, "actionDigest": None, "grantId": None, "attemptId": None,
+        "workspaceId": None, "workspaceGeneration": None,
+    }]
+    path.write_bytes(json.dumps(tampered).encode("utf-8"))
     with pytest.raises(SecretBrokerUnavailable):
         broker.list_references()
     assert SecretBroker(tmp_path / "fresh-broker", values=_Source({})).list_references() == []
@@ -650,6 +764,47 @@ def test_secret_broker_api_contract(tmp_path, monkeypatch):
 
         ledger = (tmp_path / ".data" / "secret-broker" / "secrets.json").read_bytes()
         assert SECRET_VALUE.encode() not in ledger
+
+
+def test_rejected_upstream_call_fails_the_http_response(tmp_path, monkeypatch):
+    """A provider rejection is a failed response, not a 200 with ok:false."""
+    seen: dict = {}
+
+    def rejecting(request: dict) -> dict:
+        seen.update(request)
+        return {
+            "status": 401, "headers": {"content-type": "application/json"},
+            "body": b'{"error": {"message": "invalid key"}}', "truncated": False,
+        }
+
+    client, settings = _owner_client(tmp_path, monkeypatch, rejecting)
+    with client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        workspace_id = "workspace-" + "e" * 32
+        (tmp_path / "rejected-checkout").mkdir()
+        client.app.state.store.db.create_workspace(
+            workspace_id=workspace_id,
+            root=str(tmp_path / "rejected-checkout"),
+            owner_id=f"local-uid:{os.geteuid()}",
+            project_id="project-rejected",
+            generation=1,
+            isolation_profile="git-checkout",
+        )
+        client.post("/api/local/secrets/references", headers=headers, json=REFERENCE_BODY)
+        granted = client.post("/api/local/secrets/grants", headers=headers, json={
+            "reference": "provider-api", "tool": TOOL, "arguments": ARGUMENTS,
+            "attemptId": ATTEMPT, "workspaceId": workspace_id,
+        })
+        invoked = client.post("/api/local/secrets/invoke", headers=headers, json={
+            "grantToken": granted.json()["grantToken"], "tool": TOOL,
+            "arguments": ARGUMENTS, "attemptId": ATTEMPT,
+        })
+        assert seen["headers"]["authorization"] == f"Bearer {SECRET_VALUE}"
+        assert invoked.status_code == 502
+        assert invoked.json()["ok"] is False
+        assert invoked.json()["code"] == "secret_upstream_rejected"
+        assert invoked.json()["status"] == 401
+        assert SECRET_VALUE not in invoked.text
 
 
 def test_secret_broker_api_requires_the_owner_credential(tmp_path, monkeypatch):

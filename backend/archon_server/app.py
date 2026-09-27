@@ -134,6 +134,9 @@ logger = logging.getLogger(__name__)
 workspace_file_write_lock = threading.Lock()
 WEBSOCKET_AUTH_TIMEOUT_SECONDS = 5.0
 LOCAL_TASK_RUNNER_ID = "archon-desktop-local"
+# Each write path refreshes its own writer lease; the short TTL keeps a crashed
+# writer from blocking the workspace.
+WRITE_LEASE_TTL_SECONDS = 120
 _RUNNER_PRINCIPAL = re.compile(r"runner-[0-9a-f]{32}\Z")
 LOCAL_CODEX_PROJECT_ID = re.compile(r"^codex-project:[A-Za-z0-9._:-]{1,242}$")
 LOCAL_CODEX_TASK_ID = re.compile(r"^codex-task:[A-Za-z0-9._:-]{1,245}$")
@@ -922,7 +925,6 @@ def create_app(
                 runner_enrollments = RunnerEnrollmentService(data_root / "runner-enrollments")
                 runner_outbox = RunnerOutbox(data_root / "runner-outbox")
                 runner_results = RunnerResultLedger(data_root / "runner-results")
-                workspace_write_leases = WorkspaceWriteLease(data_root / "workspace-write-leases")
                 # The broker holds provider credentials this process already
                 # received from the service manager's external environment file.
                 # It resolves values itself and never returns them.
@@ -1356,9 +1358,15 @@ def create_app(
     async def local_workspace_service_code_server(
         workspace_id: str,
         payload: WorkspaceCodeServerRequest,
+        principal=Depends(require_local_owner),
     ):
-        """Register a workspace-hosted code-server bound to loopback for the preview gateway."""
+        """Register a loopback code-server for the preview gateway.
+
+        The full IDE is a write-capable handoff, so the caller must hold the
+        workspace write lease. The read-only viewer path is unaffected.
+        """
         current_owner_workspace(workspace_id)
+        claim_workspace_write(workspace_id, str(principal["principal_id"]))
         executable = str(settings.code_server_executable)
         definition = {
             "name": "code-server",
@@ -1387,9 +1395,44 @@ def create_app(
         return JSONResponse(status_code=201, content={"service": defined}, headers={"Cache-Control": "no-store"})
 
     def workspace_write_lease_service() -> WorkspaceWriteLease:
+        """Return the lease ledger, creating it on first use in any server mode."""
+        nonlocal workspace_write_leases
         if workspace_write_leases is None:
-            raise HTTPException(status_code=503, detail="Workspace write leases are unavailable")
+            try:
+                workspace_write_leases = WorkspaceWriteLease(
+                    settings.data_dir.expanduser().resolve() / "workspace-write-leases"
+                )
+            except (WorkspaceWriteLeaseUnavailable, ValueError) as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
         return workspace_write_leases
+
+    def request_write_holder(authorization: str | None) -> str:
+        """Name this request's writer identity from the credential it presented."""
+        principal = pairing_broker.authenticate(supplied_bearer(authorization)) if pairing_broker else None
+        if principal is not None:
+            return str(principal["principal_id"])
+        return "server-token:owner"
+
+    def claim_workspace_write(workspace_id: str, holder: str) -> None:
+        """Take or refresh the workspace write lease for this writer.
+
+        A write path may proceed only while its own writer identity holds the
+        lease, so a competing holder is refused with 409 instead of silently
+        interleaving edits. The lease expires, so a crashed writer cannot block
+        the workspace indefinitely.
+        """
+        try:
+            workspace_write_lease_service().acquire(
+                workspace_id, holder, WRITE_LEASE_TTL_SECONDS
+            )
+        except WorkspaceWriteLeaseBusy as exc:
+            raise HTTPException(
+                status_code=409, detail=f"Workspace is held by a competing writer: {exc}"
+            ) from exc
+        except WorkspaceWriteLeaseUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/local/workspaces/{workspace_id}/write-lease", dependencies=[Depends(require_local_owner)])
     async def local_workspace_write_lease_status(workspace_id: str):
@@ -1464,6 +1507,19 @@ def create_app(
             return JSONResponse(
                 status_code=400,
                 content={"detail": str(exc), "code": "secret_request_rejected"},
+                headers={"Cache-Control": "no-store"},
+            )
+        if not result.get("ok"):
+            # The brokered call reached the provider but did not succeed. Fail the
+            # HTTP response too, so a caller that only reads the status cannot
+            # mistake a rejected action for a completed one.
+            return JSONResponse(
+                status_code=502,
+                content={
+                    **result,
+                    "code": "secret_upstream_rejected",
+                    "detail": f"The brokered provider call returned HTTP {result.get('status')}",
+                },
                 headers={"Cache-Control": "no-store"},
             )
         return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
@@ -1646,8 +1702,14 @@ def create_app(
         "/api/local/workspaces/{workspace_id}/services/{name}/start",
         dependencies=[Depends(require_local_owner)],
     )
-    async def local_workspace_service_start(workspace_id: str, name: str):
+    async def local_workspace_service_start(
+        workspace_id: str,
+        name: str,
+        principal=Depends(require_local_owner),
+    ):
         current_owner_workspace(workspace_id)
+        # Starting a workspace service hands a process write access to the root.
+        claim_workspace_write(workspace_id, str(principal["principal_id"]))
         try:
             started = await workspace_service_manager().start(workspace_id, name)
         except WorkspaceServiceNotFound as exc:
@@ -2494,13 +2556,19 @@ def create_app(
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     @app.post("/api/workspaces/{workspace_id}/files/write", dependencies=protected)
-    def write_workspace_file(workspace_id: str, payload: WorkspaceFileWriteRequest):
-        """Save existing text using observed-content conflict detection.
+    def write_workspace_file(
+        workspace_id: str,
+        payload: WorkspaceFileWriteRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        """Save existing text while the caller holds the workspace write lease.
 
-        Expected text detects changes observed before atomic replacement; it
-        does not fence native or other out-of-process writers.
+        Expected text detects changes observed before atomic replacement; the
+        lease refuses a competing writer but it does not fence native or other
+        out-of-process writers.
         """
         workspace = current_owner_workspace(workspace_id)
+        claim_workspace_write(workspace_id, request_write_holder(authorization))
         root = workspace["root"]
         try:
             with workspace_file_write_lock:
@@ -2529,9 +2597,17 @@ def create_app(
             raise HTTPException(status_code=503, detail="Workspace file service is temporarily unavailable") from None
 
     @app.post("/api/workspaces/{workspace_id}/files/create", dependencies=protected)
-    def create_workspace_file(workspace_id: str, payload: WorkspaceFileCreateRequest):
-        """Create a new visible text file while refusing active workspace tasks."""
+    def create_workspace_file(
+        workspace_id: str,
+        payload: WorkspaceFileCreateRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        """Create a new visible text file while holding the write lease.
+
+        An active workspace task is still refused separately.
+        """
         workspace = current_owner_workspace(workspace_id)
+        claim_workspace_write(workspace_id, request_write_holder(authorization))
         root = workspace["root"]
         try:
             with workspace_file_write_lock:

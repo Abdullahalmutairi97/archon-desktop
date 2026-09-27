@@ -153,7 +153,9 @@ def _default_transport(request: dict[str, Any]) -> dict[str, Any]:
     )
     for key, value in request["headers"].items():
         http_request.add_header(key, value)
-    opener = urllib.request.build_opener(_NoRedirect)
+    # An empty proxy map disables urllib's ambient proxy support: a configured
+    # https_proxy must never become a third party that sees the credential.
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
     try:
         response = opener.open(http_request, timeout=request["timeoutSeconds"])
     except urllib.error.HTTPError as exc:
@@ -262,11 +264,21 @@ def _redact_json(value: Any, secret: str | None) -> tuple[Any, bool]:
         redacted_map: dict[Any, Any] = {}
         changed = False
         for key, item in value.items():
+            # Object keys reach the caller too, so an upstream that reflects the
+            # credential as a key is redacted exactly like a value.
+            key_value, key_changed = (
+                _redact_text(key, secret) if isinstance(key, str) else (key, False)
+            )
             item_value, item_changed = _redact_json(item, secret)
-            redacted_map[key] = item_value
-            changed = changed or item_changed
+            redacted_map[key_value] = item_value
+            changed = changed or item_changed or key_changed
         return redacted_map, changed
-    return value, False
+    if isinstance(value, bool) or value is None:
+        return value, False
+    # A credential echoed as a JSON number or literal must not survive as a
+    # non-string scalar either.
+    text, changed = _redact_text(str(value), secret)
+    return (text, True) if changed else (value, False)
 
 
 def _validate_request(arguments: Any) -> dict[str, Any]:
@@ -513,6 +525,10 @@ class SecretBroker:
         if not isinstance(workspace_id, str) or not _WORKSPACE.fullmatch(workspace_id):
             raise ValueError("workspace id is invalid")
         digest = action_digest(name, arguments)
+        # Validate the request shape here as well, so a grant for an action the
+        # broker could never perform is refused at mint time rather than after
+        # the caller has been handed a credential-carrying token.
+        _validate_request(arguments)
         ttl = DEFAULT_TTL_SECONDS if ttl_seconds is None else ttl_seconds
         if isinstance(ttl, bool) or not isinstance(ttl, int) or not _MIN_TTL_SECONDS <= ttl <= self._max_ttl:
             raise ValueError("ttl_seconds is invalid")
@@ -697,7 +713,12 @@ class SecretBroker:
                 headers_out[lowered] = cleaned
                 redacted = redacted or changed
         text = raw.decode("utf-8", errors="replace")
-        if not text.strip():
+        if truncated:
+            # A redacted prefix of a longer body can still cut a credential in
+            # half and turn repeated attempts into a byte-by-byte oracle, so an
+            # oversized body is withheld instead of trimmed.
+            body, encoding = None, "truncated"
+        elif not text.strip():
             body: Any = None
             encoding = "empty"
         elif "json" in content_type:
@@ -921,6 +942,12 @@ class SecretBroker:
                     or row["authHeader"] not in _AUTH_HEADERS or row["authPrefix"] not in _AUTH_PREFIXES
                     or not isinstance(row["createdAt"], str)):
                 raise SecretBrokerUnavailable("secret broker ledger contains an invalid reference")
+            try:
+                self._validate_endpoint(row["endpoint"])
+            except ValueError:
+                raise SecretBrokerUnavailable(
+                    "secret broker ledger contains an unusable endpoint"
+                ) from None
         if not isinstance(providers, dict) or len(providers) > self._max_references:
             raise SecretBrokerUnavailable("secret broker ledger has too many providers")
         for name, row in providers.items():
@@ -954,7 +981,17 @@ class SecretBroker:
             if (not isinstance(entry, dict)
                     or set(entry) != {"at", "decision", "reason", "principal", "reference", "provider", "tool",
                                       "actionDigest", "grantId", "attemptId", "workspaceId", "workspaceGeneration"}
-                    or entry["decision"] not in {"allowed", "denied", "failed"}):
+                    or not isinstance(entry["at"], str)
+                    or not isinstance(entry["decision"], str)
+                    or entry["decision"] not in {"allowed", "denied", "failed"}
+                    or not all(
+                        entry[key] is None or isinstance(entry[key], str)
+                        for key in ("reason", "principal", "reference", "provider", "tool",
+                                    "actionDigest", "grantId", "attemptId", "workspaceId")
+                    )
+                    or (entry["workspaceGeneration"] is not None
+                        and (isinstance(entry["workspaceGeneration"], bool)
+                             or not isinstance(entry["workspaceGeneration"], int)))):
                 raise SecretBrokerUnavailable("secret broker ledger has an invalid audit entry")
 
     def _save(self, document: dict[str, Any]) -> None:

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — write-lease enforcement
+
+- Require the workspace write lease in the write paths. `POST /api/workspaces/{id}/files/write`, `POST /api/workspaces/{id}/files/create`, workspace service start and the code-server handoff each take or refresh the lease for the identity the request presented (a paired owner, or the static server token), and a live lease held by another writer is refused with 409 before anything is written. Moving write access now needs an explicit handover: the holder releases and the other writer acquires. Kernels, debuggers, tmux children and other native processes are still not fenced, and the lease ledger accepts any registered workspace id shape.
+
 ## Unreleased — secret broker
 
 - Add an isolated credential-holding broker for secret-backed actions. A credential stays in the server process environment and is addressed by an operator-registered reference; no value is persisted, returned, logged or copied into a child environment. An action needs a single-use grant bound to the principal, tool name, digest of the exact arguments, attempt id, workspace identity plus its current generation and the ledger epoch. The broker re-checks that binding, performs the upstream HTTPS request itself over an allowlisted request shape, consumes the grant before the call starts (an ambiguous failure is never retried silently), redacts the credential from the bounded result and audits every decision. Owner-only `/api/local/secrets/*` endpoints register and revoke references, report scoped provider auth states and read the bounded decision trail; an enrolled runner redeems a grant minted for it over its own authenticated channel (`/api/runners/{id}/secret-invoke`). Ledger state is a bounded, schema-validated, private (0600) document.
