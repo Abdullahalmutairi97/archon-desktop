@@ -348,7 +348,9 @@ class WorkspaceServiceManager:
 
         Reading `memory.max` is insufficient: some hosts set the value without
         enforcing it, so the probe runs a bounded allocation that must be killed.
-        Enforcement is treated as unavailable unless that is observed.
+        Enforcement is treated as unavailable unless that is observed. A scope
+        that only caps resident memory lets swap absorb the overage, so the probe
+        and the launch both disable swap for the scope.
         """
         if self._memory_enforcement is None:
             self._memory_enforcement = await self._probe_memory_enforcement()
@@ -365,6 +367,7 @@ class WorkspaceServiceManager:
                     [
                         "systemd-run", "--user", "--scope", "--quiet",
                         "-p", f"MemoryMax={_MEMORY_PROBE_MB}M",
+                        "-p", "MemorySwapMax=0",
                         "--", "python3", "-c", _MEMORY_PROBE_SCRIPT,
                     ],
                     capture_output=True,
@@ -385,6 +388,8 @@ class WorkspaceServiceManager:
             command = [
                 "systemd-run", "--user", "--scope", "--collect", "--quiet",
                 "-p", f"MemoryMax={entry['memoryLimitMb']}M",
+                # Swap would otherwise absorb the overage and mask the cap.
+                "-p", "MemorySwapMax=0",
                 "--", *command,
             ]
         process = await self._spawn(

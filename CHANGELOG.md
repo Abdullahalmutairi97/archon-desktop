@@ -40,7 +40,7 @@
 
 ## Unreleased — enforced service memory budget
 
-- Launch a service that declares `memoryLimitMb` under `systemd-run --user --scope -p MemoryMax=<n>M` (cgroup v2) instead of an unbounded process; a service without a budget keeps the plain argv launch. A behavioral probe verifies that a scope actually kills an over-budget allocation before any budgeted service starts; on hosts that set `memory.max` without enforcing it (observed here) a budgeted service is refused (fail closed) rather than launched unbounded.
+- Launch a service that declares `memoryLimitMb` under `systemd-run --user --scope -p MemoryMax=<n>M -p MemorySwapMax=0` (cgroup v2) instead of an unbounded process; a service without a budget keeps the plain argv launch. Swap is disabled for the scope because it would otherwise absorb the overage and mask the cap. A behavioral probe verifies that a scope actually kills an over-budget allocation before any budgeted service starts; on a host that sets `memory.max` without enforcing it a budgeted service is refused (fail closed) rather than launched unbounded. The probe passes on the target host.
 
 ## Unreleased — managed service health state
 

@@ -171,6 +171,7 @@ async def test_declared_memory_budget_launches_under_a_scope(tmp_path):
         "systemd-run", "--user", "--scope", "--collect", "--quiet", "-p",
     ]
     assert "MemoryMax=128M" in spawned[0]
+    assert "MemorySwapMax=0" in spawned[0]
     assert spawned[0][-3:] == ["--", "/bin/echo", "hi"]
     await manager.shutdown()
 
