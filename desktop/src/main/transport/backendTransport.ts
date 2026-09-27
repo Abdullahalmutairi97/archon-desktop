@@ -24,6 +24,7 @@ export const READ_ONLY_OPERATIONS: readonly OperationName[] = Object.freeze([
   'workspaces.get',
   'workspaces.files.list',
   'workspaces.files.read',
+  'workspaces.files.diff',
   'workspaces.files.search',
 ])
 
@@ -58,6 +59,7 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'workspaces.provision': 'POST',
   'workspaces.files.list': 'GET',
   'workspaces.files.read': 'GET',
+  'workspaces.files.diff': 'GET',
   'workspaces.files.search': 'GET',
   'workspaces.files.write': 'POST',
   'workspaces.files.create': 'POST',
@@ -91,6 +93,7 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'workspaces.provision': '/api/workspaces',
   'workspaces.files.list': '/api/workspaces',
   'workspaces.files.read': '/api/workspaces',
+  'workspaces.files.diff': '/api/workspaces',
   'workspaces.files.search': '/api/workspaces',
   'workspaces.files.write': '/api/workspaces',
   'workspaces.files.create': '/api/workspaces',
@@ -331,6 +334,9 @@ function operationUrl(
     const workspacePayload = payload as OperationMap['workspaces.files.list']['payload']
     path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files`
     if (operation === 'workspaces.files.read') path += '/read'
+  } else if (operation === 'workspaces.files.diff') {
+    const workspacePayload = payload as OperationMap['workspaces.files.diff']['payload']
+    path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files/diff`
   } else if (operation === 'workspaces.files.search') {
     const workspacePayload = payload as OperationMap['workspaces.files.search']['payload']
     path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files/search`
@@ -360,6 +366,9 @@ function operationUrl(
     const filePayload = payload as OperationMap['workspaces.files.read']['payload']
     url.searchParams.set('path', filePayload.path)
     url.searchParams.set('max_bytes', String(filePayload.maxBytes))
+  } else if (operation === 'workspaces.files.diff') {
+    const filePayload = payload as OperationMap['workspaces.files.diff']['payload']
+    url.searchParams.set('path', filePayload.path)
   } else if (operation === 'workspaces.files.search') {
     const searchPayload = payload as OperationMap['workspaces.files.search']['payload']
     url.searchParams.set('q', searchPayload.query)
@@ -402,6 +411,11 @@ function isSupportedResult(
       const requested = payload as OperationMap['workspaces.files.read']['payload']
       return value.path === requested.path && typeof value.content === 'string' &&
         new TextEncoder().encode(value.content).byteLength <= requested.maxBytes
+    }
+    if (operation === 'workspaces.files.diff') {
+      const requested = payload as OperationMap['workspaces.files.diff']['payload']
+      return value.path === requested.path && typeof value.diff === 'string' &&
+        new TextEncoder().encode(value.diff).byteLength <= 64 * 1024
     }
     if (operation === 'workspaces.files.search') {
       if (!isRecord(parsed)) return false

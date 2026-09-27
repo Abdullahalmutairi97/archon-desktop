@@ -139,6 +139,11 @@ export interface WorkspaceFileReadPayload {
   maxBytes: number
 }
 
+export interface WorkspaceFileDiffPayload {
+  workspaceId: string
+  path: string
+}
+
 export interface WorkspaceFileSearchPayload {
   workspaceId: string
   query: string
@@ -173,6 +178,12 @@ export interface WorkspaceFileListResult {
 export interface WorkspaceFileReadResult {
   path: string
   content: string
+  truncated: boolean
+}
+
+export interface WorkspaceFileDiffResult {
+  path: string
+  diff: string
   truncated: boolean
 }
 
@@ -237,6 +248,10 @@ export interface OperationMap {
   'workspaces.files.read': {
     payload: WorkspaceFileReadPayload
     result: WorkspaceFileReadResult
+  }
+  'workspaces.files.diff': {
+    payload: WorkspaceFileDiffPayload
+    result: WorkspaceFileDiffResult
   }
   'workspaces.files.search': {
     payload: WorkspaceFileSearchPayload

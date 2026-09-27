@@ -310,7 +310,35 @@
 .workspace-file-edit-toolbar {
   display: flex;
   justify-content: flex-end;
+  gap: 7px;
   padding: 6px 8px 0;
+}
+
+.workspace-file-diff {
+  margin: 8px;
+  border: 1px solid var(--line, #343230);
+  border-radius: var(--radius, 5px);
+  background: var(--surface, #212121);
+}
+
+.workspace-file-diff > strong {
+  display: block;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line, #343230);
+  color: var(--text, #e8e5e0);
+  font-size: calc(9px * var(--font-scale, 1));
+}
+
+.workspace-file-diff > pre {
+  max-height: 310px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  color: var(--muted, #96928c);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: calc(9px * var(--font-scale, 1));
+  line-height: 1.5;
+  white-space: pre;
 }
 
 .workspace-file-editor {
@@ -365,7 +393,8 @@
 }
 
 .workspace-file-editor button:disabled,
-.workspace-file-editor textarea:disabled { cursor: default; opacity: .65; }
+.workspace-file-editor textarea:disabled,
+.workspace-file-edit-toolbar button:disabled { cursor: default; opacity: .65; }
 
 .workspace-file-save-error { padding: 3px 0 0; color: #e1bd76; }
 

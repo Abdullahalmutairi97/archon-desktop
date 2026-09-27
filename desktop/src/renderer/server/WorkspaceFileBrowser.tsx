@@ -27,6 +27,12 @@ export interface WorkspaceFileWrite {
   content: string
 }
 
+export interface WorkspaceFileDiff {
+  path: string
+  diff: string
+  truncated: boolean
+}
+
 export interface WorkspaceFileSearchHit {
   path: string
   line: number
@@ -46,6 +52,7 @@ export interface WorkspaceReadOnlyFilePort {
   search(workspaceId: string, query: string): Promise<WorkspaceFileSearchResult>
   write?(workspaceId: string, path: string, expectedContent: string, content: string): Promise<WorkspaceFileWrite>
   create?(workspaceId: string, path: string, content: string): Promise<WorkspaceFileWrite>
+  diff?(workspaceId: string, path: string): Promise<WorkspaceFileDiff>
 }
 
 const LIST_LIMIT = 100
@@ -74,6 +81,9 @@ type SearchState =
 
 type SaveFeedback = { workspaceId: string; path: string; kind: 'conflict' | 'uncertain' }
 type CreateFeedback = { workspaceId: string; path: string; kind: 'conflict' | 'uncertain' }
+type DiffState =
+  | { workspaceId: string; path: string; status: 'loading' | 'error' }
+  | { workspaceId: string; path: string; status: 'ready'; diff: string; truncated: boolean }
 
 function canonicalPath(path: string): string | null {
   if (path === '') return ''
@@ -221,6 +231,7 @@ export function WorkspaceFileBrowser({
   const [saveFeedbackState, setSaveFeedbackState] = useState<SaveFeedback | null>(null)
   const [creatingState, setCreatingState] = useState<{ workspaceId: string; name: string; content: string } | null>(null)
   const [createFeedbackState, setCreateFeedbackState] = useState<CreateFeedback | null>(null)
+  const [diffState, setDiffState] = useState<DiffState | null>(null)
   const [savePending, setSavePending] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchState, setSearchState] = useState<SearchState | null>(null)
@@ -228,6 +239,7 @@ export function WorkspaceFileBrowser({
   const listingGeneration = useRef(0)
   const readGeneration = useRef(0)
   const searchGeneration = useRef(0)
+  const diffGeneration = useRef(0)
   const saveLock = useRef(false)
   const currentListing = listingState?.workspaceId === workspaceId && listingState.path === path ? listingState : null
   const currentRead = readState?.workspaceId === workspaceId && readState.path === selectedPath ? readState : null
@@ -236,6 +248,7 @@ export function WorkspaceFileBrowser({
   const currentCreating = creatingState?.workspaceId === workspaceId ? creatingState : null
   const currentCreateFeedback = createFeedbackState?.workspaceId === workspaceId && createFeedbackState.path === currentCreating?.name
     ? createFeedbackState : null
+  const currentDiff = diffState?.workspaceId === workspaceId && diffState.path === selectedPath ? diffState : null
   const currentSearch = searchState?.workspaceId === workspaceId ? searchState : null
   const currentEditByteLength = currentEditing ? new TextEncoder().encode(currentEditing.draft).byteLength : 0
   const currentEditIsDirty = currentEditing !== null && currentRead?.status === 'ready' && currentEditing.draft !== currentRead.content
@@ -273,15 +286,18 @@ export function WorkspaceFileBrowser({
 
   useEffect(() => {
     readGeneration.current += 1
+    diffGeneration.current += 1
     setReadState(null)
     setEditingState(null)
     setSaveFeedbackState(null)
+    setDiffState(null)
   }, [workspaceId, path])
 
   useEffect(() => () => {
     listingGeneration.current += 1
     readGeneration.current += 1
     searchGeneration.current += 1
+    diffGeneration.current += 1
   }, [])
 
   function navigate(nextPath: string): void {
@@ -293,6 +309,8 @@ export function WorkspaceFileBrowser({
     setReadState(null)
     setEditingState(null)
     setSaveFeedbackState(null)
+    diffGeneration.current += 1
+    setDiffState(null)
     setCreatingState(null)
     setCreateFeedbackState(null)
   }
@@ -310,6 +328,8 @@ export function WorkspaceFileBrowser({
     setReadState({ workspaceId, path: safePath, status: 'loading' })
     setEditingState(null)
     setSaveFeedbackState(null)
+    diffGeneration.current += 1
+    setDiffState(null)
     setCreatingState(null)
     setCreateFeedbackState(null)
     void readOnlyFilePort.read(workspaceId, safePath, READ_LIMIT_BYTES).then((result) => {
@@ -348,6 +368,8 @@ export function WorkspaceFileBrowser({
     setReadState(null)
     setEditingState(null)
     setSaveFeedbackState(null)
+    diffGeneration.current += 1
+    setDiffState(null)
     setCreateFeedbackState(null)
     setCreatingState({ workspaceId, name: '', content: '' })
   }
@@ -392,6 +414,24 @@ export function WorkspaceFileBrowser({
     setCreateFeedbackState(null)
   }
 
+  function showDiff(): void {
+    if (!selectedPath || currentRead?.status !== 'ready' || currentRead.truncated || !readOnlyFilePort.diff) return
+    const filePath = selectedPath
+    const generation = ++diffGeneration.current
+    setDiffState({ workspaceId, path: filePath, status: 'loading' })
+    void readOnlyFilePort.diff(workspaceId, filePath).then((result) => {
+      if (diffGeneration.current !== generation) return
+      if (!result || result.path !== filePath || typeof result.diff !== 'string' ||
+          new TextEncoder().encode(result.diff).byteLength > 64 * 1024 || typeof result.truncated !== 'boolean') {
+        setDiffState({ workspaceId, path: filePath, status: 'error' })
+        return
+      }
+      setDiffState({ workspaceId, path: filePath, status: 'ready', diff: result.diff, truncated: result.truncated })
+    }).catch(() => {
+      if (diffGeneration.current === generation) setDiffState({ workspaceId, path: filePath, status: 'error' })
+    })
+  }
+
   async function saveEdit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     if (saveLock.current || !selectedPath || currentRead?.status !== 'ready' || !currentEditing ||
@@ -415,6 +455,8 @@ export function WorkspaceFileBrowser({
         setReadState({ workspaceId, path: filePath, status: 'ready', content: result.content, truncated: false })
         setEditingState(null)
         setSaveFeedbackState(null)
+        diffGeneration.current += 1
+        setDiffState(null)
       }
       retryListing()
     } catch (error) {
@@ -625,12 +667,23 @@ export function WorkspaceFileBrowser({
               </div>}
             </form>
             : <>
-              {readOnlyFilePort.write && canEditContent(currentRead.content, currentRead.truncated) && <div className="workspace-file-edit-toolbar">
-                <button type="button" onClick={beginEdit} disabled={savePending}>Edit</button>
+              {(readOnlyFilePort.write && canEditContent(currentRead.content, currentRead.truncated) || readOnlyFilePort.diff && !currentRead.truncated) && <div className="workspace-file-edit-toolbar">
+                {readOnlyFilePort.write && canEditContent(currentRead.content, currentRead.truncated) && <button type="button" onClick={beginEdit} disabled={savePending}>Edit</button>}
+                {readOnlyFilePort.diff && !currentRead.truncated && <button type="button" onClick={showDiff} disabled={savePending || currentDiff?.status === 'loading'}>Show Git diff</button>}
               </div>}
               <pre className="workspace-file-preview-content">{currentRead.content || '(empty file)'}</pre>
             </>}
         </>}
+        {currentDiff?.status === 'loading' && <p className="workspace-file-message" role="status">Loading tracked changes…</p>}
+        {currentDiff?.status === 'error' && <div className="workspace-file-message" role="alert">
+          <span>Could not load a Git diff for this file.</span>
+          <button type="button" onClick={showDiff}>Retry diff</button>
+        </div>}
+        {currentDiff?.status === 'ready' && <section className="workspace-file-diff" aria-label="Selected file Git diff">
+          <strong>Git diff · HEAD to working tree</strong>
+          {currentDiff.truncated && <p className="workspace-file-truncated" role="status">Diff stopped at a safety limit.</p>}
+          {currentDiff.diff ? <pre>{currentDiff.diff}</pre> : <p className="workspace-file-message">No tracked changes for this file.</p>}
+        </section>}
       </section>
     </div>
   </section>

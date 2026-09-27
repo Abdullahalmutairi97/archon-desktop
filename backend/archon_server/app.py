@@ -55,6 +55,7 @@ from .workspace_files import (
     WorkspaceFileService,
     WorkspaceFilesError,
 )
+from .workspace_git_diff import WorkspaceGitDiffService
 from .tasks import TaskEngine, TaskStore, hash_request_payload
 from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
 from .runner_ownership import RunnerOwnershipLock
@@ -487,6 +488,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     projects = ProjectService(settings.profile_home / "projects.db")
     workspace_checkout_provisioner: WorkspaceCheckoutProvisioner | None = None
     workspace_file_service = WorkspaceFileService()
+    workspace_git_diff_service = WorkspaceGitDiffService(workspace_file_service)
 
     def workspace_owner_id() -> str:
         return f"local-uid:{os.geteuid()}"
@@ -1172,6 +1174,17 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         workspace = current_owner_workspace(workspace_id)
         try:
             return workspace_file_service.read_text(workspace["root"], path, max_bytes)
+        except WorkspaceFilesError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    @app.get("/api/workspaces/{workspace_id}/files/diff", dependencies=protected)
+    def diff_workspace_file(
+        workspace_id: str,
+        path: str = Query(..., min_length=1, max_length=MAX_RELATIVE_PATH_LENGTH),
+    ):
+        workspace = current_owner_workspace(workspace_id)
+        try:
+            return workspace_git_diff_service.diff_text(workspace["root"], path)
         except WorkspaceFilesError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 

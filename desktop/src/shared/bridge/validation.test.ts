@@ -55,6 +55,9 @@ describe('finite desktop bridge validation', () => {
     expect(parseOperationRequest('workspaces.files.search', {
       workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent',
     })).toEqual(['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent' }])
+    expect(parseOperationRequest('workspaces.files.diff', {
+      workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts',
+    })).toEqual(['workspaces.files.diff', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts' }])
     expect(parseOperationRequest('workspaces.files.write', {
       workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts',
       expectedContent: 'before', content: 'after',
@@ -84,6 +87,9 @@ describe('finite desktop bridge validation', () => {
       ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: '  ' }],
       ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'q'.repeat(129) }],
       ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent\nsecret' }],
+      ['workspaces.files.diff', { workspaceId: `workspace-${'a'.repeat(32)}`, path: '../outside' }],
+      ['workspaces.files.diff', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src\\main.ts' }],
+      ['workspaces.files.diff', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts', extra: true }],
       ['workspaces.files.write', { workspaceId: `workspace-${'a'.repeat(32)}`, path: '../outside', expectedContent: '', content: '' }],
       ['workspaces.files.write', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts', expectedContent: 'x'.repeat(12_001), content: '' }],
       ['workspaces.files.write', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts', expectedContent: '', content: '😀'.repeat(4_097) }],
@@ -116,6 +122,23 @@ describe('finite desktop bridge validation', () => {
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
       ...result, bytes_scanned: 1024 * 1024 + 1,
     }, 'workspaces.files.search')).toThrow(TypeError)
+  })
+
+  it('validates the bounded workspace file diff response', () => {
+    const result = { path: 'src/main.ts', diff: '--- a/src/main.ts\n+++ b/src/main.ts\n', truncated: false }
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, result, 'workspaces.files.diff')).toEqual(result)
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      path: 'src/main.ts', diff: 'x'.repeat(64 * 1024), truncated: true,
+    }, 'workspaces.files.diff')).toMatchObject({ truncated: true })
+    for (const unsafe of [
+      { ...result, path: '../outside' },
+      { ...result, diff: 'x'.repeat(64 * 1024 + 1) },
+      { ...result, diff: 'bad\0diff' },
+      { ...result, truncated: 0 },
+      { ...result, extra: true },
+    ]) {
+      expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, unsafe, 'workspaces.files.diff')).toThrow(TypeError)
+    }
   })
 
   it('validates the narrow workspace file write response', () => {

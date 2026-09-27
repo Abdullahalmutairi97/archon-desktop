@@ -164,6 +164,7 @@ function WorkspaceSection({
     create: (workspaceId, path, content) => bridge.api.invoke('workspaces.files.create', {
       workspaceId, path, content,
     }),
+    diff: (workspaceId, path) => bridge.api.invoke('workspaces.files.diff', { workspaceId, path }),
   }), [bridge])
   const selectedProjectId = choices.some((choice) => choice.id === projectId) ? projectId : choices[0]?.id ?? ''
   const revisionIsCommit = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(revision)

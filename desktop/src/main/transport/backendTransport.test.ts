@@ -95,6 +95,7 @@ describe('backend transport', () => {
       'workspaces.get',
       'workspaces.files.list',
       'workspaces.files.read',
+      'workspaces.files.diff',
       'workspaces.files.search',
     ])
     expect(TASK_OPERATIONS).toEqual([
@@ -467,6 +468,48 @@ describe('backend transport', () => {
     })
     await expect(unsafeResponse.invoke('workspaces.files.search', { workspaceId, query: 'agent' }))
       .rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('maps a bounded workspace file diff to an encoded owner-scoped GET and checks response identity', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const path = 'src/feature #1?.ts'
+    const result = { path, diff: '--- a/src/feature\n+++ b/src/feature\n', truncated: false }
+    const fetcher = vi.fn<BackendFetch>(async () => response(result))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.files.diff', { workspaceId, path })).resolves.toEqual(result)
+    expect(fetcher).toHaveBeenCalledOnce()
+    const [url, init] = fetcher.mock.calls[0]
+    expect(url.pathname).toBe(`/api/workspaces/${workspaceId}/files/diff`)
+    expect(url.searchParams.get('path')).toBe(path)
+    expect(String(url)).toContain('path=src%2Ffeature+%231%3F.ts')
+    expect(init?.method).toBe('GET')
+    expect(init?.body).toBeUndefined()
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+
+    const mismatchedPath = new BackendTransport({
+      ...localConnection,
+      fetch: vi.fn(async () => response({ ...result, path: 'src/other.ts' })),
+    })
+    await expect(mismatchedPath.invoke('workspaces.files.diff', { workspaceId, path }))
+      .rejects.toMatchObject({ code: 'invalid_response' })
+
+    const oversizedDiff = new BackendTransport({
+      ...localConnection,
+      fetch: vi.fn(async () => response({ ...result, diff: 'x'.repeat(64 * 1024 + 1) })),
+    })
+    await expect(oversizedDiff.invoke('workspaces.files.diff', { workspaceId, path }))
+      .rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('does not retry a workspace diff after an ambiguous network failure', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => { throw new Error('connection lost after request') })
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.files.diff', {
+      workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts',
+    })).rejects.toMatchObject({ code: 'network_error' })
+    expect(fetcher).toHaveBeenCalledOnce()
   })
 
   it('maps compare-and-write to a fixed owner-scoped POST and validates the returned file', async () => {

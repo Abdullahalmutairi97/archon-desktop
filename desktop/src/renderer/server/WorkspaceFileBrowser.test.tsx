@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { WorkspaceFileBrowser, type WorkspaceFileListing, type WorkspaceFileRead, type WorkspaceReadOnlyFilePort } from './WorkspaceFileBrowser'
+import { WorkspaceFileBrowser, type WorkspaceFileDiff, type WorkspaceFileListing, type WorkspaceFileRead, type WorkspaceReadOnlyFilePort } from './WorkspaceFileBrowser'
 
 afterEach(cleanup)
 
@@ -18,14 +18,16 @@ function port({
   search = vi.fn(async () => ({ hits: [], files_scanned: 0, bytes_scanned: 0, truncated: false })),
   write,
   create,
+  diff,
 }: {
   list?: WorkspaceReadOnlyFilePort['list']
   read?: WorkspaceReadOnlyFilePort['read']
   search?: WorkspaceReadOnlyFilePort['search']
   write?: WorkspaceReadOnlyFilePort['write']
   create?: WorkspaceReadOnlyFilePort['create']
+  diff?: WorkspaceReadOnlyFilePort['diff']
 } = {}) {
-  return { list, read, search, ...(write ? { write } : {}), ...(create ? { create } : {}) }
+  return { list, read, search, ...(write ? { write } : {}), ...(create ? { create } : {}), ...(diff ? { diff } : {}) }
 }
 
 function deferred<T>() {
@@ -39,6 +41,30 @@ function deferred<T>() {
 }
 
 describe('WorkspaceFileBrowser', () => {
+  it('shows a bounded selected-file Git diff and ignores a stale response after selection changes', async () => {
+    const firstDiff = deferred<WorkspaceFileDiff>()
+    const filePort = port({
+      list: vi.fn(async (_workspaceId, path) => ({ path, entries: [file('first.txt'), file('second.txt')], truncated: false })),
+      read: vi.fn(async (_workspaceId, path) => ({ path, content: path, truncated: false })),
+      diff: vi.fn(async (_workspaceId, path) => path === 'first.txt'
+        ? firstDiff.promise : { path, diff: '@@ -1 +1 @@\n-old\n+new', truncated: true }),
+    })
+    render(<WorkspaceFileBrowser workspaceId="workspace-diff" readOnlyFilePort={filePort} />)
+    const entries = screen.getByRole('region', { name: 'Workspace directory entries' })
+    fireEvent.click(await within(entries).findByRole('button', { name: /first.txt/ }))
+    await screen.findByText('first.txt', { selector: 'pre' })
+    fireEvent.click(screen.getByRole('button', { name: 'Show Git diff' }))
+    expect(filePort.diff).toHaveBeenCalledWith('workspace-diff', 'first.txt')
+    fireEvent.click(within(entries).getByRole('button', { name: /second.txt/ }))
+    await screen.findByText('second.txt', { selector: 'pre' })
+    firstDiff.resolve({ path: 'first.txt', diff: 'stale diff', truncated: false })
+    await waitFor(() => expect(screen.queryByText('stale diff')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Show Git diff' }))
+    const shownDiff = await screen.findByRole('region', { name: 'Selected file Git diff' })
+    expect(shownDiff.querySelector('pre')).toHaveTextContent('-old +new')
+    expect(screen.getByText('Diff stopped at a safety limit.')).toBeInTheDocument()
+  })
+
   it('browses a safe relative path, reads bounded text, and marks partial results read-only', async () => {
     const filePort = port({
       list: vi.fn(async (_workspaceId, path) => path === ''

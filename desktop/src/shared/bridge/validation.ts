@@ -27,6 +27,7 @@ import type {
   WorkspaceRecord,
   WorkspaceProvisionPayload,
   WorkspaceFileEntry,
+  WorkspaceFileDiffPayload,
   WorkspaceFileListPayload,
   WorkspaceFileReadPayload,
   WorkspaceFileSearchPayload,
@@ -74,6 +75,7 @@ const operationNames = Object.freeze([
   'workspaces.provision',
   'workspaces.files.list',
   'workspaces.files.read',
+  'workspaces.files.diff',
   'workspaces.files.search',
   'workspaces.files.write',
   'workspaces.files.create',
@@ -114,6 +116,7 @@ const MAX_LOCAL_PAYLOAD_BYTES = 64 * 1024
 const MAX_WORKSPACE_FILE_PATH_LENGTH = 1_000
 const MAX_WORKSPACE_FILE_LIST_LIMIT = 200
 const MAX_WORKSPACE_FILE_READ_BYTES = 64 * 1024
+const MAX_WORKSPACE_FILE_DIFF_BYTES = 64 * 1024
 const MAX_WORKSPACE_SEARCH_QUERY_BYTES = 128
 const MAX_WORKSPACE_SEARCH_FILES = 200
 const MAX_WORKSPACE_SEARCH_BYTES = 1024 * 1024
@@ -304,6 +307,12 @@ function parseWorkspaceFileReadPayload(value: unknown): WorkspaceFileReadPayload
   return Object.freeze({ workspaceId: record.workspaceId, path: record.path, maxBytes: record.maxBytes })
 }
 
+function parseWorkspaceFileDiffPayload(value: unknown): WorkspaceFileDiffPayload {
+  const record = exactObject(value, ['workspaceId', 'path'])
+  if (!workspaceFileId(record.workspaceId) || !workspaceFilePath(record.path, false)) return fail()
+  return Object.freeze({ workspaceId: record.workspaceId, path: record.path })
+}
+
 function parseWorkspaceFileSearchPayload(value: unknown): WorkspaceFileSearchPayload {
   const record = exactObject(value, ['workspaceId', 'query'])
   if (!workspaceFileId(record.workspaceId) || !workspaceSearchQuery(record.query)) return fail()
@@ -394,6 +403,8 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseWorkspaceFileListPayload(payload)])
     case 'workspaces.files.read':
       return Object.freeze([operation, parseWorkspaceFileReadPayload(payload)])
+    case 'workspaces.files.diff':
+      return Object.freeze([operation, parseWorkspaceFileDiffPayload(payload)])
     case 'workspaces.files.search':
       return Object.freeze([operation, parseWorkspaceFileSearchPayload(payload)])
     case 'workspaces.files.write':
@@ -687,6 +698,13 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       if (!workspaceFilePath(record.path, false) || !boundedString(record.content, MAX_WORKSPACE_FILE_READ_BYTES, true) ||
           typeof record.truncated !== 'boolean' || record.content.includes('\0')) return fail()
       return Object.freeze({ path: record.path, content: record.content, truncated: record.truncated })
+    }
+    case 'workspaces.files.diff': {
+      const record = exactObject(value, ['path', 'diff', 'truncated'])
+      if (!workspaceFilePath(record.path, false) || typeof record.diff !== 'string' ||
+          new TextEncoder().encode(record.diff).byteLength > MAX_WORKSPACE_FILE_DIFF_BYTES ||
+          record.diff.includes('\0') || typeof record.truncated !== 'boolean') return fail()
+      return Object.freeze({ path: record.path, diff: record.diff, truncated: record.truncated })
     }
     case 'workspaces.files.search': {
       const record = exactObject(value, ['hits', 'files_scanned', 'bytes_scanned', 'truncated'])

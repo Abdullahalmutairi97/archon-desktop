@@ -222,6 +222,7 @@ describe('ServerCollections', () => {
       }
       if (operation === 'workspaces.files.write') return Promise.resolve({ path: 'README.md', content: 'updated' })
       if (operation === 'workspaces.files.create') return Promise.resolve({ path: 'draft.md', content: '# Draft' })
+      if (operation === 'workspaces.files.diff') return Promise.resolve({ path: 'README.md', diff: '@@ -1 +1 @@', truncated: false })
       return collections([], [], [], [workspace])(operation)
     })
     render(<ServerCollections bridge={bridge} connection={connection()} />)
@@ -235,6 +236,9 @@ describe('ServerCollections', () => {
       .toEqual({ workspaceId, path: '', limit: 100 })
     expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.files.read')[0][1])
       .toEqual({ workspaceId, path: 'README.md', maxBytes: 65_536 })
+    fireEvent.click(within(browser).getByRole('button', { name: 'Show Git diff' }))
+    expect(await within(browser).findByText('@@ -1 +1 @@')).toBeInTheDocument()
+    expect(apiInvoke.mock.calls.find(([operation]) => operation === 'workspaces.files.diff')?.[1]).toEqual({ workspaceId, path: 'README.md' })
     fireEvent.click(within(browser).getByRole('button', { name: 'Edit' }))
     fireEvent.change(within(browser).getByRole('textbox', { name: 'Edit README.md' }), { target: { value: 'updated' } })
     await act(async () => {
