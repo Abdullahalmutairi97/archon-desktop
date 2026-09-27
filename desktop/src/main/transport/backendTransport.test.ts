@@ -5,6 +5,7 @@ import {
   BackendTransportError,
   READ_ONLY_OPERATIONS,
   TASK_OPERATIONS,
+  WORKSPACE_OPERATIONS,
   type BackendFetch,
 } from './backendTransport'
 
@@ -66,6 +67,10 @@ describe('backend transport', () => {
     expect(TASK_OPERATIONS).toEqual([
       'runtimes.list', 'tasks.submit', 'tasks.get', 'tasks.events', 'tasks.cancel',
     ])
+  })
+
+  it('keeps checkout creation in its own narrow operation set', () => {
+    expect(WORKSPACE_OPERATIONS).toEqual(['workspaces.provision'])
   })
 
   it('maps the bounded Prime task flow to fixed routes and main-owned POST policy', async () => {
@@ -276,6 +281,61 @@ describe('backend transport', () => {
     expect(init?.method).toBe('GET')
     expect(init?.body).toBeUndefined()
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+  })
+
+  it('posts only project id and full revision to the fixed workspace route', async () => {
+    const workspace = {
+      workspace_id: 'workspace-123', root: '/srv/archon/workspaces/workspace-123',
+      project_id: 'project-1', base_revision: 'a'.repeat(40), head_revision: 'a'.repeat(40), generation: 1,
+    }
+    const fetcher = vi.fn<BackendFetch>(async () => response({ workspace }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.provision', {
+      projectId: 'project-1', revision: 'a'.repeat(40),
+    })).resolves.toEqual({ workspace })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    const [url, init] = fetcher.mock.calls[0]
+    expect(String(url)).toBe('http://127.0.0.1:8000/api/workspaces')
+    expect(init?.method).toBe('POST')
+    expect(init?.redirect).toBe('manual')
+    expect(new Headers(init?.headers).get('content-type')).toBe('application/json')
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+    expect(new Headers(init?.headers).has('idempotency-key')).toBe(false)
+    expect(JSON.parse(String(init?.body))).toEqual({ project_id: 'project-1', revision: 'a'.repeat(40) })
+  })
+
+  it('rejects incomplete checkout revisions before network access', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => response({ ok: true }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.provision', {
+      projectId: 'project-1', revision: 'main',
+    })).rejects.toMatchObject({ code: 'invalid_payload' })
+    await expect(transport.invoke('workspaces.provision', {
+      projectId: 'project-1', revision: 'a'.repeat(40), root: '/tmp',
+    } as never)).rejects.toMatchObject({ code: 'invalid_payload' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('does not retry workspace creation after an ambiguous network failure', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => { throw new Error('connection dropped') })
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.provision', {
+      projectId: 'project-1', revision: 'a'.repeat(40),
+    })).rejects.toMatchObject({ code: 'network_error' })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a legacy server without the checkout route as unsupported', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => response({ detail: 'not found' }, 404))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.provision', {
+      projectId: 'project-1', revision: 'a'.repeat(40),
+    })).rejects.toMatchObject({ code: 'unsupported_operation' })
+    expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
   it('normalizes only bounded list filters into fixed query parameters', async () => {

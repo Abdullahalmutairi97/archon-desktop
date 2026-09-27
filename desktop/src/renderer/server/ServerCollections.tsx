@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { ConnectionDescription, DesktopBridge, JsonRecord } from '../../shared/bridge/types'
 import { PrimeTaskPanel } from './PrimeTaskPanel'
 import './ServerCollections.css'
@@ -41,6 +41,18 @@ function exactTextField(record: JsonRecord, key: string): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+type WorkspaceProjectChoice = { id: string; name: string }
+
+function workspaceProjectChoices(projects: readonly JsonRecord[]): WorkspaceProjectChoice[] {
+  const seen = new Set<string>()
+  return projects.flatMap((record) => {
+    const id = exactTextField(record, 'id')
+    if (!id || id.length > 200 || id !== id.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(id) || seen.has(id)) return []
+    seen.add(id)
+    return [{ id, name: textField(record, 'name', 'title') ?? id }]
+  })
+}
+
 function isUnauthorizedRejection(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false
   try {
@@ -48,6 +60,16 @@ function isUnauthorizedRejection(error: unknown): boolean {
     return !!code && 'value' in code && code.value === 'unauthorized'
   } catch {
     return false
+  }
+}
+
+function operationErrorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null
+  try {
+    const code = Object.getOwnPropertyDescriptor(error, 'code')
+    return code && 'value' in code && typeof code.value === 'string' ? code.value : null
+  } catch {
+    return null
   }
 }
 
@@ -98,16 +120,62 @@ function CollectionSection({
 }
 
 function WorkspaceSection({
+  bridge,
   state,
   records,
   onRetry,
   accessRejected,
+  projects,
+  projectsLoading,
 }: {
+  bridge: DesktopBridge
   state: 'loading' | 'ready' | 'unavailable'
   records: readonly JsonRecord[]
   onRetry: () => void
   accessRejected: boolean
+  projects: readonly JsonRecord[] | null
+  projectsLoading: boolean
 }) {
+  const choices = workspaceProjectChoices(projects ?? [])
+  const [projectId, setProjectId] = useState('')
+  const [revision, setRevision] = useState('')
+  const [provisionPending, setProvisionPending] = useState(false)
+  const [provisionMessage, setProvisionMessage] = useState<{ kind: 'success' | 'error' | 'ambiguous'; text: string } | null>(null)
+  const provisionLock = useRef(false)
+  const selectedProjectId = choices.some((choice) => choice.id === projectId) ? projectId : choices[0]?.id ?? ''
+  const revisionIsCommit = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(revision)
+
+  async function provisionWorkspace(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    if (provisionLock.current || !selectedProjectId || !revisionIsCommit || projects === null) return
+    provisionLock.current = true
+    setProvisionPending(true)
+    setProvisionMessage(null)
+    try {
+      const result = await bridge.api.invoke('workspaces.provision', {
+        projectId: selectedProjectId,
+        revision,
+      })
+      setRevision('')
+      setProvisionMessage({ kind: 'success', text: `Workspace ${result.workspace.workspace_id} was created.` })
+      onRetry()
+    } catch (error) {
+      const code = operationErrorCode(error)
+      if (code === 'unauthorized') {
+        setProvisionMessage({ kind: 'error', text: 'Workspace creation access was rejected. Return to Connection to re-enter the server token.' })
+      } else if (code === 'unsupported_operation') {
+        setProvisionMessage({ kind: 'error', text: 'This server does not support Git checkout creation yet.' })
+      } else if (code === 'network_error' || code === 'connection_changed' || code === 'http_error' || code === 'invalid_response' || code === 'response_too_large') {
+        setProvisionMessage({ kind: 'ambiguous', text: 'Could not confirm whether the checkout was created. Refresh the workspace list before retrying.' })
+      } else {
+        setProvisionMessage({ kind: 'error', text: 'Workspace checkout could not be created. Check the selected project and revision.' })
+      }
+    } finally {
+      provisionLock.current = false
+      setProvisionPending(false)
+    }
+  }
+
   return <section className="server-collection" aria-label="SERVER WORKSPACES">
     <div className="server-collection-heading"><h3>SERVER WORKSPACES</h3><span>{state === 'ready' ? `${records.length} shown` : state === 'loading' ? 'loading' : 'unavailable'}</span></div>
     <p className="server-workspace-status">Git checkout; native execution isolation not yet enabled</p>
@@ -118,6 +186,42 @@ function WorkspaceSection({
         : 'Workspace data is unavailable for this server connection.'}</span>
       {!accessRejected && <button type="button" onClick={onRetry}>Retry workspaces</button>}
     </div>}
+    <form className="server-workspace-form" onSubmit={(event) => { void provisionWorkspace(event) }}>
+      <h4>Create a Git checkout</h4>
+      {projectsLoading && <p>Loading registered projects…</p>}
+      {!projectsLoading && projects === null && <p>Registered projects are unavailable; checkout creation is disabled.</p>}
+      {!projectsLoading && projects !== null && choices.length === 0 && <p>No registered server projects are available.</p>}
+      {projects !== null && choices.length > 0 && <label>
+        <span>Registered project</span>
+        <select aria-label="Registered project" value={selectedProjectId} onChange={(event) => setProjectId(event.currentTarget.value)} disabled={provisionPending}>
+          {choices.map((choice) => <option key={choice.id} value={choice.id}>{choice.name} · {choice.id}</option>)}
+        </select>
+      </label>}
+      <label>
+        <span>Full commit SHA</span>
+        <input
+          aria-label="Full commit SHA"
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          required
+          minLength={40}
+          maxLength={64}
+          pattern="(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})"
+          placeholder="40 or 64 hexadecimal characters"
+          value={revision}
+          onChange={(event) => setRevision(event.currentTarget.value)}
+          disabled={provisionPending || projects === null || choices.length === 0}
+        />
+      </label>
+      <button type="submit" disabled={provisionPending || projects === null || choices.length === 0 || !revisionIsCommit}>
+        {provisionPending ? 'Creating checkout…' : 'Create Git checkout'}
+      </button>
+      {provisionMessage && <p className={`server-workspace-feedback feedback-${provisionMessage.kind}`} role={provisionMessage.kind === 'error' ? 'alert' : 'status'}>
+        {provisionMessage.text}
+        {provisionMessage.kind === 'ambiguous' && <button type="button" onClick={onRetry}>Refresh workspace list</button>}
+      </p>}
+    </form>
     {state === 'ready' && records.length === 0
       ? <p className="server-collection-empty">No server workspaces returned.</p>
       : state === 'ready' && <ul>
@@ -275,10 +379,14 @@ export function ServerCollections({
         <CollectionSection title="TASKS" kind="task" records={data.tasks} />
       </>}
       {bridge && configured && <WorkspaceSection
+        key={generation}
+        bridge={bridge}
         state={workspaceState === 'disconnected' ? 'unavailable' : workspaceState}
         records={workspaceRecords}
         accessRejected={workspaceAccessRejected}
         onRetry={() => setWorkspaceReload((current) => current + 1)}
+        projects={data?.projects ?? null}
+        projectsLoading={state === 'loading'}
       />}
     </div>}
     {(data || currentWorkspaceLoadState?.state === 'ready') && <p className="server-collections-note">Counts show rows returned; the server may cap session, task and workspace lists.</p>}

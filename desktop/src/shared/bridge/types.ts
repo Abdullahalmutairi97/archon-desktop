@@ -114,6 +114,11 @@ export interface TaskEventsPayload extends TaskByIdPayload {
   after: number
 }
 
+export interface WorkspaceProvisionPayload {
+  projectId: string
+  revision: string
+}
+
 export interface OperationMap {
   readiness: {
     payload: EmptyPayload
@@ -138,6 +143,10 @@ export interface OperationMap {
   'workspaces.list': {
     payload: EmptyPayload
     result: { workspaces: readonly WorkspaceRecord[] }
+  }
+  'workspaces.provision': {
+    payload: WorkspaceProvisionPayload
+    result: { workspace: WorkspaceRecord }
   }
   'runtimes.list': {
     payload: EmptyPayload

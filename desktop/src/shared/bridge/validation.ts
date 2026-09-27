@@ -24,6 +24,7 @@ import type {
   TaskSubmitPayload,
   TasksListPayload,
   WorkspaceRecord,
+  WorkspaceProvisionPayload,
 } from './types'
 
 export const BRIDGE_CHANNELS = Object.freeze({
@@ -61,6 +62,7 @@ const operationNames = Object.freeze([
   'tasks.events',
   'tasks.cancel',
   'workspaces.list',
+  'workspaces.provision',
 ] as const satisfies readonly OperationName[])
 
 const channels = new Set<string>(Object.values(BRIDGE_CHANNELS))
@@ -210,6 +212,13 @@ function parseTasksPayload(value: unknown): TasksListPayload {
   return Object.freeze(limit === undefined ? {} : { limit })
 }
 
+function parseWorkspaceProvisionPayload(value: unknown): WorkspaceProvisionPayload {
+  const record = exactObject(value, ['projectId', 'revision'])
+  if (!workspaceText(record.projectId, MAX_PROJECT_ID_LENGTH)) return fail()
+  if (typeof record.revision !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(record.revision)) return fail()
+  return Object.freeze({ projectId: record.projectId, revision: record.revision })
+}
+
 function validTaskId(value: unknown): value is string {
   return typeof value === 'string'
     && value.length <= MAX_TASK_ID_LENGTH
@@ -256,6 +265,8 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
     case 'runtimes.list':
     case 'workspaces.list':
       return Object.freeze([operation, parseEmptyPayload(payload)])
+    case 'workspaces.provision':
+      return Object.freeze([operation, parseWorkspaceProvisionPayload(payload)])
     case 'sessions.list':
       return Object.freeze([operation, parseSessionsPayload(payload)])
     case 'tasks.list':
@@ -505,6 +516,10 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       const list = parseBoundedJson(record.workspaces, { nodes: 0, estimatedBytes: 0, seen: new WeakSet<object>() })
       if (!Array.isArray(list)) return fail()
       return Object.freeze({ workspaces: Object.freeze(list.map(parseWorkspaceRecord)) })
+    }
+    case 'workspaces.provision': {
+      const record = exactObject(value, ['workspace'])
+      return Object.freeze({ workspace: parseWorkspaceRecord(record.workspace) })
     }
     case 'events.cursor': {
       const record = exactObject(value, ['cursor'])

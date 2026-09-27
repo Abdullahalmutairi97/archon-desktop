@@ -29,6 +29,10 @@ export const TASK_OPERATIONS: readonly OperationName[] = Object.freeze([
   'tasks.cancel',
 ])
 
+export const WORKSPACE_OPERATIONS: readonly OperationName[] = Object.freeze([
+  'workspaces.provision',
+])
+
 const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Object.freeze({
   readiness: 'GET',
   'projects.list': 'GET',
@@ -41,6 +45,7 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'tasks.events': 'GET',
   'tasks.cancel': 'POST',
   'workspaces.list': 'GET',
+  'workspaces.provision': 'POST',
 })
 
 export const MAX_BACKEND_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -66,6 +71,7 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'tasks.events': '/api/tasks',
   'tasks.cancel': '/api/tasks',
   'workspaces.list': '/api/workspaces',
+  'workspaces.provision': '/api/workspaces',
 })
 
 const SAFE_MESSAGES = Object.freeze({
@@ -348,20 +354,33 @@ function checkResponseStatus(operation: OperationName, response: Response): void
     if (response.status === 202) return
     throw new BackendTransportError('http_error')
   }
+  if (operation === 'workspaces.provision') {
+    if (response.status === 404 || response.status === 405) {
+      throw new BackendTransportError('unsupported_operation')
+    }
+    if (response.status === 200) return
+    throw new BackendTransportError('http_error')
+  }
   if (operation !== 'readiness' && response.status === 200) return
   throw new BackendTransportError('http_error')
 }
 
 function requestBody(operation: OperationName, payload: OperationMap[OperationName]['payload']): string | undefined {
-  if (operation !== 'tasks.submit') return undefined
-  const submitPayload = payload as OperationMap['tasks.submit']['payload']
-  return JSON.stringify({
-    prompt: submitPayload.prompt,
-    project_id: submitPayload.projectId,
-    profile: 'prime',
-    approval_mode: 'auto',
-    chat_only: false,
-  })
+  if (operation === 'tasks.submit') {
+    const submitPayload = payload as OperationMap['tasks.submit']['payload']
+    return JSON.stringify({
+      prompt: submitPayload.prompt,
+      project_id: submitPayload.projectId,
+      profile: 'prime',
+      approval_mode: 'auto',
+      chat_only: false,
+    })
+  }
+  if (operation === 'workspaces.provision') {
+    const provisionPayload = payload as OperationMap['workspaces.provision']['payload']
+    return JSON.stringify({ project_id: provisionPayload.projectId, revision: provisionPayload.revision })
+  }
+  return undefined
 }
 
 async function readBoundedBody(response: Response): Promise<Uint8Array> {
@@ -432,7 +451,7 @@ function generationChanged(transport: BackendTransport, generation: number): boo
   return transport.generation !== generation
 }
 
-/** Fixed-route, memory-only transport for read-only state plus narrow Prime task actions. */
+/** Fixed-route, memory-only transport for read-only state plus narrow task and workspace actions. */
 export class BackendTransport {
   private readonly fetchImpl: BackendFetch
   private activeConnection: ActiveConnection | undefined
@@ -510,8 +529,10 @@ export class BackendTransport {
         Accept: 'application/json',
         Authorization: `Bearer ${connection.token}`,
       }
-      if (operation === 'tasks.submit') {
+      if (operation === 'tasks.submit' || operation === 'workspaces.provision') {
         headers['Content-Type'] = 'application/json'
+      }
+      if (operation === 'tasks.submit') {
         // Generate once per user invocation. This transport never retries an
         // ambiguous POST, and the renderer never chooses or receives this key.
         headers['Idempotency-Key'] = randomUUID()

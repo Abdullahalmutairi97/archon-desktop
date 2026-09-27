@@ -14,7 +14,7 @@ function connection(configured = true, generation = 1): ConnectionDescription {
   }
 }
 
-function fakeBridge(invoke: (operation: string) => Promise<unknown>) {
+function fakeBridge(invoke: (operation: string, payload?: unknown) => Promise<unknown>) {
   const apiInvoke = vi.fn(invoke)
   const bridge = { api: { invoke: apiInvoke } } as unknown as DesktopBridge
   return { bridge, apiInvoke }
@@ -122,6 +122,70 @@ describe('ServerCollections', () => {
     expect(within(section).getByText(`Head revision: ${'b'.repeat(40)}`)).toBeInTheDocument()
     expect(within(section).getByText(`Authoritative root: ${workspace.root}`)).toBeInTheDocument()
     expect(within(section).getByText('Git checkout; native execution isolation not yet enabled')).toBeInTheDocument()
+  })
+
+  it('creates one checkout from a registered project and refreshes the list after success', async () => {
+    const pendingProvision = deferred<unknown>()
+    const workspace = {
+      workspace_id: 'workspace-created',
+      root: '/srv/archon/workspaces/workspace-created',
+      project_id: 'project-1',
+      base_revision: 'a'.repeat(40),
+      head_revision: 'a'.repeat(40),
+      generation: 1,
+    }
+    const { bridge, apiInvoke } = fakeBridge((operation) => {
+      if (operation === 'workspaces.provision') return pendingProvision.promise
+      return collections(
+        [{ id: 'project-1', name: 'Registered project', primary_path: '/private/source' }],
+        [],
+        [],
+        [],
+      )(operation)
+    })
+    const { container } = render(<ServerCollections bridge={bridge} connection={connection()} />)
+
+    const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
+    const projectSelect = within(section).getByRole('combobox', { name: 'Registered project' })
+    expect(within(projectSelect).getByRole('option', { name: 'Registered project · project-1' })).toBeInTheDocument()
+    const revisionInput = within(section).getByRole('textbox', { name: 'Full commit SHA' })
+    fireEvent.change(revisionInput, { target: { value: 'a'.repeat(40) } })
+    const form = within(section).getByRole('button', { name: 'Create Git checkout' }).closest('form')!
+    const submit = within(section).getByRole('button', { name: 'Create Git checkout' })
+    fireEvent.click(submit)
+
+    expect(await screen.findByRole('button', { name: 'Creating checkout…' })).toBeDisabled()
+    fireEvent.submit(form)
+    expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.provision')).toHaveLength(1)
+    expect(container.textContent).not.toContain('/private/source')
+
+    pendingProvision.resolve({ workspace })
+    expect(await within(section).findByText('Workspace workspace-created was created.')).toBeInTheDocument()
+    await waitFor(() => expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.list')).toHaveLength(2))
+    expect(apiInvoke.mock.calls.find(([operation]) => operation === 'workspaces.provision')?.[1]).toEqual({
+      projectId: 'project-1', revision: 'a'.repeat(40),
+    })
+  })
+
+  it('surfaces ambiguous checkout results and requires a list refresh before retry', async () => {
+    const networkFailure = Object.assign(new Error('connection dropped'), { code: 'network_error' })
+    const { bridge, apiInvoke } = fakeBridge((operation) => {
+      if (operation === 'workspaces.provision') return Promise.reject(networkFailure)
+      return collections([{ id: 'project-1', name: 'Registered project' }], [], [], [])(operation)
+    })
+
+    render(<ServerCollections bridge={bridge} connection={connection()} />)
+
+    const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
+    fireEvent.change(within(section).getByRole('textbox', { name: 'Full commit SHA' }), { target: { value: 'b'.repeat(64) } })
+    fireEvent.click(within(section).getByRole('button', { name: 'Create Git checkout' }))
+
+    expect(await within(section).findByText('Could not confirm whether the checkout was created. Refresh the workspace list before retrying.')).toBeInTheDocument()
+    expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.provision')).toHaveLength(1)
+    expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.list')).toHaveLength(1)
+    fireEvent.click(within(section).getByRole('button', { name: 'Refresh workspace list' }))
+    await waitFor(() => expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.list')).toHaveLength(2))
+    expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.provision')).toHaveLength(1)
   })
 
   it('keeps existing server data available when an older server has no workspace endpoint', async () => {

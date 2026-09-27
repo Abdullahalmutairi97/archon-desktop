@@ -47,6 +47,9 @@ describe('finite desktop bridge validation', () => {
     })
     expect(parseOperationRequest('tasks.list', { limit: 1 })).toEqual(['tasks.list', { limit: 1 }])
     expect(parseOperationRequest('workspaces.list', {})).toEqual(['workspaces.list', {}])
+    expect(parseOperationRequest('workspaces.provision', {
+      projectId: 'project-1', revision: 'a'.repeat(40),
+    })).toEqual(['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(40) }])
     for (const [operation, payload] of [
       ['not-an-operation', {}],
       ['readiness', { url: 'http://localhost' }],
@@ -55,6 +58,10 @@ describe('finite desktop bridge validation', () => {
       ['tasks.list', { limit: 0 }],
       ['events.cursor', { after: 12 }],
       ['workspaces.list', { limit: 501 }],
+      ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(39) }],
+      ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(65) }],
+      ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(40), root: '/tmp' }],
+      ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(64), ownerId: 'someone' }],
     ] as const) {
       expect(() => parseOperationRequest(operation, payload)).toThrow(TypeError)
     }
@@ -219,6 +226,10 @@ describe('finite desktop bridge validation', () => {
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
       workspaces: Array.from({ length: 501 }, () => workspace),
     }, 'workspaces.list')).toThrow(TypeError)
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { workspace }, 'workspaces.provision'))
+      .toEqual({ workspace })
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { workspace: { ...workspace, generation: 0 } }, 'workspaces.provision'))
+      .toThrow(TypeError)
   })
 
   it('exposes local Codex through fixed operations with bounded renderer payloads', () => {
