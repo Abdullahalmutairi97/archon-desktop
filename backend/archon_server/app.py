@@ -43,6 +43,15 @@ from .services.kanban import KanbanService
 from .services.voice import VoiceService
 from .services.workspace import ProjectService, SessionService, PrimeSessionService
 from .workspace_provisioner import WorkspaceCheckoutProvisioner
+from .workspace_files import (
+    DEFAULT_LIST_LIMIT,
+    DEFAULT_READ_BYTES as DEFAULT_WORKSPACE_READ_BYTES,
+    MAX_LIST_LIMIT,
+    MAX_READ_BYTES as MAX_WORKSPACE_READ_BYTES,
+    MAX_RELATIVE_PATH_LENGTH,
+    WorkspaceFileService,
+    WorkspaceFilesError,
+)
 from .tasks import TaskEngine, TaskStore, hash_request_payload
 from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
 from .runner_ownership import RunnerOwnershipLock
@@ -367,6 +376,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     )
     projects = ProjectService(settings.profile_home / "projects.db")
     workspace_checkout_provisioner: WorkspaceCheckoutProvisioner | None = None
+    workspace_file_service = WorkspaceFileService()
 
     def workspace_owner_id() -> str:
         return f"local-uid:{os.geteuid()}"
@@ -899,15 +909,43 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         workspaces = store.db.list_workspaces(owner_id=workspace_owner_id(), limit=limit)
         return {"workspaces": [workspace_identity(workspace) for workspace in workspaces]}
 
-    @app.get("/api/workspaces/{workspace_id}", dependencies=protected)
-    def get_workspace(workspace_id: str):
+    def current_owner_workspace(workspace_id: str) -> dict[str, Any]:
         try:
             workspace = store.db.get_workspace(workspace_id)
         except (KeyError, ValueError):
             raise HTTPException(status_code=404, detail="Workspace not found") from None
         if workspace["owner_id"] != workspace_owner_id():
             raise HTTPException(status_code=404, detail="Workspace not found")
+        return workspace
+
+    @app.get("/api/workspaces/{workspace_id}", dependencies=protected)
+    def get_workspace(workspace_id: str):
+        workspace = current_owner_workspace(workspace_id)
         return {"workspace": workspace_identity(workspace)}
+
+    @app.get("/api/workspaces/{workspace_id}/files", dependencies=protected)
+    def list_workspace_files(
+        workspace_id: str,
+        path: str = Query(default="", max_length=MAX_RELATIVE_PATH_LENGTH),
+        limit: int = Query(DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+    ):
+        workspace = current_owner_workspace(workspace_id)
+        try:
+            return workspace_file_service.list_directory(workspace["root"], path, limit)
+        except WorkspaceFilesError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    @app.get("/api/workspaces/{workspace_id}/files/read", dependencies=protected)
+    def read_workspace_file(
+        workspace_id: str,
+        path: str = Query(..., min_length=1, max_length=MAX_RELATIVE_PATH_LENGTH),
+        max_bytes: int = Query(DEFAULT_WORKSPACE_READ_BYTES, ge=1, le=MAX_WORKSPACE_READ_BYTES),
+    ):
+        workspace = current_owner_workspace(workspace_id)
+        try:
+            return workspace_file_service.read_text(workspace["root"], path, max_bytes)
+        except WorkspaceFilesError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     @app.post("/api/workspaces", dependencies=protected)
     def provision_workspace(payload: WorkspaceProvisionRequest):
