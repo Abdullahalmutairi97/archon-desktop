@@ -89,6 +89,7 @@ export type WorkspaceConsoleInvokeChannel = (typeof WORKSPACE_CONSOLE_CHANNELS)[
 export const WORKSPACE_SERVICES_CHANNELS = Object.freeze({
   list: 'archon:workspace-services:list',
   define: 'archon:workspace-services:define',
+  codeServer: 'archon:workspace-services:code-server',
   remove: 'archon:workspace-services:remove',
   start: 'archon:workspace-services:start',
   stop: 'archon:workspace-services:stop',
@@ -1501,6 +1502,12 @@ export function parseWorkspaceServicesRequest(channel: unknown, args: readonly u
       if (!workspaceFileId(record.workspaceId)) return fail()
       return Object.freeze({ workspaceId: record.workspaceId, definition: parseWorkspaceServiceDefinition(record.definition) })
     }
+    case WORKSPACE_SERVICES_CHANNELS.codeServer: {
+      const record = exactObject(value, ['workspaceId', 'port'])
+      if (!workspaceFileId(record.workspaceId) || typeof record.port !== 'number'
+        || !Number.isInteger(record.port) || record.port < 1024 || record.port > 65535) return fail()
+      return Object.freeze({ workspaceId: record.workspaceId, port: record.port })
+    }
     case WORKSPACE_SERVICES_CHANNELS.remove:
     case WORKSPACE_SERVICES_CHANNELS.stop: {
       const record = exactObject(value, ['workspaceId', 'name', 'confirm'])
@@ -1534,6 +1541,7 @@ export function parseWorkspaceServicesBackendResponse(channel: unknown, value: u
       return Object.freeze(services)
     }
     case WORKSPACE_SERVICES_CHANNELS.define:
+    case WORKSPACE_SERVICES_CHANNELS.codeServer:
     case WORKSPACE_SERVICES_CHANNELS.start:
       return parseWorkspaceServiceDto(exactObject(value, ['service']).service)
     case WORKSPACE_SERVICES_CHANNELS.remove:
@@ -1560,6 +1568,7 @@ export function parseWorkspaceServicesResponse(channel: unknown, value: unknown)
     case WORKSPACE_SERVICES_CHANNELS.list:
       return parseWorkspaceServicesBackendResponse(channel, { services: value })
     case WORKSPACE_SERVICES_CHANNELS.define:
+    case WORKSPACE_SERVICES_CHANNELS.codeServer:
     case WORKSPACE_SERVICES_CHANNELS.start:
       return parseWorkspaceServicesBackendResponse(channel, { service: value })
     case WORKSPACE_SERVICES_CHANNELS.remove:

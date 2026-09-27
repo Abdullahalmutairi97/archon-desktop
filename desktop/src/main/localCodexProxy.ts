@@ -24,6 +24,7 @@ export type LocalCodexProxyRequest =
   | { operation: 'workspace.terminals.attach.detach'; workspaceId: string; sessionId: string; attachId: string }
   | { operation: 'workspace.services.list'; workspaceId: string }
   | { operation: 'workspace.services.define'; workspaceId: string; definition: WorkspaceServiceDefinitionInput }
+  | { operation: 'workspace.services.codeServer'; workspaceId: string; port: number }
   | { operation: 'workspace.services.remove'; workspaceId: string; name: string; confirm: boolean }
   | { operation: 'workspace.services.start'; workspaceId: string; name: string }
   | { operation: 'workspace.services.stop'; workspaceId: string; name: string; confirm: boolean }

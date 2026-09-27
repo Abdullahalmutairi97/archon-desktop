@@ -324,6 +324,7 @@ export interface WorkspacePreviewBridge {
 export interface WorkspaceServicesBridge {
   list(input: { workspaceId: string }): Promise<readonly WorkspaceServiceDto[]>
   define(input: { workspaceId: string; definition: WorkspaceServiceDefinitionInput }): Promise<WorkspaceServiceDto>
+  codeServer(input: { workspaceId: string; port: number }): Promise<WorkspaceServiceDto>
   remove(input: { workspaceId: string; name: string; confirm: boolean }): Promise<boolean>
   start(input: { workspaceId: string; name: string }): Promise<WorkspaceServiceDto>
   stop(input: { workspaceId: string; name: string; confirm: boolean }): Promise<boolean>

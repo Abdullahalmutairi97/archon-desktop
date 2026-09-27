@@ -29,6 +29,7 @@ export function WorkspaceServices({
   const [pending, setPending] = useState<{ action: 'stop' | 'remove'; name: string } | null>(null)
   const [logs, setLogs] = useState<{ name: string; text: string; truncated: boolean }>(EMPTY_LOGS)
   const [previewName, setPreviewName] = useState<string | null>(null)
+  const [codeServerPort, setCodeServerPort] = useState('4173')
   const previewBox = useRef<HTMLDivElement | null>(null)
   const lock = useRef(false)
   const identity = `${workspaceId}:${generation}`
@@ -159,6 +160,30 @@ export function WorkspaceServices({
     }
   }
 
+  async function registerCodeServer(): Promise<void> {
+    if (lock.current || !pairingAvailable) return
+    const port = Number(codeServerPort)
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      setMessage({ kind: 'error', text: 'Choose a loopback port between 1024 and 65535 for code-server.' })
+      return
+    }
+    const requested = identity
+    lock.current = true
+    setBusy(true)
+    setMessage(null)
+    try {
+      await bridge.codeServer({ workspaceId, port })
+      if (identityRef.current !== requested) return
+      setMessage({ kind: 'status', text: `Registered code-server on loopback port ${port}. Start it, then open a preview.` })
+      await refresh()
+    } catch {
+      if (identityRef.current === requested) setMessage({ kind: 'error', text: 'Could not register code-server. Check the executable is installed at the configured path.' })
+    } finally {
+      lock.current = false
+      if (identityRef.current === requested) setBusy(false)
+    }
+  }
+
   async function openPreview(target: string): Promise<void> {
     if (lock.current || !pairingAvailable) return
     const requested = identity
@@ -254,6 +279,11 @@ export function WorkspaceServices({
       <label><span>Port</span><input value={portValue} onChange={(e) => setPortValue(e.currentTarget.value)} inputMode="numeric" placeholder="4173" /></label>
       <button type="button" onClick={() => { void define() }} disabled={!pairingAvailable || busy}>Register</button>
     </fieldset>
+    <div className="workspace-services-codeserver">
+      <label htmlFor="workspace-services-codeserver-port">code-server port</label>
+      <input id="workspace-services-codeserver-port" value={codeServerPort} onChange={(e) => setCodeServerPort(e.currentTarget.value)} inputMode="numeric" disabled={!pairingAvailable || busy} />
+      <button type="button" onClick={() => { void registerCodeServer() }} disabled={!pairingAvailable || busy}>Register code-server</button>
+    </div>
     {previewName && <div className="workspace-preview" aria-label="Service preview">
       <div className="workspace-preview-heading"><span>Preview · {previewName}</span>
         <button type="button" onClick={() => { void closePreview() }}>Close preview</button>

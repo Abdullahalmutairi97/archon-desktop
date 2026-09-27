@@ -26,6 +26,12 @@ function proxyRequest(channel: string, input: Readonly<Record<string, unknown>>)
         workspaceId: input.workspaceId as string,
         definition: input.definition as WorkspaceServiceDefinitionInput,
       }
+    case WORKSPACE_SERVICES_CHANNELS.codeServer:
+      return {
+        operation: 'workspace.services.codeServer',
+        workspaceId: input.workspaceId as string,
+        port: input.port as number,
+      }
     case WORKSPACE_SERVICES_CHANNELS.remove:
       return {
         operation: 'workspace.services.remove',

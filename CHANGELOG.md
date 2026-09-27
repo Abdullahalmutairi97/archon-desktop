@@ -2,7 +2,7 @@
 
 ## Unreleased — workspace code-server template
 
-- Install code-server 4.139.1 and add `POST /api/local/workspaces/{id}/services/code-server`, which registers a loopback-bound code-server (`--auth none`, telemetry disabled, health `/healthz`) as a workspace service so the full IDE can be started on demand and reached through the sandboxed preview gateway.
+- Install code-server 4.139.1 and add `POST /api/local/workspaces/{id}/services/code-server`, which registers a loopback-bound code-server (`--auth none`, telemetry disabled, health `/healthz`) as a workspace service so the full IDE can be started on demand and reached through the sandboxed preview gateway. The Workspace services panel exposes a code-server control (port input + one-click register) through a finite `workspaceServices.codeServer` bridge call.
 
 ## Unreleased — runner liveness
 

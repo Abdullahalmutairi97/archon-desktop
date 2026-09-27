@@ -751,6 +751,15 @@ function localCodexRequestDetails(request: LocalCodexProxyRequest): {
         path: `/api/local/workspaces/${request.workspaceId}/services/${request.definition.name}`,
         body: JSON.stringify(request.definition),
       }
+    case 'workspace.services.codeServer':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
+        || !Number.isInteger(request.port) || request.port < 1024 || request.port > 65535) break
+      return {
+        method: 'POST',
+        path: `/api/local/workspaces/${request.workspaceId}/services/code-server`,
+        body: JSON.stringify({ port: request.port }),
+        expectedStatus: 201,
+      }
     case 'workspace.services.remove':
       if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
         || !/^[a-z][a-z0-9-]{0,31}$/u.test(request.name)) break

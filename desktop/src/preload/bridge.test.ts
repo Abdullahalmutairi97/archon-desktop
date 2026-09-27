@@ -96,7 +96,7 @@ describe('preload bridge', () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === WORKSPACE_SERVICES_CHANNELS.list) return [service]
       if (channel === WORKSPACE_SERVICES_CHANNELS.logs) return { text: 'line', truncated: false }
-      if (channel === WORKSPACE_SERVICES_CHANNELS.define || channel === WORKSPACE_SERVICES_CHANNELS.start) return service
+      if (channel === WORKSPACE_SERVICES_CHANNELS.define || channel === WORKSPACE_SERVICES_CHANNELS.start || channel === WORKSPACE_SERVICES_CHANNELS.codeServer) return service
       return true
     })
     const bridge = createDesktopBridge({ invoke })
@@ -107,6 +107,7 @@ describe('preload bridge', () => {
     await expect(bridge.workspaceServices.list({ workspaceId })).resolves.toEqual([service])
     await expect(bridge.workspaceServices.define({ workspaceId, definition })).resolves.toEqual(service)
     await expect(bridge.workspaceServices.start({ workspaceId, name: 'web' })).resolves.toEqual(service)
+    await expect(bridge.workspaceServices.codeServer({ workspaceId, port: 4173 })).resolves.toEqual(service)
     await expect(bridge.workspaceServices.logs({ workspaceId, name: 'web', lines: 50 })).resolves.toEqual({ text: 'line', truncated: false })
     await expect(bridge.workspaceServices.stop({ workspaceId, name: 'web', confirm: true })).resolves.toBe(true)
     await expect(bridge.workspaceServices.remove({ workspaceId, name: 'web', confirm: true })).resolves.toBe(true)

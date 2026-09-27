@@ -12,6 +12,7 @@ export function createWorkspaceServicesBridge(ipc: LocalCodexIpcInvoker): Worksp
   return Object.freeze({
     list: (input: Parameters<WorkspaceServicesBridge['list']>[0]) => invoke<readonly WorkspaceServiceDto[]>(ipc, WORKSPACE_SERVICES_CHANNELS.list, input),
     define: (input: Parameters<WorkspaceServicesBridge['define']>[0]) => invoke<WorkspaceServiceDto>(ipc, WORKSPACE_SERVICES_CHANNELS.define, input),
+    codeServer: (input: Parameters<WorkspaceServicesBridge['codeServer']>[0]) => invoke<WorkspaceServiceDto>(ipc, WORKSPACE_SERVICES_CHANNELS.codeServer, input),
     remove: (input: Parameters<WorkspaceServicesBridge['remove']>[0]) => invoke<boolean>(ipc, WORKSPACE_SERVICES_CHANNELS.remove, input),
     start: (input: Parameters<WorkspaceServicesBridge['start']>[0]) => invoke<WorkspaceServiceDto>(ipc, WORKSPACE_SERVICES_CHANNELS.start, input),
     stop: (input: Parameters<WorkspaceServicesBridge['stop']>[0]) => invoke<boolean>(ipc, WORKSPACE_SERVICES_CHANNELS.stop, input),
