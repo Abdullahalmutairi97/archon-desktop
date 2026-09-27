@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     prime_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "prime-agent")
     pi_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "pi")
     code_server_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "code-server")
+    code_server_extensions_dir: Path = Field(
+        default_factory=lambda: _account_home() / ".local" / "share" / "code-server" / "extensions"
+    )
     prime_agent_session_dir: Path = Field(default_factory=lambda: _account_home() / ".prime" / "agent" / "sessions")
     pi_agent_session_dir: Path = Field(default_factory=lambda: _account_home() / ".pi" / "agent" / "sessions")
     resource_node_executable: str = "node"

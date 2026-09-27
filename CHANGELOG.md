@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — pinned language profiles
+
+- Add pinned language profiles for the workspace IDE (`GET /api/local/workspaces/{id}/language-profiles`). Each pin records the marketplace, version, declared licence, licence-file digest, VSIX digest and the digest of the installed extension directory for `ms-python.python` 2026.4.0, `ms-python.debugpy` 2026.6.0 (linux-x64), `redhat.vscode-yaml` 1.25.2026092308 and `dbaeumer.vscode-eslint` 3.0.34, all installed on this host from Open VSX. The report is artefact-based and honest about gaps: Pylance is unsupported because it is proprietary and absent from this marketplace, no JavaScript debugger adapter is pinned, and an automatically installed dependency without a licence field is reported as unpinned. Evidence: [P4 language profiles](docs/releases/p4-language-profiles.md).
+
 ## Unreleased — native Prime session leases
 
 - Add native-compatible Prime Agent session leases. Archon now takes Prime's own lease directory (`<agent dir>/session-leases/<sha256 of the canonical session path>.lock` with a `owner.json` record) for every resumed native session, so an interactive Prime process and an Archon run cannot work the same session at once: a live native owner makes the turn fail closed with an actionable message, and an Archon-held lease makes native Prime refuse the session. Compatibility is tested against the installed Prime Agent implementation in both directions, and a killed owner is reclaimed. Limits: this module does not run a guard-refresh timer, and the lease owner is the server process, so the exclusion holds for the server's lifetime rather than the supervised run's.

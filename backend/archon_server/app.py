@@ -67,6 +67,7 @@ from .tasks import TaskEngine, TaskStore, hash_request_payload
 from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
 from .runner_ownership import RunnerOwnershipLock
 from .local_codex_event_journal import LocalCodexEventJournal, LocalCodexEventJournalError
+from .language_profiles import describe_profiles as describe_language_profiles
 from .local_pairing import LocalPairingBroker, UnixSocketPairingServer
 from .services.local_codex_worker import (
     LocalCodexOutcomeUnknown,
@@ -1637,6 +1638,26 @@ def create_app(
         if local_workspace_services is None:
             raise HTTPException(status_code=503, detail="Workspace services are unavailable")
         return local_workspace_services
+
+    @app.get(
+        "/api/local/workspaces/{workspace_id}/language-profiles",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_language_profiles(workspace_id: str):
+        """Report pinned language extensions and known gaps for this workspace.
+
+        The report is read-only and artefact-based: an installed extension is one
+        whose files still hash to the recorded digest, and a capability this host
+        cannot provide is reported as unsupported rather than assumed.
+        """
+        current_owner_workspace(workspace_id)
+        try:
+            return JSONResponse(
+                content=describe_language_profiles(settings.code_server_extensions_dir),
+                headers={"Cache-Control": "no-store"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/local/workspaces/{workspace_id}/services", dependencies=[Depends(require_local_owner)])
     async def local_workspace_services_list(workspace_id: str):
