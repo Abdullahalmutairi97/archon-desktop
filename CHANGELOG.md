@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — frozen v0.3.0 input verified
+
+- The official frozen v0.3.0 archive is present on the target workstation with the expected SHA-256. The frozen kit ran 88 tests with 0 skipped against it, and the guarded candidate builder produced a validated payload. Visual/native parity and release qualification remain open.
+
 ## Unreleased — enforced service memory budget
 
 - Launch a service that declares `memoryLimitMb` under `systemd-run --user --scope -p MemoryMax=<n>M` (cgroup v2) instead of an unbounded process; a service without a budget keeps the plain argv launch.
