@@ -140,10 +140,13 @@ function WorkspaceSection({
   const choices = workspaceProjectChoices(projects ?? [])
   const [projectId, setProjectId] = useState('')
   const [revision, setRevision] = useState('')
+  const [headPending, setHeadPending] = useState(false)
+  const [headMessage, setHeadMessage] = useState<string | null>(null)
   const [provisionPending, setProvisionPending] = useState(false)
   const [provisionMessage, setProvisionMessage] = useState<{ kind: 'success' | 'error' | 'ambiguous'; text: string } | null>(null)
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
   const provisionLock = useRef(false)
+  const headLock = useRef(false)
   const readOnlyFilePort = useMemo<WorkspaceReadOnlyFilePort>(() => ({
     list: (workspaceId, path, limit) => bridge.api.invoke('workspaces.files.list', { workspaceId, path, limit }),
     read: (workspaceId, path, maxBytes) => bridge.api.invoke('workspaces.files.read', { workspaceId, path, maxBytes }),
@@ -153,9 +156,25 @@ function WorkspaceSection({
   const activeWorkspaceId = state === 'ready' && records.some((record) => record.workspace_id === selectedWorkspaceId)
     ? selectedWorkspaceId : null
 
+  async function useCurrentHead(): Promise<void> {
+    if (headLock.current || provisionLock.current || !selectedProjectId || projects === null) return
+    headLock.current = true
+    setHeadPending(true)
+    setHeadMessage(null)
+    try {
+      const result = await bridge.api.invoke('projects.head', { projectId: selectedProjectId })
+      setRevision(result.revision)
+    } catch {
+      setHeadMessage('Could not load this project’s current commit. You can enter a full commit SHA manually.')
+    } finally {
+      headLock.current = false
+      setHeadPending(false)
+    }
+  }
+
   async function provisionWorkspace(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
-    if (provisionLock.current || !selectedProjectId || !revisionIsCommit || projects === null) return
+    if (provisionLock.current || headLock.current || !selectedProjectId || !revisionIsCommit || projects === null) return
     provisionLock.current = true
     setProvisionPending(true)
     setProvisionMessage(null)
@@ -201,7 +220,7 @@ function WorkspaceSection({
       {!projectsLoading && projects !== null && choices.length === 0 && <p>No registered server projects are available.</p>}
       {projects !== null && choices.length > 0 && <label>
         <span>Registered project</span>
-        <select aria-label="Registered project" value={selectedProjectId} onChange={(event) => setProjectId(event.currentTarget.value)} disabled={provisionPending}>
+        <select aria-label="Registered project" value={selectedProjectId} onChange={(event) => { setProjectId(event.currentTarget.value); setRevision(''); setHeadMessage(null) }} disabled={provisionPending || headPending}>
           {choices.map((choice) => <option key={choice.id} value={choice.id}>{choice.name} · {choice.id}</option>)}
         </select>
       </label>}
@@ -219,10 +238,14 @@ function WorkspaceSection({
           placeholder="40 or 64 hexadecimal characters"
           value={revision}
           onChange={(event) => setRevision(event.currentTarget.value)}
-          disabled={provisionPending || projects === null || choices.length === 0}
+          disabled={provisionPending || headPending || projects === null || choices.length === 0}
         />
       </label>
-      <button type="submit" disabled={provisionPending || projects === null || choices.length === 0 || !revisionIsCommit}>
+      <button type="button" onClick={() => { void useCurrentHead() }} disabled={provisionPending || headPending || projects === null || choices.length === 0}>
+        {headPending ? 'Loading current commit…' : 'Use current HEAD'}
+      </button>
+      {headMessage && <p role="alert">{headMessage}</p>}
+      <button type="submit" disabled={provisionPending || headPending || projects === null || choices.length === 0 || !revisionIsCommit}>
         {provisionPending ? 'Creating checkout…' : 'Create Git checkout'}
       </button>
       {provisionMessage && <p className={`server-workspace-feedback feedback-${provisionMessage.kind}`} role={provisionMessage.kind === 'error' ? 'alert' : 'status'}>

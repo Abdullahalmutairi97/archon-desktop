@@ -15,6 +15,7 @@ import {
 export const READ_ONLY_OPERATIONS: readonly OperationName[] = Object.freeze([
   'readiness',
   'projects.list',
+  'projects.head',
   'sessions.list',
   'tasks.list',
   'events.cursor',
@@ -38,6 +39,7 @@ export const WORKSPACE_OPERATIONS: readonly OperationName[] = Object.freeze([
 const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Object.freeze({
   readiness: 'GET',
   'projects.list': 'GET',
+  'projects.head': 'GET',
   'sessions.list': 'GET',
   'tasks.list': 'GET',
   'events.cursor': 'GET',
@@ -66,6 +68,7 @@ const RESPONSE_PAYLOAD_LIMITS: BoundedPayloadLimits = Object.freeze({
 const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   readiness: '/api/readiness',
   'projects.list': '/api/projects',
+  'projects.head': '/api/projects',
   'sessions.list': '/api/sessions',
   'tasks.list': '/api/tasks',
   'events.cursor': '/api/events/cursor',
@@ -298,7 +301,10 @@ function operationUrl(
   payload: OperationMap[OperationName]['payload'],
 ): URL {
   let path = `${basePath}${OPERATION_PATHS[operation]}`
-  if (operation === 'tasks.get' || operation === 'tasks.events' || operation === 'tasks.cancel') {
+  if (operation === 'projects.head') {
+    const headPayload = payload as OperationMap['projects.head']['payload']
+    path += `/${encodeURIComponent(headPayload.projectId)}/head`
+  } else if (operation === 'tasks.get' || operation === 'tasks.events' || operation === 'tasks.cancel') {
     const taskPayload = payload as OperationMap['tasks.get']['payload']
     const taskId = encodeURIComponent(taskPayload.taskId)
     path += `/${taskId}`

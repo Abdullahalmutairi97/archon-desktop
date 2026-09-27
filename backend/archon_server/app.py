@@ -402,6 +402,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 workspace_root=settings.data_dir.expanduser() / "workspaces",
                 owner_id=workspace_owner_id(),
                 isolation_profile="git-checkout",
+                prepare_workspace_root=False,
             )
         return workspace_checkout_provisioner
 
@@ -869,6 +870,19 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     @app.get("/api/projects", dependencies=protected)
     def get_projects():
         return {"projects": projects.list()}
+
+    @app.get("/api/projects/{project_id}/head", dependencies=protected)
+    def get_project_head(project_id: str):
+        if not projects.contains(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            revision = workspace_checkout_service().head_revision(project_id=project_id)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Registered project source cannot be safely inspected",
+            ) from exc
+        return {"revision": revision}
 
     @app.post("/api/projects", dependencies=protected)
     def create_project(payload: ProjectCreate):

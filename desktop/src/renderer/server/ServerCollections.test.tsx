@@ -162,6 +162,7 @@ describe('ServerCollections', () => {
     }
     const { bridge, apiInvoke } = fakeBridge((operation) => {
       if (operation === 'workspaces.provision') return pendingProvision.promise
+      if (operation === 'projects.head') return Promise.resolve({ revision: 'a'.repeat(40) })
       return collections(
         [{ id: 'project-1', name: 'Registered project', primary_path: '/private/source' }],
         [],
@@ -175,7 +176,8 @@ describe('ServerCollections', () => {
     const projectSelect = within(section).getByRole('combobox', { name: 'Registered project' })
     expect(within(projectSelect).getByRole('option', { name: 'Registered project · project-1' })).toBeInTheDocument()
     const revisionInput = within(section).getByRole('textbox', { name: 'Full commit SHA' })
-    fireEvent.change(revisionInput, { target: { value: 'a'.repeat(40) } })
+    fireEvent.click(within(section).getByRole('button', { name: 'Use current HEAD' }))
+    await waitFor(() => expect(revisionInput).toHaveValue('a'.repeat(40)))
     const form = within(section).getByRole('button', { name: 'Create Git checkout' }).closest('form')!
     const submit = within(section).getByRole('button', { name: 'Create Git checkout' })
     fireEvent.click(submit)

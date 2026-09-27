@@ -119,6 +119,10 @@ export interface WorkspaceProvisionPayload {
   revision: string
 }
 
+export interface ProjectHeadPayload {
+  projectId: string
+}
+
 export interface WorkspaceFileListPayload {
   workspaceId: string
   path: string
@@ -158,6 +162,10 @@ export interface OperationMap {
   'projects.list': {
     payload: EmptyPayload
     result: { projects: readonly JsonRecord[] }
+  }
+  'projects.head': {
+    payload: ProjectHeadPayload
+    result: { revision: string }
   }
   'sessions.list': {
     payload: SessionsListPayload

@@ -59,6 +59,7 @@ describe('backend transport', () => {
     expect(READ_ONLY_OPERATIONS).toEqual([
       'readiness',
       'projects.list',
+      'projects.head',
       'sessions.list',
       'tasks.list',
       'events.cursor',
@@ -280,6 +281,18 @@ describe('backend transport', () => {
     expect(fetcher).toHaveBeenCalledTimes(1)
     const [url, init] = fetcher.mock.calls[0]
     expect(String(url)).toBe('http://127.0.0.1:8000/api/workspaces')
+    expect(init?.method).toBe('GET')
+    expect(init?.body).toBeUndefined()
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+  })
+
+  it('resolves a registered project current commit through a fixed GET route', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => response({ revision: 'a'.repeat(40) }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    await expect(transport.invoke('projects.head', { projectId: 'project-1' }))
+      .resolves.toEqual({ revision: 'a'.repeat(40) })
+    const [url, init] = fetcher.mock.calls[0]
+    expect(String(url)).toBe('http://127.0.0.1:8000/api/projects/project-1/head')
     expect(init?.method).toBe('GET')
     expect(init?.body).toBeUndefined()
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')

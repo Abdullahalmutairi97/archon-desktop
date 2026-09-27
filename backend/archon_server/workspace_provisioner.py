@@ -75,6 +75,7 @@ class WorkspaceCheckoutProvisioner:
         owner_id: str,
         isolation_profile: str,
         timeout_seconds: float = 30.0,
+        prepare_workspace_root: bool = True,
     ):
         self.database = database
         self.projects = projects
@@ -88,7 +89,11 @@ class WorkspaceCheckoutProvisioner:
         candidate = Path(workspace_root)
         if not candidate.is_absolute():
             raise ValueError("workspace_root must be an absolute server-owned path")
-        self.workspace_root, self._workspace_root_identity = _prepare_private_root(candidate)
+        if prepare_workspace_root:
+            self.workspace_root, self._workspace_root_identity = _prepare_private_root(candidate)
+        else:
+            self.workspace_root = Path(os.path.abspath(candidate))
+            self._workspace_root_identity = None
 
         git = shutil.which("git")
         if git is None:
@@ -112,6 +117,8 @@ class WorkspaceCheckoutProvisioner:
         project_id = _identity_text(project_id, "project_id")
         if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
             raise ValueError("generation must be a positive integer")
+        if self._workspace_root_identity is None:
+            self.workspace_root, self._workspace_root_identity = _prepare_private_root(self.workspace_root)
         self._assert_workspace_root()
 
         project = self._registered_project(project_id)
@@ -193,6 +200,31 @@ class WorkspaceCheckoutProvisioner:
         finally:
             if not persisted:
                 self._remove_created_checkout(destination_identity)
+
+    def head_revision(self, *, project_id: str) -> str:
+        """Return the current full commit ID for one safe registered Git source."""
+        project_id = _identity_text(project_id, "project_id")
+        project = self._registered_project(project_id)
+        source = self._registered_source_path(project)
+        source_identity = self._inspect_source(source)
+        self._assert_source_identity(source_identity)
+        if self._repo_output(source, ["rev-parse", "--show-toplevel"]) != str(source):
+            raise ValueError("registered project path is not the Git checkout root")
+        if self._repo_output(source, ["rev-parse", "--is-bare-repository"]) != "false":
+            raise ValueError("bare repositories cannot be used as project sources")
+        object_format = self._repo_output(source, ["rev-parse", "--show-object-format"])
+        object_id_length = {"sha1": 40, "sha256": 64}.get(object_format)
+        if object_id_length is None:
+            raise ValueError("source Git object format is unsupported")
+        revision = self._repo_output(
+            source, ["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"],
+        ).lower()
+        if not re.fullmatch(rf"[0-9a-f]{{{object_id_length}}}", revision):
+            raise RuntimeError("Git returned an invalid full commit object ID")
+        self._assert_source_identity(source_identity)
+        if self._registered_source_path(self._registered_project(project_id)) != source:
+            raise RuntimeError("registered project source changed while reading HEAD")
+        return revision
 
     def _registered_project(self, project_id: str) -> dict[str, Any]:
         projects = self.projects.list()
@@ -391,6 +423,8 @@ class WorkspaceCheckoutProvisioner:
         )
 
     def _assert_workspace_root(self) -> None:
+        if self._workspace_root_identity is None:
+            raise RuntimeError("private workspace root was not prepared")
         _assert_no_symlink_components(self.workspace_root, "workspace root")
         info = os.stat(self.workspace_root, follow_symlinks=False)
         identity = self._workspace_root_identity

@@ -15,6 +15,7 @@ import type {
   LocalCodexTurnDto,
   OperationMap,
   OperationName,
+  ProjectHeadPayload,
   RuntimeRecord,
   SessionsListPayload,
   TaskByIdPayload,
@@ -56,6 +57,7 @@ export type BridgeChannel = (typeof BRIDGE_CHANNELS)[keyof typeof BRIDGE_CHANNEL
 const operationNames = Object.freeze([
   'readiness',
   'projects.list',
+  'projects.head',
   'sessions.list',
   'tasks.list',
   'events.cursor',
@@ -227,6 +229,12 @@ function parseWorkspaceProvisionPayload(value: unknown): WorkspaceProvisionPaylo
   return Object.freeze({ projectId: record.projectId, revision: record.revision })
 }
 
+function parseProjectHeadPayload(value: unknown): ProjectHeadPayload {
+  const record = exactObject(value, ['projectId'])
+  if (!workspaceText(record.projectId, MAX_PROJECT_ID_LENGTH)) return fail()
+  return Object.freeze({ projectId: record.projectId })
+}
+
 function workspaceFilePath(value: unknown, allowRoot: boolean): value is string {
   if (typeof value !== 'string' || value.length > MAX_WORKSPACE_FILE_PATH_LENGTH) return false
   if (value === '') return allowRoot
@@ -304,6 +312,8 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseEmptyPayload(payload)])
     case 'workspaces.provision':
       return Object.freeze([operation, parseWorkspaceProvisionPayload(payload)])
+    case 'projects.head':
+      return Object.freeze([operation, parseProjectHeadPayload(payload)])
     case 'workspaces.files.list':
       return Object.freeze([operation, parseWorkspaceFileListPayload(payload)])
     case 'workspaces.files.read':
@@ -572,6 +582,11 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
     case 'workspaces.provision': {
       const record = exactObject(value, ['workspace'])
       return Object.freeze({ workspace: parseWorkspaceRecord(record.workspace) })
+    }
+    case 'projects.head': {
+      const record = exactObject(value, ['revision'])
+      if (typeof record.revision !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(record.revision)) return fail()
+      return Object.freeze({ revision: record.revision })
     }
     case 'workspaces.files.list': {
       const record = exactObject(value, ['path', 'entries', 'truncated'])

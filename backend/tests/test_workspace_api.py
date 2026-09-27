@@ -131,6 +131,27 @@ def test_workspace_provision_api_rejects_unregistered_project(tmp_path):
     assert "registered project" in response.json()["detail"]
 
 
+def test_project_head_api_returns_safe_registered_full_commit_without_checkout(tmp_path):
+    settings = _settings(tmp_path)
+    project, revision, source = _registered_git_project(tmp_path, settings)
+    headers = {"Authorization": "Bearer workspace-api-token"}
+
+    with TestClient(create_app(settings)) as client:
+        unauthorized = client.get(f"/api/projects/{project['id']}/head")
+        response = client.get(f"/api/projects/{project['id']}/head", headers=headers)
+        missing = client.get("/api/projects/project-unknown/head", headers=headers)
+        _git(source, "config", "core.sshCommand", "echo should-not-run")
+        unsafe = client.get(f"/api/projects/{project['id']}/head", headers=headers)
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 200
+    assert response.json() == {"revision": revision}
+    assert len(response.json()["revision"]) in {40, 64}
+    assert missing.status_code == 404
+    assert unsafe.status_code == 409
+    assert not (settings.data_dir / "workspaces").exists()
+
+
 def test_workspace_reads_hide_workspaces_owned_by_another_server_identity(tmp_path):
     settings = _settings(tmp_path)
     foreign_root = tmp_path / "foreign-workspace-root"
