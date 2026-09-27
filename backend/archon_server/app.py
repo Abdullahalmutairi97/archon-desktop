@@ -83,6 +83,13 @@ from .services.workspace_terminal import (
     WorkspaceTerminalReadOnly,
     WorkspaceTerminalService,
 )
+from .services.workspace_services import (
+    WorkspaceServiceCapacity,
+    WorkspaceServiceConflict,
+    WorkspaceServiceManager,
+    WorkspaceServiceNotFound,
+    WorkspaceServiceUnavailable,
+)
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
 
@@ -255,6 +262,40 @@ class WorkspaceTerminalAttachInputRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     events: list[WorkspaceTerminalKeyEvent] = Field(min_length=1, max_length=32)
+
+
+class WorkspaceServicePort(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=16)
+    port: int = Field(strict=True, ge=1, le=65535)
+
+
+class WorkspaceServiceHealth(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    port: str = Field(min_length=1, max_length=16)
+    path: str = Field(min_length=1, max_length=256)
+
+
+class WorkspaceServiceDefinitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=32)
+    argv: list[str] = Field(min_length=1, max_length=32)
+    cwd: str = Field(default=".", max_length=512)
+    env: list[str] = Field(default_factory=list, max_length=16)
+    ports: list[WorkspaceServicePort] = Field(default_factory=list, max_length=4)
+    health: WorkspaceServiceHealth | None = None
+    dependsOn: list[str] = Field(default_factory=list, max_length=4)
+    restart: Literal["never", "on-failure"] = "never"
+    memoryLimitMb: int | None = Field(default=None, strict=True, ge=16, le=65536)
+
+
+class WorkspaceServiceConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = Field(strict=True)
 
 
 class WorkspaceFileWriteRequest(BaseModel):
@@ -500,6 +541,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     )
     local_codex_worker: LocalCodexWorkerClient | None = None
     local_workspace_terminals: WorkspaceTerminalService | None = None
+    local_workspace_services: WorkspaceServiceManager | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
         settings.runner_journal_path.lstat()
@@ -687,6 +729,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         nonlocal worker_tasks, telegram_bridge, telegram_task
         nonlocal local_codex_event_journal, local_codex_worker
         nonlocal local_workspace_terminals
+        nonlocal local_workspace_services
         runner_ownership.acquire()
         try:
             if pairing_broker is not None:
@@ -701,6 +744,11 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                         / f"archon-wt-{os.geteuid()}-{socket_key}"
                     ),
                     tmux_executable=settings.local_workspace_terminal_tmux_executable,
+                )
+                local_workspace_services = WorkspaceServiceManager(
+                    store.db,
+                    owner_id=f"local-uid:{os.geteuid()}",
+                    state_root=data_root / "workspace-services",
                 )
             if settings.local_codex_enabled:
                 local_codex_event_journal = LocalCodexEventJournal(
@@ -729,7 +777,8 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             app.state.local_codex_worker = local_codex_worker
             app.state.local_codex_event_journal = local_codex_event_journal
             app.state.local_workspace_terminals = local_workspace_terminals
-            app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
+            app.state.local_workspace_services = local_workspace_services
+            app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
             engine.replay_unacked()
@@ -809,6 +858,11 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                     except Exception:
                         # Shutdown should still release the backend's owner lock.
                         logger.error("Local Codex worker cleanup failed")
+                if local_workspace_services is not None:
+                    try:
+                        await local_workspace_services.shutdown()
+                    except Exception:
+                        logger.error("Workspace service cleanup failed")
                 # Stop claiming new work, but let every active Prime turn finish before
                 # Uvicorn exits. Cancelling workers here used to kill the child process
                 # mid-session and leave Prime's session lock behind after a restart.
@@ -1106,6 +1160,122 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         except WorkspaceTerminalAttachUnavailable as exc:
             raise HTTPException(status_code=410, detail="Attach lease is unknown or already released") from exc
         return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
+
+    def workspace_service_manager() -> WorkspaceServiceManager:
+        if local_workspace_services is None:
+            raise HTTPException(status_code=503, detail="Workspace services are unavailable")
+        return local_workspace_services
+
+    @app.get("/api/local/workspaces/{workspace_id}/services", dependencies=[Depends(require_local_owner)])
+    async def local_workspace_services_list(workspace_id: str):
+        current_owner_workspace(workspace_id)
+        return {"services": await workspace_service_manager().list(workspace_id)}
+
+    @app.put(
+        "/api/local/workspaces/{workspace_id}/services/{name}",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_service_define(
+        workspace_id: str,
+        name: str,
+        payload: WorkspaceServiceDefinitionRequest,
+    ):
+        current_owner_workspace(workspace_id)
+        if payload.name != name:
+            raise HTTPException(status_code=400, detail="Definition name must match the request path")
+        try:
+            defined = await workspace_service_manager().define(workspace_id, payload.model_dump())
+        except WorkspaceServiceCapacity as exc:
+            raise HTTPException(status_code=409, detail="Workspace service limit reached") from exc
+        except WorkspaceServiceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkspaceServiceUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Workspace services are unavailable") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content={"service": defined}, headers={"Cache-Control": "no-store"})
+
+    @app.delete(
+        "/api/local/workspaces/{workspace_id}/services/{name}",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_service_remove(
+        workspace_id: str,
+        name: str,
+        payload: WorkspaceServiceConfirmRequest,
+    ):
+        current_owner_workspace(workspace_id)
+        try:
+            await workspace_service_manager().remove(workspace_id, name, confirm=payload.confirm)
+        except WorkspaceServiceNotFound as exc:
+            raise HTTPException(status_code=404, detail="Workspace service is not registered") from exc
+        except WorkspaceServiceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkspaceServiceUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Workspace services are unavailable") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
+
+    @app.post(
+        "/api/local/workspaces/{workspace_id}/services/{name}/start",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_service_start(workspace_id: str, name: str):
+        current_owner_workspace(workspace_id)
+        try:
+            started = await workspace_service_manager().start(workspace_id, name)
+        except WorkspaceServiceNotFound as exc:
+            raise HTTPException(status_code=404, detail="Workspace service is not registered") from exc
+        except WorkspaceServiceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkspaceServiceUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Workspace service could not be started") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content={"service": started}, headers={"Cache-Control": "no-store"})
+
+    @app.post(
+        "/api/local/workspaces/{workspace_id}/services/{name}/stop",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_service_stop(
+        workspace_id: str,
+        name: str,
+        payload: WorkspaceServiceConfirmRequest,
+    ):
+        current_owner_workspace(workspace_id)
+        try:
+            await workspace_service_manager().stop(workspace_id, name, confirm=payload.confirm)
+        except WorkspaceServiceNotFound as exc:
+            raise HTTPException(status_code=404, detail="Workspace service is not registered") from exc
+        except WorkspaceServiceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkspaceServiceUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Workspace services are unavailable") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
+
+    @app.get(
+        "/api/local/workspaces/{workspace_id}/services/{name}/logs",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_service_logs(
+        workspace_id: str,
+        name: str,
+        lines: int = Query(200, ge=1, le=400),
+    ):
+        current_owner_workspace(workspace_id)
+        try:
+            result = await workspace_service_manager().logs(workspace_id, name, lines=lines)
+        except WorkspaceServiceNotFound as exc:
+            raise HTTPException(status_code=404, detail="Workspace service is not registered") from exc
+        except WorkspaceServiceUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Workspace services are unavailable") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
 
     async def local_codex_call(method: str, params: dict[str, Any]):
         if local_codex_worker is None:

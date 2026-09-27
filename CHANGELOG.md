@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — managed workspace services
+
+- Add a bounded, validated registry of workspace services: an argv array, a workspace-relative working directory, referenced (allowlisted) environment names, named ports, an optional health target, dependencies and a restart policy. Definitions persist behind the workspace generation fence; dependencies must exist and cannot cycle.
+- Supervise each registered definition as a workspace-owned child process with the allowlisted service environment plus server-constructed `<PORT>_PORT` variables, a bounded 16 KiB log tail and in-memory lifecycle (`registered`, `starting`, `running`, `stopped`, `exited`, `failed`). `on-failure` restart is bounded; a failing service reports `failed` with its exit code.
+- Require explicit confirmation to stop or remove, block removal while other definitions depend on it, and stop every supervised child during backend shutdown. A private preview gateway and sandboxed remote view follow in the next increment; memory budgets are recorded but not yet enforced.
+
 ## Unreleased — interactive checkout attach
 
 - Add a one-use, short-lived attach ticket that redeems exactly once into a sliding, server-fenced input lease for a persisted checkout session. Tickets and leases are bounded, owner-checked and pruned on expiry; a workspace generation change refuses stale metadata.

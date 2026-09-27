@@ -20,10 +20,11 @@ ChildEnvScope = Literal[
     "resources",
     "terminal",
     "voice",
+    "services",
 ]
 
 CHILD_ENV_SCOPES: Final[frozenset[str]] = frozenset(
-    {"prime", "pi", "hermes", "operations", "resources", "terminal", "voice"}
+    {"prime", "pi", "hermes", "operations", "resources", "terminal", "voice", "services"}
 )
 
 COMMON_ENV_KEYS: Final[frozenset[str]] = frozenset(
@@ -56,6 +57,7 @@ PROVIDER_ENV_ALLOWLIST: Final[dict[str, frozenset[str]]] = {
     "resources": frozenset(),
     "terminal": frozenset(),
     "voice": frozenset(),
+    "services": frozenset({"NODE_ENV", "PYTHONUNBUFFERED"}),
 }
 
 _SCOPE_SOURCE_KEYS: Final[dict[str, frozenset[str]]] = {
