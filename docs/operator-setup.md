@@ -31,6 +31,12 @@ sudo backend/.venv/bin/python -m archon_server.provision \
 
 The destination must be new, outside all supplied roots, and inside a directory owned by the invoking account with private permissions. Existing files and symlinks are rejected. The helper writes a complete mode-0600 file without returning the token. Add nonsecret service settings with a protected editor; keep the file outside agent workspaces. The `.env.example` file lists supported names but is not loaded automatically.
 
+## Solo desktop pairing
+
+To let the desktop connect locally without entering a bearer, run the backend service under the **same Linux account** as the desktop and set `ARCHON_DESKTOP_LOCAL_OWNER_MODE=true` in its protected external environment file. Keep the listener on loopback and `ARCHON_DESKTOP_REMOTE_ACCESS_MODE=disabled`. If using the installer above, set `--service-user` to the desktop account; the example's separate `archon` account cannot pair with a desktop running as another user. The generated service token may remain configured, but the desktop does not need to display or store it.
+
+The backend creates a private pairing socket at `<ARCHON_DESKTOP_DATA_DIR>/runner-journal/pairing.sock` (default `~/.local/share/archon-desktop/runner-journal/pairing.sock`). With no saved remote connection, the desktop pairs automatically and holds the resulting 24-hour bearer only in main-process memory. A saved remote connection takes precedence; Disconnect disables automatic local pairing until the next desktop startup. The local service and its accepted backend tasks continue after the desktop window closes. Local Codex app-server turns are still desktop-owned and are not yet a headless runner.
+
 ## Remote access
 
 Keep `ARCHON_DESKTOP_BIND_HOST=127.0.0.1` (or another accepted loopback literal). To declare remote operation, set `ARCHON_DESKTOP_REMOTE_ACCESS_MODE=private_tls_proxy` and `ARCHON_DESKTOP_REMOTE_BASE_URL=https://your-private-host.example`. Provision the private HTTPS proxy independently and verify certificate trust, private ingress and authentication from the actual client. A valid URL is not proof of those properties. `remote_access_mode=disabled` requires the remote URL to be unset.

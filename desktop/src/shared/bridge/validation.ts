@@ -371,18 +371,21 @@ function boundedJsonRecord(value: unknown): JsonRecord {
 }
 
 function parseDescription(value: unknown): ConnectionDescription {
-  const record = readOwnDataRecord(value, ['serverUrl', 'configured', 'storageMode', 'generation'])
-  if (Object.keys(record).length !== 4) return fail()
+  const record = readOwnDataRecord(value, ['serverUrl', 'configured', 'storageMode', 'generation', 'localPairingAvailable'])
+  if (Object.keys(record).length !== 4 && Object.keys(record).length !== 5) return fail()
   const serverUrl = record.serverUrl
+  const localPairingAvailable = record.localPairingAvailable
   if (serverUrl !== null && !validateServerUrl(serverUrl)) return fail()
   if (typeof record.configured !== 'boolean') return fail()
   if (record.storageMode !== 'memory' && record.storageMode !== 'protected' && record.storageMode !== 'unavailable') return fail()
   if (typeof record.generation !== 'number' || !Number.isSafeInteger(record.generation) || record.generation < 0) return fail()
+  if (Object.hasOwn(record, 'localPairingAvailable') && typeof localPairingAvailable !== 'boolean') return fail()
   return Object.freeze({
     serverUrl,
     configured: record.configured,
     storageMode: record.storageMode,
     generation: record.generation,
+    ...(typeof localPairingAvailable === 'boolean' ? { localPairingAvailable } : {}),
   })
 }
 
@@ -395,10 +398,13 @@ function parseBridgeError(value: unknown): BridgeError {
 }
 
 function parseProbeResult(value: unknown): ConnectionProbeResult {
-  const record = readOwnDataRecord(value, ['ok', 'readiness', 'error'])
+  const record = readOwnDataRecord(value, ['ok', 'readiness', 'error', 'authStatus'])
   if (typeof record.ok !== 'boolean') return fail()
   const readiness = record.readiness === undefined ? undefined : boundedJsonRecord(record.readiness)
   const error = record.error === undefined ? undefined : parseBridgeError(record.error)
+  const authStatus = record.authStatus === 401 || record.authStatus === 403 ? record.authStatus : undefined
+  if (Object.hasOwn(record, 'authStatus') && authStatus === undefined) return fail()
+  if (Object.hasOwn(record, 'authStatus') && error?.code !== 'unauthorized') return fail()
   if (!record.ok && !error) return fail()
   if (record.ok && !readiness) return fail()
   if (record.ok && error) return fail()

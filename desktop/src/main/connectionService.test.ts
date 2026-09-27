@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ConnectionSaveInput } from '../shared/bridge/types'
+import type { ConnectionProbeResult, ConnectionSaveInput } from '../shared/bridge/types'
 import { createConnectionService } from './connectionService'
 import type { CredentialDescription, StoredConnectionInput } from './storage/credentialStore'
+import { BackendTransportError } from './transport/backendTransport'
 
 const firstPair = { serverUrl: 'http://127.0.0.1:8000', token: 'first-secret' }
 const secondPair = { serverUrl: 'https://archon.example.test', token: 'second-secret' }
+const pairedLocal = { serverUrl: 'http://127.0.0.1:43123', token: 'ephemeral-local-secret', expiresAt: Math.floor(Date.now() / 1000) + 86400 }
 
 function fakeTransport() {
   let generation = 0
@@ -20,7 +22,9 @@ function fakeTransport() {
       active = undefined
       return ++generation
     }),
-    probe: vi.fn(async () => ({ ok: true as const, readiness: { dispatch_ready: false } })),
+    probe: vi.fn(async (): Promise<ConnectionProbeResult> => active
+      ? ({ ok: true as const, readiness: { dispatch_ready: false } })
+      : ({ ok: false as const, error: { code: 'not_connected', message: 'No connection.' } })),
     invoke: vi.fn(async () => ({ cursor: 8 })),
   }
 }
@@ -62,6 +66,180 @@ describe('main-process connection service', () => {
       serverUrl: firstPair.serverUrl, configured: true, storageMode: 'protected', generation: 1,
     })
     expect(JSON.stringify(await service.describe())).not.toContain(firstPair.token)
+  })
+
+  it('pairs locally only without a saved remote and keeps its bearer out of credential storage', async () => {
+    const transport = fakeTransport()
+    const credentials = fakeCredentials({ storageMode: 'protected' })
+    const localPairing = { pair: vi.fn(async () => pairedLocal) }
+    const service = await createConnectionService(transport, credentials, { localPairing })
+
+    expect(localPairing.pair).toHaveBeenCalledOnce()
+    expect(transport.switchConnection).toHaveBeenCalledWith({ serverUrl: pairedLocal.serverUrl, token: pairedLocal.token })
+    expect(credentials.saveConnection).not.toHaveBeenCalled()
+    expect(credentials.currentPair()).toBeUndefined()
+    expect(await service.describe()).toEqual({
+      serverUrl: pairedLocal.serverUrl, configured: true, storageMode: 'memory', generation: 1,
+      localPairingAvailable: true,
+    })
+    expect(JSON.stringify(await service.describe())).not.toContain(pairedLocal.token)
+  })
+
+  it('keeps a saved remote authoritative and treats an absent local socket as optional', async () => {
+    const remoteTransport = fakeTransport()
+    const savedCredentials = fakeCredentials({ saved: firstPair })
+    const localPairing = { pair: vi.fn(async () => pairedLocal) }
+    await createConnectionService(remoteTransport, savedCredentials, { localPairing })
+    expect(localPairing.pair).not.toHaveBeenCalled()
+    expect(remoteTransport.active).toEqual(firstPair)
+
+    const disconnectedTransport = fakeTransport()
+    const disconnectedCredentials = fakeCredentials()
+    const absentPairing = { pair: vi.fn(async () => { throw new Error('socket unavailable') }) }
+    const service = await createConnectionService(disconnectedTransport, disconnectedCredentials, { localPairing: absentPairing })
+    expect(disconnectedTransport.switchConnection).not.toHaveBeenCalled()
+    expect(await service.describe()).toEqual({
+      serverUrl: null, configured: false, storageMode: 'memory', generation: 0, localPairingAvailable: true,
+    })
+  })
+
+  it('disconnects an expired local bearer when renewal fails and permits a later retry', async () => {
+    vi.useFakeTimers()
+    try {
+      const nowMs = Date.now()
+      vi.setSystemTime(nowMs)
+      const expiry = Math.floor(nowMs / 1000) + 1
+      const transport = fakeTransport()
+      const credentials = fakeCredentials()
+      const localPairing = { pair: vi.fn()
+        .mockResolvedValueOnce({ ...pairedLocal, expiresAt: expiry })
+        .mockRejectedValueOnce(new Error('local service unavailable'))
+        .mockResolvedValueOnce({ ...pairedLocal, token: 'renewed-local-secret', expiresAt: expiry + 86_400 }) }
+      const service = await createConnectionService(transport, credentials, { localPairing })
+
+      vi.setSystemTime((expiry + 1) * 1000)
+      await expect(service.probe()).resolves.toMatchObject({ ok: false, error: { code: 'not_connected' } })
+      expect(await service.describe()).toMatchObject({
+        serverUrl: null, configured: false, storageMode: 'memory', localPairingAvailable: true,
+      })
+      expect(transport.disconnect).toHaveBeenCalledOnce()
+
+      await expect(service.probe()).resolves.toMatchObject({ ok: true })
+      expect(localPairing.pair).toHaveBeenCalledTimes(3)
+      expect(transport.active).toEqual({ serverUrl: pairedLocal.serverUrl, token: 'renewed-local-secret' })
+      expect(await service.describe()).toMatchObject({
+        serverUrl: pairedLocal.serverUrl, configured: true, storageMode: 'memory', localPairingAvailable: true,
+      })
+      expect(JSON.stringify(await service.describe())).not.toContain('renewed-local-secret')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pairs again and retries one invoke after an explicit local HTTP 401', async () => {
+    const transport = fakeTransport()
+    const credentials = fakeCredentials()
+    const localPairing = { pair: vi.fn()
+      .mockResolvedValueOnce({ ...pairedLocal, token: 'old-local-token-123456789', expiresAt: pairedLocal.expiresAt })
+      .mockResolvedValueOnce({ ...pairedLocal, token: 'fresh-local-token-123456789', expiresAt: pairedLocal.expiresAt })
+      .mockResolvedValueOnce({ ...pairedLocal, token: 'refreshed-local-token-123456789', expiresAt: pairedLocal.expiresAt }) }
+    const service = await createConnectionService(transport, credentials, { localPairing })
+    transport.invoke
+      .mockRejectedValueOnce(new BackendTransportError('unauthorized', 401))
+      .mockResolvedValueOnce({ cursor: 12 })
+
+    await expect(service.invoke('events.cursor', {})).resolves.toEqual({ cursor: 12 })
+    expect(localPairing.pair).toHaveBeenCalledTimes(2)
+    expect(transport.invoke).toHaveBeenCalledTimes(2)
+    expect(transport.active).toEqual({ serverUrl: pairedLocal.serverUrl, token: 'fresh-local-token-123456789' })
+    expect(credentials.saveConnection).not.toHaveBeenCalled()
+    expect(JSON.stringify(await service.describe())).not.toContain('fresh-local-token-123456789')
+
+    transport.invoke
+      .mockRejectedValueOnce(new BackendTransportError('unauthorized', 401))
+      .mockRejectedValueOnce(new BackendTransportError('unauthorized', 401))
+    await expect(service.invoke('events.cursor', {})).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(localPairing.pair).toHaveBeenCalledTimes(3)
+    expect(transport.invoke).toHaveBeenCalledTimes(4)
+    expect(transport.active).toEqual({ serverUrl: pairedLocal.serverUrl, token: 'refreshed-local-token-123456789' })
+  })
+
+  it('retries a probe after HTTP 401 but does not pair again for HTTP 403', async () => {
+    const transport = fakeTransport()
+    const credentials = fakeCredentials()
+    const localPairing = { pair: vi.fn()
+      .mockResolvedValueOnce({ ...pairedLocal, token: 'old-local-token-123456789', expiresAt: pairedLocal.expiresAt })
+      .mockResolvedValueOnce({ ...pairedLocal, token: 'fresh-local-token-123456789', expiresAt: pairedLocal.expiresAt }) }
+    const service = await createConnectionService(transport, credentials, { localPairing })
+    transport.probe
+      .mockResolvedValueOnce({ ok: false, error: { code: 'unauthorized', message: 'Auth rejected' }, authStatus: 401 })
+      .mockResolvedValueOnce({ ok: true, readiness: { dispatch_ready: true } })
+
+    await expect(service.probe()).resolves.toMatchObject({ ok: true })
+    expect(localPairing.pair).toHaveBeenCalledTimes(2)
+    expect(transport.probe).toHaveBeenCalledTimes(2)
+
+    transport.probe.mockResolvedValueOnce({
+      ok: false, error: { code: 'unauthorized', message: 'Auth rejected' }, authStatus: 403,
+    })
+    await expect(service.probe()).resolves.toMatchObject({ ok: false, authStatus: 403 })
+    expect(localPairing.pair).toHaveBeenCalledTimes(2)
+    expect(transport.probe).toHaveBeenCalledTimes(3)
+  })
+
+  it('disconnects the local transport when a 401-triggered pairing attempt fails', async () => {
+    const transport = fakeTransport()
+    const credentials = fakeCredentials()
+    const localPairing = { pair: vi.fn()
+      .mockResolvedValueOnce(pairedLocal)
+      .mockRejectedValueOnce(new Error('service restarted during pairing')) }
+    const service = await createConnectionService(transport, credentials, { localPairing })
+    transport.invoke.mockRejectedValueOnce(new BackendTransportError('unauthorized', 401))
+
+    await expect(service.invoke('events.cursor', {})).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(localPairing.pair).toHaveBeenCalledTimes(2)
+    expect(transport.disconnect).toHaveBeenCalledOnce()
+    expect(transport.active).toBeUndefined()
+    expect(await service.describe()).toMatchObject({
+      serverUrl: null, configured: false, localPairingAvailable: true,
+    })
+  })
+
+  it('does not renew for network or unknown invoke failures', async () => {
+    const transport = fakeTransport()
+    const credentials = fakeCredentials()
+    const localPairing = { pair: vi.fn(async () => pairedLocal) }
+    const service = await createConnectionService(transport, credentials, { localPairing })
+    transport.invoke
+      .mockRejectedValueOnce(new BackendTransportError('network_error'))
+      .mockRejectedValueOnce(new BackendTransportError('unauthorized', 403))
+      .mockRejectedValueOnce(new Error('unknown failure'))
+
+    await expect(service.invoke('events.cursor', {})).rejects.toMatchObject({ code: 'network_error' })
+    await expect(service.invoke('events.cursor', {})).rejects.toMatchObject({ code: 'unauthorized', httpStatus: 403 })
+    await expect(service.invoke('events.cursor', {})).rejects.toThrow('unknown failure')
+    expect(localPairing.pair).toHaveBeenCalledOnce()
+    expect(transport.invoke).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not re-pair an old local request after an explicit remote save', async () => {
+    const transport = fakeTransport()
+    const credentials = fakeCredentials()
+    const localPairing = { pair: vi.fn(async () => pairedLocal) }
+    const service = await createConnectionService(transport, credentials, { localPairing })
+    let rejectInvoke: ((error: Error) => void) | undefined
+    transport.invoke.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectInvoke = reject }))
+
+    const pending = service.invoke('events.cursor', {})
+    await new Promise((resolve) => setImmediate(resolve))
+    await expect(service.save(secondPair)).resolves.toMatchObject({
+      description: { serverUrl: secondPair.serverUrl, configured: true },
+    })
+    rejectInvoke?.(new BackendTransportError('unauthorized', 401))
+
+    await expect(pending).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(localPairing.pair).toHaveBeenCalledOnce()
+    expect(transport.active).toEqual(secondPair)
   })
 
   it('does not restore a memory-only pair after a basic_text restart', async () => {
@@ -184,10 +362,12 @@ describe('main-process connection service', () => {
   it('keeps the transport disconnected when paired storage is corrupt or from a future version', async () => {
     const transport = fakeTransport()
     const credentials = fakeCredentials()
+    const localPairing = { pair: vi.fn(async () => pairedLocal) }
     credentials.loadConnectionForMainTransport.mockRejectedValueOnce(new Error('fixture corrupt pair'))
-    const service = await createConnectionService(transport, credentials)
+    const service = await createConnectionService(transport, credentials, { localPairing })
 
     expect(transport.switchConnection).not.toHaveBeenCalled()
+    expect(localPairing.pair).not.toHaveBeenCalled()
     expect(transport.probe).not.toHaveBeenCalled()
     expect(await service.describe()).toEqual({
       serverUrl: null, configured: false, storageMode: 'unavailable', generation: 0,

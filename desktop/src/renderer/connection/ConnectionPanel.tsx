@@ -13,6 +13,12 @@ const connectionFailure = 'Connection check failed. Verify the address and token
 const overviewFailure = 'The read-only server overview is unavailable.'
 
 function storageHint(description: ConnectionDescription | null): string {
+  if (description?.localPairingAvailable && !description.configured) {
+    return 'The local Archon service is not paired right now. Retry to obtain a short-lived bearer held only in main-process memory.'
+  }
+  if (description?.localPairingAvailable && description.configured) {
+    return 'Paired with the local Archon service. Its short-lived bearer stays in main-process memory and renews when needed.'
+  }
   if (description?.storageMode === 'protected' && description.configured) {
     return 'The connection is stored with OS-protected storage. The token stays in the desktop main process.'
   }
@@ -101,7 +107,7 @@ export function ConnectionPanel({ bridge }: { bridge?: DesktopBridge }) {
   }
 
   async function refresh(): Promise<void> {
-    if (!bridge || busy || !description?.configured) return
+    if (!bridge || busy || (!description?.configured && !description?.localPairingAvailable)) return
     const id = ++serial.current
     setBusy(true)
     setMessage('')
@@ -111,6 +117,9 @@ export function ConnectionPanel({ bridge }: { bridge?: DesktopBridge }) {
       const result = await bridge.connection.probe()
       if (serial.current !== id) return
       setProbe(result)
+      const updatedDescription = await bridge.connection.describe()
+      if (serial.current !== id) return
+      setDescription(updatedDescription)
       if (result.ok) await loadOverview(id)
     } catch {
       if (serial.current === id) setMessage(connectionFailure)
@@ -149,7 +158,7 @@ export function ConnectionPanel({ bridge }: { bridge?: DesktopBridge }) {
         <label htmlFor="connection-token">Device token</label>
         <input id="connection-token" type="password" value={token} onChange={(event) => setToken(event.target.value)} autoComplete="new-password" disabled={!bridge || busy} />
         <p className="connection-hint">{storageHint(description)}</p>
-        <div className="connection-actions"><button className="connection-primary" type="submit" disabled={!bridge || busy || description?.storageMode === 'unavailable' || !serverUrl.trim() || !token}>Connect</button><button type="button" onClick={() => { void refresh() }} disabled={!bridge || busy || !description?.configured}>Check again</button><button type="button" onClick={() => { void disconnect() }} disabled={!bridge || busy || (!description?.configured && description?.storageMode !== 'unavailable')}>{description?.storageMode === 'unavailable' && !description.configured ? 'Clear saved record' : 'Disconnect'}</button></div>
+        <div className="connection-actions"><button className="connection-primary" type="submit" disabled={!bridge || busy || description?.storageMode === 'unavailable' || !serverUrl.trim() || !token}>Connect</button><button type="button" onClick={() => { void refresh() }} disabled={!bridge || busy || (!description?.configured && !description?.localPairingAvailable)}>{description?.localPairingAvailable && !description.configured ? 'Retry local pairing' : 'Check again'}</button><button type="button" onClick={() => { void disconnect() }} disabled={!bridge || busy || (!description?.configured && description?.storageMode !== 'unavailable')}>{description?.storageMode === 'unavailable' && !description.configured ? 'Clear saved record' : 'Disconnect'}</button></div>
       </form>
       <section className="connection-card connection-status-card" aria-label="Read-only connection status">
         <div className="connection-card-heading"><h2>Backend status</h2><span className="fixture-tag">NO COMMANDS</span></div>

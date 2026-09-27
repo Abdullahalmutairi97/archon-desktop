@@ -83,11 +83,13 @@ export type BackendTransportErrorCode = keyof typeof SAFE_MESSAGES
 
 export class BackendTransportError extends Error {
   readonly code: BackendTransportErrorCode
+  readonly httpStatus?: 401 | 403
 
-  constructor(code: BackendTransportErrorCode) {
+  constructor(code: BackendTransportErrorCode, httpStatus?: 401 | 403) {
     super(SAFE_MESSAGES[code])
     this.name = 'BackendTransportError'
     this.code = code
+    this.httpStatus = httpStatus
   }
 }
 
@@ -335,7 +337,9 @@ function checkResponseStatus(operation: OperationName, response: Response): void
   if (response.redirected || response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
     throw new BackendTransportError('redirect_rejected')
   }
-  if (response.status === 401 || response.status === 403) throw new BackendTransportError('unauthorized')
+  if (response.status === 401 || response.status === 403) {
+    throw new BackendTransportError('unauthorized', response.status)
+  }
   if (operation === 'readiness' && (response.status === 200 || response.status === 503)) return
   if (operation === 'tasks.submit') {
     if (response.status === 202) return
@@ -557,7 +561,13 @@ export class BackendTransport {
       const failure = error instanceof BackendTransportError
         ? error
         : new BackendTransportError('network_error')
-      return { ok: false, error: { code: failure.code, message: failure.message } }
+      return {
+        ok: false,
+        error: { code: failure.code, message: failure.message },
+        ...(failure.code === 'unauthorized' && failure.httpStatus !== undefined
+          ? { authStatus: failure.httpStatus }
+          : {}),
+      }
     }
   }
 

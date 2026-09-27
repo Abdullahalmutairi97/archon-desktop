@@ -82,6 +82,14 @@ describe('finite desktop bridge validation', () => {
     const readiness = { dispatch_ready: false, credentials_verified: false }
     expect(parseBridgeResponse(BRIDGE_CHANNELS.connectionDescribe, description)).toEqual(description)
     expect(parseBridgeResponse(BRIDGE_CHANNELS.connectionProbe, { ok: true, readiness })).toEqual({ ok: true, readiness })
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.connectionProbe, {
+      ok: false, error: { code: 'unauthorized', message: 'The server did not accept the connection.' }, authStatus: 401,
+    })).toEqual({
+      ok: false, error: { code: 'unauthorized', message: 'The server did not accept the connection.' },
+    })
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.connectionDescribe, {
+      ...description, localPairingAvailable: true,
+    })).toEqual({ ...description, localPairingAvailable: true })
     expect(parseBridgeResponse(BRIDGE_CHANNELS.connectionSave, {
       description,
       probe: { ok: true, readiness },
@@ -93,6 +101,9 @@ describe('finite desktop bridge validation', () => {
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.connectionSave, {
       description: { ...description, access_token: 'sentinel-token' },
       probe: { ok: true, readiness },
+    })).toThrow(TypeError)
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.connectionProbe, {
+      ok: false, error: { code: 'unauthorized', message: 'The server did not accept the connection.' }, authStatus: 500,
     })).toThrow(TypeError)
     expect(parseBridgeResponse(BRIDGE_CHANNELS.connectionProbe, {
       ok: false,

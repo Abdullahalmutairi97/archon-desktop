@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ConnectionDescription, DesktopBridge } from '../../shared/bridge/types'
+import type { ConnectionDescription, ConnectionProbeResult, DesktopBridge } from '../../shared/bridge/types'
 import { ConnectionPanel } from './ConnectionPanel'
 
 afterEach(cleanup)
@@ -13,7 +13,7 @@ function fakeBridge() {
       probe: { ok: true, readiness: { dispatch_ready: false } },
     })),
     disconnect: vi.fn(async () => ({ serverUrl: null, configured: false, storageMode: 'memory' as const, generation: 2 })),
-    probe: vi.fn(async () => ({ ok: true, readiness: { dispatch_ready: false } })),
+    probe: vi.fn(async (): Promise<ConnectionProbeResult> => ({ ok: true, readiness: { dispatch_ready: false } })),
   }
   const invoke = vi.fn(async (operation: string) => {
     if (operation === 'projects.list') return { projects: [{ id: 'project-1' }] }
@@ -96,5 +96,28 @@ describe('connection panel', () => {
     expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled()
     fireEvent.click(await screen.findByRole('button', { name: 'Clear saved record' }))
     await waitFor(() => expect(connection.disconnect).toHaveBeenCalledTimes(1))
+  })
+
+  it('offers a retry when startup local pairing was unavailable and refreshes its status', async () => {
+    const { bridge, connection } = fakeBridge()
+    connection.describe
+      .mockResolvedValueOnce({
+        serverUrl: null, configured: false, storageMode: 'memory', generation: 0, localPairingAvailable: true,
+      })
+      .mockResolvedValueOnce({
+        serverUrl: null, configured: false, storageMode: 'memory', generation: 0, localPairingAvailable: true,
+      })
+    connection.probe.mockResolvedValue({
+      ok: false, error: { code: 'not_connected', message: 'No connection.' },
+    })
+    render(<ConnectionPanel bridge={bridge} />)
+
+    const retry = await screen.findByRole('button', { name: 'Retry local pairing' })
+    expect(screen.getByText(/retry to obtain a short-lived bearer/i)).toBeInTheDocument()
+    fireEvent.click(retry)
+    await waitFor(() => expect(connection.probe).toHaveBeenCalledOnce())
+    await waitFor(() => expect(connection.describe).toHaveBeenCalledTimes(2))
+    expect(screen.getByText('Disconnected')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry local pairing' })).toBeEnabled()
   })
 })

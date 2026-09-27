@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron'
 import { spawn } from 'node:child_process'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
@@ -13,6 +13,7 @@ import { TrustedShellFrameGuard, type TrustedShellIpcEvent } from './security/Tr
 import { CredentialStore } from './storage/credentialStore'
 import { ProfileStore } from './storage/profileStore'
 import { BackendTransport } from './transport/backendTransport'
+import { LocalPairingClient, resolveLocalPairingSocketPath } from './localPairingClient'
 import { OwnedCodexMetadataStore } from './adapters/codex/metadata'
 import type { CodexChildProcess } from './adapters/codex/appServer'
 import {
@@ -130,7 +131,14 @@ void app.whenReady().then(async () => {
     profileRoot: profileStore.paths.profileRoot,
     safeStorage,
   })
-  const connection = await createConnectionService(new BackendTransport(), credentialStore)
+  let localPairing: LocalPairingClient | undefined
+  try {
+    const socketPath = resolveLocalPairingSocketPath(process.env.ARCHON_DESKTOP_DATA_DIR, userInfo().homedir)
+    localPairing = new LocalPairingClient({ socketPath })
+  } catch {
+    // An unavailable or invalid local pairing path leaves the app in its disconnected state.
+  }
+  const connection = await createConnectionService(new BackendTransport(), credentialStore, { localPairing })
   let localCodexBridge: LocalCodexIpcController
   try {
     const codexMetadata = new OwnedCodexMetadataStore(profileStore.paths.codexMetadataDirectory)

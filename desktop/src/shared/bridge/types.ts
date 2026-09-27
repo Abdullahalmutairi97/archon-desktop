@@ -14,6 +14,8 @@ export interface ConnectionDescription {
   serverUrl: string | null
   configured: boolean
   storageMode: 'memory' | 'protected' | 'unavailable'
+  /** Present when the main process can retry protected local Unix-socket pairing. */
+  localPairingAvailable?: boolean
   /** Monotonically changes whenever the active connection is replaced/cleared. */
   generation: number
 }
@@ -34,6 +36,8 @@ export interface ConnectionProbeResult {
   /** Readiness is present for both HTTP 200 and HTTP 503 dispatch states. */
   readiness?: JsonRecord
   error?: BridgeError
+  /** Main-process hint used to renew process-local pairing only after HTTP 401. */
+  authStatus?: 401 | 403
 }
 
 export interface ConnectionSaveResult {

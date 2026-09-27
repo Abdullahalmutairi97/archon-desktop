@@ -398,15 +398,26 @@ describe('backend transport', () => {
     expect(String(networkFailure)).not.toContain('TOKEN_SENTINEL')
   })
 
-  it('keeps a 401 probe error valid across the main-to-preload response boundary', async () => {
+  it('keeps auth status available to main-process renewal without exposing response bodies', async () => {
     const transport = new BackendTransport({
       ...localConnection,
       fetch: fetchStub(async () => response({ detail: 'TOKEN_SENTINEL' }, 401)),
     })
     const probe = await transport.probe()
-    expect(probe).toMatchObject({ ok: false, error: { code: 'unauthorized' } })
-    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.connectionProbe, probe)).not.toThrow()
+    expect(probe).toMatchObject({ ok: false, error: { code: 'unauthorized' }, authStatus: 401 })
+    const rendererProbe = parseBridgeResponse(BRIDGE_CHANNELS.connectionProbe, probe)
+    expect(rendererProbe).toEqual({ ok: false, error: { code: 'unauthorized', message: 'The server did not accept the connection.' } })
+    expect(rendererProbe).not.toHaveProperty('authStatus')
     expect(JSON.stringify(probe)).not.toContain('TOKEN_SENTINEL')
+
+    const forbiddenTransport = new BackendTransport({
+      ...localConnection,
+      fetch: fetchStub(async () => response({ detail: 'TOKEN_SENTINEL' }, 403)),
+    })
+    const forbiddenProbe = await forbiddenTransport.probe()
+    expect(forbiddenProbe).toMatchObject({ ok: false, error: { code: 'unauthorized' }, authStatus: 403 })
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.connectionProbe, forbiddenProbe)).not.toThrow()
+    expect(JSON.stringify(forbiddenProbe)).not.toContain('TOKEN_SENTINEL')
   })
 
   it('rejects oversized JSON responses before parsing them', async () => {
