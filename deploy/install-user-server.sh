@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SERVICE_NAME="archon-desktop-server.service"
 CONFIRM_ROOTS="false"
+ARCHON_ROOT=""
 WORKSPACE_ROOTS=()
 SERVICE_USER="$(id -un)"
 SERVICE_UID="$(id -u)"
@@ -18,9 +19,11 @@ UNIT_EXISTS="false"
 
 usage() {
   cat <<'EOF'
-Usage: deploy/install-user-server.sh --workspace-root ABSOLUTE_PATH [options]
+Usage: deploy/install-user-server.sh --archon-root ABSOLUTE_PATH --workspace-root ABSOLUTE_PATH [options]
 
 Required:
+  --archon-root PATH          Existing absolute Archon root; it must also be
+                              supplied as one of the --workspace-root values.
   --workspace-root PATH       Include every configured scratch and registered project root.
                               Repeat for each root.
   --confirm-workspace-roots-complete
@@ -44,6 +47,12 @@ fail() {
 
 while (($#)); do
   case "$1" in
+    --archon-root)
+      (($# >= 2)) || fail "--archon-root requires a path"
+      [[ -z "$ARCHON_ROOT" ]] || fail "Supply --archon-root only once."
+      ARCHON_ROOT="$2"
+      shift 2
+      ;;
     --env-file)
       (($# >= 2)) || fail "--env-file requires a path"
       ENV_FILE="$2"
@@ -72,8 +81,9 @@ done
 [[ "$SERVICE_USER" =~ ^[a-z_][a-z0-9_-]*\$?$ ]] || fail "Could not determine the current service account"
 [[ -n "$SERVICE_HOME" && "$SERVICE_HOME" = /* ]] || fail "The current account has no absolute home directory"
 [[ "$CONFIG_HOME" = /* && "$ENV_FILE" = /* ]] || fail "Configuration and environment paths must be absolute"
+[[ -n "$ARCHON_ROOT" && "$ARCHON_ROOT" = /* ]] || fail "Supply an existing absolute --archon-root path."
 [[ "$CONFIRM_ROOTS" == "true" && ${#WORKSPACE_ROOTS[@]} -gt 0 ]] || {
-  fail "Supply every workspace root and --confirm-workspace-roots-complete."
+  fail "Supply --archon-root, every workspace root, and --confirm-workspace-roots-complete."
 }
 [[ -x "$PYTHON" ]] || fail "Backend virtualenv is missing; install backend dependencies first"
 [[ -f "$UNIT_TEMPLATE" ]] || fail "The user-service unit template is missing"
@@ -92,20 +102,32 @@ case "$ENV_FILE_RESOLVED" in
     ;;
 esac
 
-if ! PYTHONPATH="$PROJECT_ROOT/backend" "$PYTHON" - "$ENV_FILE_RESOLVED" "${WORKSPACE_ROOTS[@]}" <<'PY'
+if ! ARCHON_ROOT_RESOLVED="$(PYTHONPATH="$PROJECT_ROOT/backend" "$PYTHON" - "$ENV_FILE_RESOLVED" "$ARCHON_ROOT" "${WORKSPACE_ROOTS[@]}" <<'PY'
 from pathlib import Path
 import sys
 
 from archon_server.provision import validate_external_output_location
 
 try:
+    env_file = Path(sys.argv[1])
+    requested_root = Path(sys.argv[2])
+    if not requested_root.is_absolute():
+        raise ValueError
+    if "\n" in str(requested_root) or "\r" in str(requested_root):
+        raise ValueError
+    archon_root = requested_root.resolve(strict=True)
+    if not archon_root.is_dir():
+        raise ValueError
     validate_external_output_location(
-        sys.argv[1], sys.argv[2:], confirm_workspace_roots_complete=True
+        env_file, sys.argv[3:], confirm_workspace_roots_complete=True
     )
+    if not any(archon_root == Path(root).resolve(strict=True) for root in sys.argv[3:]):
+        raise ValueError
 except (OSError, ValueError):
     raise SystemExit("The external environment path or workspace roots failed validation.") from None
+print(archon_root)
 PY
-then
+)"; then
   fail "The external environment path or workspace roots failed validation."
 fi
 
@@ -120,13 +142,15 @@ elif [[ -e "$ENV_FILE" ]]; then
   PARENT_MODE="$(stat -c '%a' -- "$(dirname -- "$ENV_FILE")")"
   PARENT_OWNER="$(stat -c '%u' -- "$(dirname -- "$ENV_FILE")")"
   [[ "$PARENT_MODE" == "700" && "$PARENT_OWNER" == "$SERVICE_UID" ]] || fail "The existing environment parent must be owned by this account with mode 0700; it was not changed."
-  "$PYTHON" - "$ENV_FILE" <<'PY'
+  "$PYTHON" - "$ENV_FILE" "$ARCHON_ROOT_RESOLVED" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 path = Path(sys.argv[1])
+expected_archon_root = sys.argv[2]
 required = {
+    "ARCHON_DESKTOP_ARCHON_ROOT": expected_archon_root,
     "ARCHON_DESKTOP_LOCAL_OWNER_MODE": "true",
     "ARCHON_DESKTOP_BIND_HOST": "127.0.0.1",
     "ARCHON_DESKTOP_REMOTE_ACCESS_MODE": "disabled",
@@ -146,6 +170,8 @@ for line in path.read_text().splitlines():
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
+            sentinel = "\x00"
+            value = value.replace("\\\\", sentinel).replace('\\"', '"').replace(sentinel, "\\")
         seen[key] = value
 for key, expected in required.items():
     if seen.get(key) != expected:
@@ -164,20 +190,30 @@ else
     PROVISION_ARGS+=(--workspace-root "$workspace_root")
   done
   (cd "$PROJECT_ROOT/backend" && PYTHONPATH="$PROJECT_ROOT/backend" "$PYTHON" -m archon_server.provision "${PROVISION_ARGS[@]}")
-  "$PYTHON" - "$ENV_FILE" <<'PY'
+  "$PYTHON" - "$ENV_FILE" "$ARCHON_ROOT_RESOLVED" <<'PY'
 from pathlib import Path
 import os
 import stat
 import sys
 
 path = Path(sys.argv[1])
+archon_root = sys.argv[2]
+if "\n" in archon_root or "\r" in archon_root:
+    raise SystemExit("The Archon root cannot contain a newline.")
+quoted_archon_root = '"' + archon_root.replace("\\", "\\\\").replace('"', '\\"') + '"'
 flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 fd = os.open(path, flags)
 try:
     info = os.fstat(fd)
     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600:
         raise SystemExit("The new environment file failed owner or permission checks.")
-    os.write(fd, b"ARCHON_DESKTOP_LOCAL_OWNER_MODE=true\nARCHON_DESKTOP_BIND_HOST=127.0.0.1\nARCHON_DESKTOP_REMOTE_ACCESS_MODE=disabled\n")
+    settings = (
+        f"ARCHON_DESKTOP_ARCHON_ROOT={quoted_archon_root}\n"
+        "ARCHON_DESKTOP_LOCAL_OWNER_MODE=true\n"
+        "ARCHON_DESKTOP_BIND_HOST=127.0.0.1\n"
+        "ARCHON_DESKTOP_REMOTE_ACCESS_MODE=disabled\n"
+    )
+    os.write(fd, settings.encode("utf-8"))
     os.fsync(fd)
 finally:
     os.close(fd)

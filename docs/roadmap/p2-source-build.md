@@ -1,15 +1,15 @@
 # P2 — Maintainable source build and UI parity
 
-**Status:** Source inventory and bounded reconstruction planning are complete. P2A is published in [PR #19](https://github.com/Abdullahalmutairi97/archon-desktop/pull/19); the P2B.1 trusted connection boundary is published in [PR #20](https://github.com/Abdullahalmutairi97/archon-desktop/pull/20). P2B.2 storage core is published in [PR #22](https://github.com/Abdullahalmutairi97/archon-desktop/pull/22), and P2C.1 Connection view is published in [PR #21](https://github.com/Abdullahalmutairi97/archon-desktop/pull/21). P2C.2 adds a separate read-only Server data route for review. Main-process storage wiring, local Codex, remaining renderer behavior, native qualification and package builds are still open. Historical authored source and design assets are recovered as references; matching v0.3.0 input remains unavailable. See the [26 September inventory](p2-source-inventory.md) and [bounded reconstruction plan](p2-reconstruction-plan.md). **Dependencies:** P2B uses the reviewed P1D source contract; P2 gates new P3/P4 desktop delivery.
+**Status:** Source inventory and bounded reconstruction planning are complete. The authored reconstruction now builds, launches, pairs with a same-user backend, exposes a bounded Local Codex and Server data workflow, and produces a source-recorded Linux x64 portable package for review in [PR #28](https://github.com/Abdullahalmutairi97/archon-desktop/pull/28). The package is a local preview, not an installer or official release. Matching v0.3.0 authored input remains unavailable, so visual/native parity and release qualification are still open. See the [26 September inventory](p2-source-inventory.md) and [bounded reconstruction plan](p2-reconstruction-plan.md). **Dependencies:** P2B uses the reviewed P1D source contract; P2 gates new P3/P4 desktop delivery.
 
 ## Source increments
 
 | Increment | Deliverable | Status |
 | --- | --- | --- |
 | P2A | Authored build, isolated reference shell, pure IDE/queue/snapshot/identity models | Published in PR #19 at the source/fixture boundary |
-| P2B | Validated main/preload boundary, protected transport/storage and local Codex adapter | B.1 in PR #20 and B.2 storage core in PR #22; live wiring and local Codex open |
-| P2C | Full renderer behavior and fixture parity | C.1 Connection view in PR #21; C.2 Server data route in review; full behavior open |
-| P2D | Isolated native checks, fresh package builds and release qualification evidence | Planned; baseline parity remains an explicit gate |
+| P2B | Validated main/preload boundary, protected transport/storage and local Codex adapter | Live wiring and a bounded Local Codex path are in PR #28; native provider parity remains open |
+| P2C | Full renderer behavior and fixture parity | Connection, Server data, project/workspace/file tools and Prime task selection are in PR #28; full behavior remains open |
+| P2D | Isolated native checks, fresh package builds and release qualification evidence | A Linux x64 portable package builds and launches from an isolated profile; baseline parity and release qualification remain open |
 
 ## Scope and preservation contract
 

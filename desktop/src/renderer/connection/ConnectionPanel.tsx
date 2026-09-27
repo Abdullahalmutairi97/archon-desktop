@@ -14,7 +14,7 @@ const overviewFailure = 'The read-only server overview is unavailable.'
 
 function storageHint(description: ConnectionDescription | null): string {
   if (description?.localPairingAvailable && !description.configured) {
-    return 'The local Archon service is not paired right now. Retry to obtain a short-lived bearer held only in main-process memory.'
+    return 'Local pairing needs the Archon backend service running under the same Linux account as this desktop. See docs/operator-setup.md (installer: deploy/install-user-server.sh) to set it up, then retry.'
   }
   if (description?.localPairingAvailable && description.configured) {
     return 'Paired with the local Archon service. Its short-lived bearer stays in main-process memory and renews when needed.'

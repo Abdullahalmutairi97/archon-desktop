@@ -113,7 +113,8 @@ describe('connection panel', () => {
     render(<ConnectionPanel bridge={bridge} />)
 
     const retry = await screen.findByRole('button', { name: 'Retry local pairing' })
-    expect(screen.getByText(/retry to obtain a short-lived bearer/i)).toBeInTheDocument()
+    expect(screen.getByText(/backend service running under the same linux account/i)).toBeInTheDocument()
+    expect(screen.getByText(/docs\/operator-setup\.md.*deploy\/install-user-server\.sh/i)).toBeInTheDocument()
     fireEvent.click(retry)
     await waitFor(() => expect(connection.probe).toHaveBeenCalledOnce())
     await waitFor(() => expect(connection.describe).toHaveBeenCalledTimes(2))
