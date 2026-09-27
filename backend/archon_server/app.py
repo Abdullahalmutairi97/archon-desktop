@@ -551,11 +551,13 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 return value
         return None
 
+    def authorized_token(supplied: str | None) -> bool:
+        return token_authorized(settings, supplied) or (
+            pairing_broker is not None and pairing_broker.authenticate(supplied) is not None
+        )
+
     def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
-        supplied = supplied_bearer(authorization)
-        if not token_authorized(settings, supplied) and (
-            pairing_broker is None or pairing_broker.authenticate(supplied) is None
-        ):
+        if not authorized_token(supplied_bearer(authorization)):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     def require_local_owner(authorization: Annotated[str | None, Header()] = None) -> dict[str, object]:
@@ -1178,7 +1180,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                     pass
                 return
             token = first.get("token") if isinstance(first, Mapping) else None
-            if not token_authorized(settings, token):
+            if not authorized_token(token):
                 await websocket.close(code=4401)
                 return
             await terminals.bridge(websocket, name)

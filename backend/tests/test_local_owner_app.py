@@ -44,6 +44,13 @@ def test_local_owner_pairing_bootstraps_existing_api_without_blank_auth(tmp_path
             "uid": os.geteuid(),
             "auth_method": "unix-peer-credentials",
         }
+        async def fake_terminal_bridge(websocket, name):
+            await websocket.send_json({"connected": name})
+
+        client.app.state.services["terminals"].bridge = fake_terminal_bridge
+        with client.websocket_connect("/api/terminals/local/ws") as websocket:
+            websocket.send_json({"token": credential["access_token"]})
+            assert websocket.receive_json() == {"connected": "local"}
         assert client.get("/api/local/owner").status_code == 401
     assert not settings.local_pairing_socket_path.exists()
 
