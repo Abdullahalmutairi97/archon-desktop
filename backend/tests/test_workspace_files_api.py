@@ -69,10 +69,19 @@ def test_workspace_file_endpoints_require_auth_and_registered_owner(tmp_path):
             "/api/workspaces/workspace-files-test/files/write",
             json={"path": "readme.txt", "expected_content": "registered checkout", "content": "changed"},
         )
+        anonymous_create = client.post(
+            "/api/workspaces/workspace-files-test/files/create",
+            json={"path": "new.txt", "content": "created"},
+        )
         foreign_write = client.post(
             "/api/workspaces/workspace-foreign/files/write",
             headers=HEADERS,
             json={"path": "readme.txt", "expected_content": "", "content": "changed"},
+        )
+        foreign_create = client.post(
+            "/api/workspaces/workspace-foreign/files/create",
+            headers=HEADERS,
+            json={"path": "new.txt", "content": "created"},
         )
 
     assert anonymous.status_code == 401
@@ -80,7 +89,10 @@ def test_workspace_file_endpoints_require_auth_and_registered_owner(tmp_path):
     assert foreign.status_code == 404
     assert valid.status_code == 200
     assert anonymous_write.status_code == 401
+    assert anonymous_create.status_code == 401
     assert foreign_write.status_code == 404
+    assert foreign_create.status_code == 404
+    assert not (root / "new.txt").exists()
     assert valid.json() == {
         "path": "readme.txt",
         "content": "registered checkout",
@@ -276,6 +288,128 @@ def test_workspace_file_write_replaces_existing_text_and_rejects_stale_or_unsafe
     assert hardlink.status_code == 404
     assert (root / "linked-hard.txt").read_text(encoding="utf-8") == "shared"
     assert not list(root.glob(".archon-workspace-write-*.tmp"))
+
+
+def test_workspace_file_create_writes_utf8_with_private_mode(tmp_path):
+    settings = _settings(tmp_path)
+    root = _register_workspace(settings)
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/workspaces/workspace-files-test/files/create",
+            headers=HEADERS,
+            json={"path": "src/new.txt", "content": "hello 🌿\n"},
+        )
+        created = root / "src" / "new.txt"
+        assert response.status_code == 404  # Parent directories are never created implicitly.
+        assert not created.exists()
+
+        (root / "src").mkdir()
+        response = client.post(
+            "/api/workspaces/workspace-files-test/files/create",
+            headers=HEADERS,
+            json={"path": "src/new.txt", "content": "hello 🌿\n"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"path": "src/new.txt", "content": "hello 🌿\n"}
+    assert created.read_bytes() == "hello 🌿\n".encode("utf-8")
+    assert created.stat().st_mode & 0o777 == 0o600
+
+
+def test_workspace_file_create_conflicts_on_existing_entries_and_rejects_unsafe_text(tmp_path):
+    settings = _settings(tmp_path)
+    root = _register_workspace(settings)
+    existing = root / "existing.txt"
+    existing.write_text("keep", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("external", encoding="utf-8")
+    (root / "linked.txt").symlink_to(outside)
+
+    with TestClient(create_app(settings)) as client:
+        duplicate = client.post(
+            "/api/workspaces/workspace-files-test/files/create",
+            headers=HEADERS,
+            json={"path": "existing.txt", "content": "overwrite"},
+        )
+        symlink = client.post(
+            "/api/workspaces/workspace-files-test/files/create",
+            headers=HEADERS,
+            json={"path": "linked.txt", "content": "overwrite"},
+        )
+        traversal = client.post(
+            "/api/workspaces/workspace-files-test/files/create",
+            headers=HEADERS,
+            json={"path": "../outside.txt", "content": "escape"},
+        )
+        control = client.post(
+            "/api/workspaces/workspace-files-test/files/create",
+            headers=HEADERS,
+            json={"path": "control.txt", "content": "bad\x01text"},
+        )
+        too_many_bytes = client.post(
+            "/api/workspaces/workspace-files-test/files/create",
+            headers=HEADERS,
+            json={"path": "large.txt", "content": "🌿" * 5_000},
+        )
+
+    assert duplicate.status_code == 409
+    assert symlink.status_code == 409
+    assert traversal.status_code == 400
+    assert control.status_code == 400
+    assert too_many_bytes.status_code == 400
+    assert existing.read_text(encoding="utf-8") == "keep"
+    assert outside.read_text(encoding="utf-8") == "external"
+    assert not (root / "control.txt").exists()
+    assert not (root / "large.txt").exists()
+
+
+def test_workspace_file_create_is_blocked_while_a_task_uses_the_workspace(tmp_path):
+    settings = _settings(tmp_path)
+    root = _register_workspace(settings)
+    with Database(settings.database_path).connect() as conn:
+        conn.execute(
+            "INSERT INTO tasks(id,prompt,cwd,status,created_at,updated_at) "
+            "VALUES ('active-workspace-task','in progress',?,'running','now','now')",
+            (str(root),),
+        )
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/workspaces/workspace-files-test/files/create",
+            headers=HEADERS,
+            json={"path": "new.txt", "content": "must wait"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Workspace has an active task"
+    assert not (root / "new.txt").exists()
+
+
+def test_workspace_file_create_cleans_up_when_file_sync_fails(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    root = _register_workspace(settings)
+    real_fsync = workspace_files.os.fsync
+    fsync_calls = 0
+
+    def fail_first_fsync(descriptor):
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 1:
+            raise OSError("simulated file sync failure")
+        return real_fsync(descriptor)
+
+    with TestClient(create_app(settings)) as client:
+        monkeypatch.setattr(workspace_files.os, "fsync", fail_first_fsync)
+        response = client.post(
+            "/api/workspaces/workspace-files-test/files/create",
+            headers=HEADERS,
+            json={"path": "new.txt", "content": "written before sync"},
+        )
+
+    assert response.status_code == 503
+    assert not (root / "new.txt").exists()
+    assert fsync_calls >= 2  # The cleanup also syncs the parent directory.
 
 
 def test_workspace_search_is_owner_scoped_text_only_and_hides_protected_entries(tmp_path):

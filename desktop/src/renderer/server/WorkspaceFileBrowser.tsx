@@ -45,6 +45,7 @@ export interface WorkspaceReadOnlyFilePort {
   read(workspaceId: string, path: string, maxBytes: number): Promise<WorkspaceFileRead>
   search(workspaceId: string, query: string): Promise<WorkspaceFileSearchResult>
   write?(workspaceId: string, path: string, expectedContent: string, content: string): Promise<WorkspaceFileWrite>
+  create?(workspaceId: string, path: string, content: string): Promise<WorkspaceFileWrite>
 }
 
 const LIST_LIMIT = 100
@@ -72,6 +73,7 @@ type SearchState =
   | { workspaceId: string; query: string; status: 'error' }
 
 type SaveFeedback = { workspaceId: string; path: string; kind: 'conflict' | 'uncertain' }
+type CreateFeedback = { workspaceId: string; path: string; kind: 'conflict' | 'uncertain' }
 
 function canonicalPath(path: string): string | null {
   if (path === '') return ''
@@ -150,6 +152,10 @@ function canEditContent(content: string, truncated: boolean): boolean {
   return !truncated && !content.includes('\0') && content.length <= EDIT_LIMIT_CHARS && new TextEncoder().encode(content).byteLength <= EDIT_LIMIT_BYTES
 }
 
+function canCreateContent(content: string): boolean {
+  return canEditContent(content, false) && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(content)
+}
+
 function byteLabel(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`
@@ -213,6 +219,8 @@ export function WorkspaceFileBrowser({
   const [readState, setReadState] = useState<ReadState | null>(null)
   const [editingState, setEditingState] = useState<{ workspaceId: string; path: string; draft: string } | null>(null)
   const [saveFeedbackState, setSaveFeedbackState] = useState<SaveFeedback | null>(null)
+  const [creatingState, setCreatingState] = useState<{ workspaceId: string; name: string; content: string } | null>(null)
+  const [createFeedbackState, setCreateFeedbackState] = useState<CreateFeedback | null>(null)
   const [savePending, setSavePending] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchState, setSearchState] = useState<SearchState | null>(null)
@@ -225,9 +233,21 @@ export function WorkspaceFileBrowser({
   const currentRead = readState?.workspaceId === workspaceId && readState.path === selectedPath ? readState : null
   const currentEditing = editingState?.workspaceId === workspaceId && editingState.path === selectedPath ? editingState : null
   const currentSaveFeedback = saveFeedbackState?.workspaceId === workspaceId && saveFeedbackState.path === selectedPath ? saveFeedbackState : null
+  const currentCreating = creatingState?.workspaceId === workspaceId ? creatingState : null
+  const currentCreateFeedback = createFeedbackState?.workspaceId === workspaceId && createFeedbackState.path === currentCreating?.name
+    ? createFeedbackState : null
   const currentSearch = searchState?.workspaceId === workspaceId ? searchState : null
   const currentEditByteLength = currentEditing ? new TextEncoder().encode(currentEditing.draft).byteLength : 0
   const currentEditIsDirty = currentEditing !== null && currentRead?.status === 'ready' && currentEditing.draft !== currentRead.content
+  const currentCreateByteLength = currentCreating ? new TextEncoder().encode(currentCreating.content).byteLength : 0
+  const currentCreateTargetPath = currentCreating ? childPath(path, currentCreating.name) : null
+  const currentCreatePathError = currentCreating && currentCreating.name.length > 0 && !currentCreateTargetPath
+    ? 'Use one safe file name in this folder. Slashes, . and .. are not allowed.' : null
+  const currentCreateContentError = currentCreating && !canCreateContent(currentCreating.content)
+    ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(currentCreating.content)
+      ? 'Remove unsupported control characters. Tabs and line breaks are allowed.'
+      : 'This file exceeds the 12,000 character or 16 KiB create limit.'
+    : null
 
   useEffect(() => {
     const generation = ++listingGeneration.current
@@ -273,6 +293,8 @@ export function WorkspaceFileBrowser({
     setReadState(null)
     setEditingState(null)
     setSaveFeedbackState(null)
+    setCreatingState(null)
+    setCreateFeedbackState(null)
   }
 
   function retryListing(): void {
@@ -288,6 +310,8 @@ export function WorkspaceFileBrowser({
     setReadState({ workspaceId, path: safePath, status: 'loading' })
     setEditingState(null)
     setSaveFeedbackState(null)
+    setCreatingState(null)
+    setCreateFeedbackState(null)
     void readOnlyFilePort.read(workspaceId, safePath, READ_LIMIT_BYTES).then((result) => {
       if (readGeneration.current !== generation) return
       if (result?.binary === true) {
@@ -315,6 +339,57 @@ export function WorkspaceFileBrowser({
     if (savePending || !selectedPath || currentRead?.status !== 'ready' || !readOnlyFilePort.write || !canEditContent(currentRead.content, currentRead.truncated)) return
     setSaveFeedbackState(null)
     setEditingState({ workspaceId, path: selectedPath, draft: currentRead.content })
+  }
+
+  function beginCreate(): void {
+    if (savePending || !readOnlyFilePort.create || currentListing?.status !== 'ready') return
+    setSelectedState(null)
+    setSelectedSearchHitState(null)
+    setReadState(null)
+    setEditingState(null)
+    setSaveFeedbackState(null)
+    setCreateFeedbackState(null)
+    setCreatingState({ workspaceId, name: '', content: '' })
+  }
+
+  async function createFile(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    if (saveLock.current || !currentCreating || !readOnlyFilePort.create || !currentCreateTargetPath || currentCreatePathError || currentCreateContentError || currentCreateFeedback) return
+    const fullPath = currentCreateTargetPath
+    if (!fullPath) return
+
+    saveLock.current = true
+    setSavePending(true)
+    setCreateFeedbackState(null)
+    const draft = currentCreating.content
+    const fileName = currentCreating.name
+    const generation = readGeneration.current
+    try {
+      const result = await readOnlyFilePort.create(workspaceId, fullPath, draft)
+      if (!result || result.path !== fullPath || typeof result.content !== 'string' ||
+          result.content !== draft || !canCreateContent(result.content)) {
+        throw new Error('Invalid file create response')
+      }
+      if (readGeneration.current === generation) {
+        setCreatingState(null)
+        setCreateFeedbackState(null)
+        openFile(fullPath)
+      }
+      retryListing()
+    } catch (error) {
+      if (readGeneration.current === generation) {
+        setCreateFeedbackState({ workspaceId, path: fileName, kind: isWriteConflict(error) ? 'conflict' : 'uncertain' })
+      }
+    } finally {
+      saveLock.current = false
+      setSavePending(false)
+    }
+  }
+
+  function cancelCreate(): void {
+    if (savePending) return
+    setCreatingState(null)
+    setCreateFeedbackState(null)
   }
 
   async function saveEdit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -385,9 +460,9 @@ export function WorkspaceFileBrowser({
     <header className="workspace-file-browser-header">
       <div>
         <h3>WORKSPACE FILES</h3>
-        <p>{readOnlyFilePort.write ? 'Edit small text files · server-owned checkout' : 'Read-only preview · server-owned checkout'}</p>
+        <p>{readOnlyFilePort.write || readOnlyFilePort.create ? 'Create and edit small text files · server-owned checkout' : 'Read-only preview · server-owned checkout'}</p>
       </div>
-      <span className="workspace-file-readonly-badge">{readOnlyFilePort.write ? 'SMALL FILE EDIT' : 'READ ONLY'}</span>
+      <span className="workspace-file-readonly-badge">{readOnlyFilePort.write || readOnlyFilePort.create ? 'SMALL FILE TOOLS' : 'READ ONLY'}</span>
     </header>
 
     <nav className="workspace-file-breadcrumbs" aria-label="Workspace file path">
@@ -437,7 +512,10 @@ export function WorkspaceFileBrowser({
       <section className="workspace-file-list-pane" aria-label="Workspace directory entries">
         <div className="workspace-file-list-toolbar">
           <strong>{path || 'Root'}</strong>
-          {path && <button type="button" onClick={() => navigate(parentPath(path))}>Up one level</button>}
+          <span className="workspace-file-list-actions">
+            {readOnlyFilePort.create && currentListing?.status === 'ready' && <button type="button" onClick={beginCreate} disabled={savePending}>New text file</button>}
+            {path && <button type="button" onClick={() => navigate(parentPath(path))}>Up one level</button>}
+          </span>
         </div>
         {currentListing?.status === 'loading' && <p className="workspace-file-message" role="status">Loading this folder…</p>}
         {currentListing?.status === 'error' && <div className="workspace-file-message" role="alert">
@@ -464,12 +542,52 @@ export function WorkspaceFileBrowser({
         </>}
       </section>
 
-      <section className="workspace-file-preview-pane" aria-label={readOnlyFilePort.write ? 'Workspace file preview and editor' : 'Read-only file preview'}>
+      <section className="workspace-file-preview-pane" aria-label={readOnlyFilePort.write || readOnlyFilePort.create ? 'Workspace file preview and editor' : 'Read-only file preview'}>
         <div className="workspace-file-preview-heading">
-          <strong>{selectedPath?.split('/').at(-1) ?? 'Preview'}</strong>
+          <strong>{currentCreating ? 'New text file' : selectedPath?.split('/').at(-1) ?? 'Preview'}</strong>
           <span>TEXT ONLY</span>
         </div>
-        {!selectedPath && <p className="workspace-file-message">Choose a file to preview its text.</p>}
+        {!selectedPath && !currentCreating && <p className="workspace-file-message">Choose a file to preview its text.</p>}
+        {currentCreating && <form className="workspace-file-editor workspace-file-create-form" onSubmit={(event) => { void createFile(event) }}>
+          <label htmlFor="workspace-file-create-name">Relative file path · current folder</label>
+          <input
+            id="workspace-file-create-name"
+            type="text"
+            aria-label="Relative file path"
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={255}
+            placeholder="notes.txt"
+            value={currentCreating.name}
+            disabled={savePending}
+            onChange={(event) => setCreatingState({ ...currentCreating, name: event.currentTarget.value })}
+          />
+          <label htmlFor="workspace-file-create-content">New file content</label>
+          <textarea
+            id="workspace-file-create-content"
+            aria-label="New file content"
+            value={currentCreating.content}
+            maxLength={EDIT_LIMIT_CHARS}
+            spellCheck={false}
+            disabled={savePending}
+            onChange={(event) => setCreatingState({ ...currentCreating, content: event.currentTarget.value })}
+          />
+          <div className="workspace-file-editor-actions">
+            <span>{currentCreating.content.length} / {EDIT_LIMIT_CHARS} characters · {byteLabel(currentCreateByteLength)} / 16 KiB</span>
+            <button type="button" onClick={cancelCreate} disabled={savePending}>Cancel</button>
+            <button type="submit" disabled={savePending || currentCreateFeedback !== null || !currentCreateTargetPath || currentCreatePathError !== null || currentCreateContentError !== null}>
+              {savePending ? 'Creating…' : 'Create file'}
+            </button>
+          </div>
+          {currentCreatePathError && <p className="workspace-file-message" role="alert">{currentCreatePathError}</p>}
+          {currentCreateContentError && <p className="workspace-file-message" role="alert">{currentCreateContentError}</p>}
+          {currentCreateFeedback && <div className="workspace-file-message workspace-file-save-error" role="alert">
+            <span>{currentCreateFeedback.kind === 'conflict'
+              ? 'That file already exists. Choose a different path.'
+              : 'Could not confirm whether this file was created. Refresh its folder before trying again.'}</span>
+            {currentCreateFeedback.kind === 'uncertain' && <button type="button" onClick={() => { cancelCreate(); retryListing() }}>Refresh folder</button>}
+          </div>}
+        </form>}
         {selectedSearchHit && <p className="workspace-file-search-line" role="status">Search match on line {selectedSearchHit.line}.</p>}
         {currentRead?.status === 'loading' && <p className="workspace-file-message" role="status">Reading file…</p>}
         {currentRead?.status === 'binary' && <p className="workspace-file-message workspace-file-binary" role="alert">Binary files cannot be previewed as text.</p>}

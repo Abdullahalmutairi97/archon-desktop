@@ -76,6 +76,7 @@ const operationNames = Object.freeze([
   'workspaces.files.read',
   'workspaces.files.search',
   'workspaces.files.write',
+  'workspaces.files.create',
 ] as const satisfies readonly OperationName[])
 
 const channels = new Set<string>(Object.values(BRIDGE_CHANNELS))
@@ -314,6 +315,10 @@ function workspaceFileWriteText(value: unknown): value is string {
     !value.includes('\0') && new TextEncoder().encode(value).byteLength <= MAX_WORKSPACE_FILE_WRITE_BYTES
 }
 
+function workspaceFileCreateText(value: unknown): value is string {
+  return workspaceFileWriteText(value) && !/[\u0001-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value)
+}
+
 function parseWorkspaceFileWritePayload(value: unknown): WorkspaceFileWritePayload {
   const record = exactObject(value, ['workspaceId', 'path', 'expectedContent', 'content'])
   if (!workspaceFileId(record.workspaceId) || !workspaceFilePath(record.path, false) ||
@@ -324,6 +329,13 @@ function parseWorkspaceFileWritePayload(value: unknown): WorkspaceFileWritePaylo
     expectedContent: record.expectedContent,
     content: record.content,
   })
+}
+
+function parseWorkspaceFileCreatePayload(value: unknown): OperationMap['workspaces.files.create']['payload'] {
+  const record = exactObject(value, ['workspaceId', 'path', 'content'])
+  if (!workspaceFileId(record.workspaceId) || !workspaceFilePath(record.path, false) ||
+      !workspaceFileCreateText(record.content)) return fail()
+  return Object.freeze({ workspaceId: record.workspaceId, path: record.path, content: record.content })
 }
 
 function validTaskId(value: unknown): value is string {
@@ -386,6 +398,8 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseWorkspaceFileSearchPayload(payload)])
     case 'workspaces.files.write':
       return Object.freeze([operation, parseWorkspaceFileWritePayload(payload)])
+    case 'workspaces.files.create':
+      return Object.freeze([operation, parseWorkspaceFileCreatePayload(payload)])
     case 'sessions.list':
       return Object.freeze([operation, parseSessionsPayload(payload)])
     case 'tasks.list':
@@ -694,7 +708,8 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
         truncated: record.truncated,
       })
     }
-    case 'workspaces.files.write': {
+    case 'workspaces.files.write':
+    case 'workspaces.files.create': {
       const record = exactObject(value, ['path', 'content'])
       if (!workspaceFilePath(record.path, false) || !workspaceFileWriteText(record.content)) return fail()
       return Object.freeze({ path: record.path, content: record.content })

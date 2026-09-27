@@ -203,6 +203,13 @@
   color: var(--muted, #96928c);
 }
 
+.workspace-file-list-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
 .workspace-file-entries {
   display: grid;
   gap: 1px;
@@ -314,10 +321,9 @@
   font-size: calc(9px * var(--font-scale, 1));
 }
 
-.workspace-file-editor textarea {
+.workspace-file-editor textarea,
+.workspace-file-editor input {
   width: 100%;
-  min-height: 190px;
-  resize: vertical;
   box-sizing: border-box;
   padding: 9px;
   border: 1px solid var(--line-strong, #484541);
@@ -326,6 +332,11 @@
   color: var(--text, #e8e5e0);
   font: inherit;
   font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.workspace-file-editor textarea {
+  min-height: 190px;
+  resize: vertical;
   line-height: 1.55;
   tab-size: 2;
   white-space: pre;

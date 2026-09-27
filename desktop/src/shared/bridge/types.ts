@@ -151,6 +151,12 @@ export interface WorkspaceFileWritePayload {
   content: string
 }
 
+export interface WorkspaceFileCreatePayload {
+  workspaceId: string
+  path: string
+  content: string
+}
+
 export interface WorkspaceFileEntry {
   name: string
   path: string
@@ -238,6 +244,10 @@ export interface OperationMap {
   }
   'workspaces.files.write': {
     payload: WorkspaceFileWritePayload
+    result: WorkspaceFileWriteResult
+  }
+  'workspaces.files.create': {
+    payload: WorkspaceFileCreatePayload
     result: WorkspaceFileWriteResult
   }
   'runtimes.list': {

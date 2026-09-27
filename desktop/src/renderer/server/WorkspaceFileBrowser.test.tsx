@@ -17,13 +17,15 @@ function port({
   read = vi.fn(async (_workspaceId: string, path: string) => ({ path, content: '', truncated: false })),
   search = vi.fn(async () => ({ hits: [], files_scanned: 0, bytes_scanned: 0, truncated: false })),
   write,
+  create,
 }: {
   list?: WorkspaceReadOnlyFilePort['list']
   read?: WorkspaceReadOnlyFilePort['read']
   search?: WorkspaceReadOnlyFilePort['search']
   write?: WorkspaceReadOnlyFilePort['write']
+  create?: WorkspaceReadOnlyFilePort['create']
 } = {}) {
-  return { list, read, search, ...(write ? { write } : {}) }
+  return { list, read, search, ...(write ? { write } : {}), ...(create ? { create } : {}) }
 }
 
 function deferred<T>() {
@@ -196,6 +198,69 @@ describe('WorkspaceFileBrowser', () => {
     expect(await screen.findByText('updated text')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'Edit README.md' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument()
+  })
+
+  it('creates a bounded text file at a safe relative path, refreshes, and selects it', async () => {
+    const create = vi.fn(async (_workspaceId: string, path: string, content: string) => ({ path, content }))
+    const list = vi.fn(async (_workspaceId: string, path: string) => ({
+      path,
+      entries: path === '' && list.mock.calls.length > 1 ? [file('new.md', 11)] : [],
+      truncated: false,
+    }))
+    const read = vi.fn(async (_workspaceId: string, path: string) => ({ path, content: '# New note', truncated: false }))
+    const filePort = port({ list, read, create })
+    render(<WorkspaceFileBrowser workspaceId="workspace-create" readOnlyFilePort={filePort} />)
+
+    const section = screen.getByRole('region', { name: 'Workspace directory entries' })
+    await within(section).findByText('This folder is empty.')
+    fireEvent.click(screen.getByRole('button', { name: 'New text file' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Relative file path' }), { target: { value: 'new.md' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'New file content' }), { target: { value: '# New note' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create file' }))
+
+    expect(create).toHaveBeenCalledWith('workspace-create', 'new.md', '# New note')
+    await waitFor(() => expect(read).toHaveBeenCalledWith('workspace-create', 'new.md', 64 * 1024))
+    expect(await screen.findByText('# New note')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'new.md 11 B' })).toHaveAttribute('aria-pressed', 'true')
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+  })
+
+  it('rejects unsafe paths and oversized text, then distinguishes collisions from uncertain results', async () => {
+    const create = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('already exists'), { code: 'write_conflict' }))
+      .mockRejectedValueOnce(Object.assign(new Error('connection lost'), { code: 'network_error' }))
+    const filePort = port({ create })
+    render(<WorkspaceFileBrowser workspaceId="workspace-create-errors" readOnlyFilePort={filePort} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New text file' }))
+    const pathInput = screen.getByRole('textbox', { name: 'Relative file path' })
+    const contentInput = screen.getByRole('textbox', { name: 'New file content' })
+    const submit = screen.getByRole('button', { name: 'Create file' })
+    fireEvent.change(pathInput, { target: { value: '../outside.txt' } })
+    fireEvent.change(contentInput, { target: { value: 'text' } })
+    fireEvent.click(submit)
+    expect(create).not.toHaveBeenCalled()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Use one safe file name in this folder.')
+
+    fireEvent.change(pathInput, { target: { value: 'notes.txt' } })
+    fireEvent.change(contentInput, { target: { value: '😀'.repeat(4_097) } })
+    expect(screen.getByRole('alert')).toHaveTextContent('This file exceeds the 12,000 character or 16 KiB create limit.')
+    expect(create).not.toHaveBeenCalled()
+
+    fireEvent.change(contentInput, { target: { value: 'unsafe\u0001text' } })
+    expect(screen.getByRole('alert')).toHaveTextContent('Remove unsupported control characters. Tabs and line breaks are allowed.')
+    expect(create).not.toHaveBeenCalled()
+
+    fireEvent.change(contentInput, { target: { value: 'text' } })
+    fireEvent.click(submit)
+    expect(await screen.findByRole('alert')).toHaveTextContent('That file already exists. Choose a different path.')
+    expect(create).toHaveBeenCalledTimes(1)
+
+    fireEvent.change(pathInput, { target: { value: 'other.txt' } })
+    fireEvent.click(submit)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not confirm whether this file was created. Refresh its folder before trying again.')
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(screen.getByRole('button', { name: 'Refresh folder' })).toBeInTheDocument()
   })
 
   it('shows a stale-content conflict and reloads the latest file without retrying the write', async () => {

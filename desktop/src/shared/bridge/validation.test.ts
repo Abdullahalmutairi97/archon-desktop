@@ -62,6 +62,11 @@ describe('finite desktop bridge validation', () => {
       workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts',
       expectedContent: 'before', content: 'after',
     }])
+    expect(parseOperationRequest('workspaces.files.create', {
+      workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/new.ts', content: 'created',
+    })).toEqual(['workspaces.files.create', {
+      workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/new.ts', content: 'created',
+    }])
     for (const [operation, payload] of [
       ['not-an-operation', {}],
       ['readiness', { url: 'http://localhost' }],
@@ -83,6 +88,10 @@ describe('finite desktop bridge validation', () => {
       ['workspaces.files.write', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts', expectedContent: 'x'.repeat(12_001), content: '' }],
       ['workspaces.files.write', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts', expectedContent: '', content: '😀'.repeat(4_097) }],
       ['workspaces.files.write', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts', expectedContent: '', content: 'bad\0text' }],
+      ['workspaces.files.create', { workspaceId: `workspace-${'a'.repeat(32)}`, path: '../outside', content: '' }],
+      ['workspaces.files.create', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/new.ts', content: 'x'.repeat(12_001) }],
+      ['workspaces.files.create', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/new.ts', content: '😀'.repeat(4_097) }],
+      ['workspaces.files.create', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/new.ts', content: 'bad\0text' }],
     ] as const) {
       expect(() => parseOperationRequest(operation, payload)).toThrow(TypeError)
     }
@@ -119,6 +128,38 @@ describe('finite desktop bridge validation', () => {
       { path: 'src/main.ts', content: 'x'.repeat(12_001) },
     ]) {
       expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, unsafe, 'workspaces.files.write')).toThrow(TypeError)
+    }
+  })
+
+  it('validates the narrow workspace file create response', () => {
+    const result = { path: 'src/new.ts', content: 'created' }
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, result, 'workspaces.files.create')).toEqual(result)
+    for (const unsafe of [
+      { path: '../outside', content: 'created' },
+      { path: 'src/new.ts', content: 'bad\0text' },
+      { path: 'src/new.ts', content: '😀'.repeat(4_097) },
+      { path: 'src/new.ts', content: 'x'.repeat(12_001) },
+    ]) {
+      expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, unsafe, 'workspaces.files.create')).toThrow(TypeError)
+    }
+  })
+
+  it('matches backend control-character rules for new file content', () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const create = (content: string) => parseOperationRequest('workspaces.files.create', {
+      workspaceId, path: 'src/new.ts', content,
+    })
+    expect(create('tabs\t, newlines\n, and carriage returns\r are allowed')).toEqual([
+      'workspaces.files.create', {
+        workspaceId, path: 'src/new.ts', content: 'tabs\t, newlines\n, and carriage returns\r are allowed',
+      },
+    ])
+    const unsupportedControls = [
+      ...Array.from({ length: 32 }, (_, code) => code).filter((code) => ![0x09, 0x0a, 0x0d].includes(code)),
+      ...Array.from({ length: 33 }, (_, index) => index + 0x7f),
+    ]
+    for (const code of unsupportedControls) {
+      expect(() => create(String.fromCharCode(code))).toThrow(TypeError)
     }
   })
 

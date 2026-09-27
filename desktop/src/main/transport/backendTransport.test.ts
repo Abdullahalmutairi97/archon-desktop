@@ -103,7 +103,9 @@ describe('backend transport', () => {
   })
 
   it('keeps checkout creation in its own narrow operation set', () => {
-    expect(WORKSPACE_OPERATIONS).toEqual(['workspaces.provision', 'workspaces.files.write'])
+    expect(WORKSPACE_OPERATIONS).toEqual([
+      'workspaces.provision', 'workspaces.files.write', 'workspaces.files.create',
+    ])
   })
 
   it('maps the bounded Prime task flow to fixed routes and main-owned POST policy', async () => {
@@ -521,6 +523,65 @@ describe('backend transport', () => {
       { workspaceId, path: 'src/main.ts', expectedContent: '', content: '😀'.repeat(4_097) },
     ]) {
       await expect(transport.invoke('workspaces.files.write', payload as never))
+        .rejects.toMatchObject({ code: 'invalid_payload' })
+    }
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('creates a bounded text file through a fixed owner-scoped POST without retries', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const payload = { workspaceId, path: 'src/new.ts', content: 'created' }
+    const fetcher = vi.fn<BackendFetch>(async () => response({ path: payload.path, content: payload.content }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.files.create', payload)).resolves.toEqual({
+      path: payload.path, content: payload.content,
+    })
+    const [url, init] = fetcher.mock.calls[0]
+    expect(String(url)).toBe(`http://127.0.0.1:8000/api/workspaces/${workspaceId}/files/create`)
+    expect(init?.method).toBe('POST')
+    expect(init?.redirect).toBe('manual')
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+    expect(new Headers(init?.headers).get('content-type')).toBe('application/json')
+    expect(new Headers(init?.headers).get('idempotency-key')).toBeNull()
+    expect(JSON.parse(String(init?.body))).toEqual({ path: payload.path, content: payload.content })
+    expect(fetcher).toHaveBeenCalledOnce()
+
+    const mismatchedResult = new BackendTransport({
+      ...localConnection,
+      fetch: vi.fn(async () => response({ path: payload.path, content: 'different' })),
+    })
+    await expect(mismatchedResult.invoke('workspaces.files.create', payload))
+      .rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('maps file create collisions to a stable conflict and never retries network failures', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const payload = { workspaceId, path: 'src/new.ts', content: 'created' }
+    const conflictFetch = vi.fn<BackendFetch>(async () => response({ detail: 'private server detail' }, 409))
+    const conflictTransport = new BackendTransport({ ...localConnection, fetch: conflictFetch })
+    const conflict = await conflictTransport.invoke('workspaces.files.create', payload).catch((error: unknown) => error)
+    expect(conflict).toMatchObject({ code: 'write_conflict' })
+    expect(String(conflict)).not.toContain('private server detail')
+    expect(conflictFetch).toHaveBeenCalledOnce()
+
+    const failedFetch = vi.fn<BackendFetch>(async () => { throw new Error('connection lost after request') })
+    const failedTransport = new BackendTransport({ ...localConnection, fetch: failedFetch })
+    await expect(failedTransport.invoke('workspaces.files.create', payload))
+      .rejects.toMatchObject({ code: 'network_error' })
+    expect(failedFetch).toHaveBeenCalledOnce()
+  })
+
+  it('rejects oversized or unsafe file creates before network access', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => response({ path: 'src/new.ts', content: 'created' }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    for (const payload of [
+      { workspaceId, path: '../outside', content: 'created' },
+      { workspaceId, path: 'src/new.ts', content: 'bad\0text' },
+      { workspaceId, path: 'src/new.ts', content: '😀'.repeat(4_097) },
+    ]) {
+      await expect(transport.invoke('workspaces.files.create', payload as never))
         .rejects.toMatchObject({ code: 'invalid_payload' })
     }
     expect(fetcher).not.toHaveBeenCalled()

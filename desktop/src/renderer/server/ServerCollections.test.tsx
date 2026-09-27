@@ -211,12 +211,17 @@ describe('ServerCollections', () => {
       workspace_id: workspaceId, root: `/srv/archon/workspaces/${workspaceId}`,
       project_id: 'project-1', base_revision: 'a'.repeat(40), head_revision: 'a'.repeat(40), generation: 1,
     }
-    const { bridge, apiInvoke } = fakeBridge((operation) => {
+    const { bridge, apiInvoke } = fakeBridge((operation, payload) => {
       if (operation === 'workspaces.files.list') return Promise.resolve({
         path: '', entries: [{ name: 'README.md', path: 'README.md', kind: 'file', size: 5 }], truncated: false,
       })
-      if (operation === 'workspaces.files.read') return Promise.resolve({ path: 'README.md', content: 'hello', truncated: false })
+      if (operation === 'workspaces.files.read') {
+        const path = typeof payload === 'object' && payload !== null && 'path' in payload
+          ? String(payload.path) : 'README.md'
+        return Promise.resolve({ path, content: path === 'draft.md' ? '# Draft' : 'hello', truncated: false })
+      }
       if (operation === 'workspaces.files.write') return Promise.resolve({ path: 'README.md', content: 'updated' })
+      if (operation === 'workspaces.files.create') return Promise.resolve({ path: 'draft.md', content: '# Draft' })
       return collections([], [], [], [workspace])(operation)
     })
     render(<ServerCollections bridge={bridge} connection={connection()} />)
@@ -241,6 +246,16 @@ describe('ServerCollections', () => {
       workspaceId, path: 'README.md', expectedContent: 'hello', content: 'updated',
     })
     await waitFor(() => expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.files.list')).toHaveLength(2))
+
+    fireEvent.click(within(browser).getByRole('button', { name: 'New text file' }))
+    fireEvent.change(within(browser).getByRole('textbox', { name: 'Relative file path' }), { target: { value: 'draft.md' } })
+    fireEvent.change(within(browser).getByRole('textbox', { name: 'New file content' }), { target: { value: '# Draft' } })
+    fireEvent.click(within(browser).getByRole('button', { name: 'Create file' }))
+    await waitFor(() => expect(apiInvoke.mock.calls.some(([operation]) => operation === 'workspaces.files.create')).toBe(true))
+    expect(await within(browser).findByText('# Draft')).toBeInTheDocument()
+    expect(apiInvoke.mock.calls.find(([operation]) => operation === 'workspaces.files.create')?.[1]).toEqual({
+      workspaceId, path: 'draft.md', content: '# Draft',
+    })
   })
 
   it('creates one checkout from a registered project and refreshes the list after success', async () => {

@@ -191,6 +191,13 @@ class WorkspaceFileWriteRequest(BaseModel):
     content: str = Field(max_length=MAX_WORKSPACE_WRITE_CHARACTERS)
 
 
+class WorkspaceFileCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=MAX_RELATIVE_PATH_LENGTH)
+    content: str = Field(max_length=MAX_WORKSPACE_WRITE_CHARACTERS)
+
+
 class SessionProjectUpdate(BaseModel):
     project_id: str | None = Field(default=None, max_length=200)
 
@@ -1193,6 +1200,32 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         except Exception:
             # Avoid returning filesystem/database internals or request text.
             logger.exception("Workspace file save failed")
+            raise HTTPException(status_code=503, detail="Workspace file service is temporarily unavailable") from None
+
+    @app.post("/api/workspaces/{workspace_id}/files/create", dependencies=protected)
+    def create_workspace_file(workspace_id: str, payload: WorkspaceFileCreateRequest):
+        """Create a new visible text file while refusing active workspace tasks."""
+        workspace = current_owner_workspace(workspace_id)
+        root = workspace["root"]
+        try:
+            with workspace_file_write_lock:
+                with store.db.connect() as conn:
+                    active_task = conn.execute(
+                        """SELECT 1 FROM tasks
+                           WHERE status IN ('queued','running','cancelling')
+                             AND (cwd=? OR substr(cwd,1,length(?)+1)=? || '/')
+                           LIMIT 1""",
+                        (root, root, root),
+                    ).fetchone()
+                if active_task is not None:
+                    raise HTTPException(status_code=409, detail="Workspace has an active task")
+                return workspace_file_service.create_text(root, payload.path, payload.content)
+        except WorkspaceFilesError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Workspace file create failed")
             raise HTTPException(status_code=503, detail="Workspace file service is temporarily unavailable") from None
 
     @app.post("/api/workspaces", dependencies=protected)

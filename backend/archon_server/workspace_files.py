@@ -231,7 +231,7 @@ class _WorkspaceTraversal:
 
 
 class WorkspaceFileService:
-    """List, read, search, and safely replace bounded text under registered roots."""
+    """List, read, search, create, and safely replace text under registered roots."""
 
     @staticmethod
     def _encode_write_text(value: str) -> bytes:
@@ -373,6 +373,85 @@ class WorkspaceFileService:
                         os.unlink(temporary_name, dir_fd=parent_fd)
                     except OSError:
                         pass
+
+    def create_text(self, root: str, path: str, content: str) -> dict[str, str]:
+        """Create a visible UTF-8 file without replacing an existing directory entry."""
+        content_bytes = self._encode_write_text(content)
+        if any(
+            (ord(character) < 32 and character not in "\t\n\r")
+            or 127 <= ord(character) < 160
+            for character in content
+        ):
+            raise WorkspaceFilesError(400, "Workspace text contains unsupported control characters")
+        parts = _parse_relative_path(path, allow_root=False)
+        _validate_total_depth(root, parts)
+
+        with _WorkspaceTraversal(root) as traversal:
+            parent_fd = traversal.open_relative_directory(parts[:-1])
+            name = parts[-1]
+            traversal.verify_links()
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
+            try:
+                descriptor = os.open(name, flags, 0o600, dir_fd=parent_fd)
+            except FileExistsError:
+                raise WorkspaceFilesError(409, "Workspace path already exists") from None
+            except OSError as exc:
+                raise _WorkspaceTraversal._path_error(exc) from None
+
+            succeeded = False
+            created_identity: tuple[int, int, int] | None = None
+            try:
+                created_identity = _identity(os.fstat(descriptor))
+                os.fchmod(descriptor, 0o600)
+                remaining = memoryview(content_bytes)
+                while remaining:
+                    written = os.write(descriptor, remaining)
+                    if written <= 0:
+                        raise WorkspaceFilesError(503, "Workspace file service is temporarily unavailable")
+                    remaining = remaining[written:]
+                os.fsync(descriptor)
+
+                created = os.fstat(descriptor)
+                if (not stat.S_ISREG(created.st_mode) or created.st_nlink != 1
+                        or stat.S_IMODE(created.st_mode) != 0o600):
+                    raise WorkspaceFilesError(409, "Workspace file changed during the request")
+                try:
+                    linked = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                except OSError as exc:
+                    raise WorkspaceFilesError(409, "Workspace file changed during the request") from exc
+                if (not stat.S_ISREG(linked.st_mode) or linked.st_nlink != 1
+                        or not _same_version(created, linked)):
+                    raise WorkspaceFilesError(409, "Workspace file changed during the request")
+
+                traversal.verify_links()
+                os.fsync(parent_fd)
+                traversal.verify_links()
+                succeeded = True
+                return {"path": path, "content": content}
+            except WorkspaceFilesError:
+                raise
+            except OSError:
+                raise WorkspaceFilesError(
+                    503, "Workspace file service is temporarily unavailable",
+                ) from None
+            finally:
+                if not succeeded and created_identity is not None:
+                    try:
+                        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                        if stat.S_ISREG(current.st_mode) and _identity(current) == created_identity:
+                            os.unlink(name, dir_fd=parent_fd)
+                            try:
+                                os.fsync(parent_fd)
+                            except OSError:
+                                pass
+                    except OSError:
+                        # Preserve the original failure and never remove a path
+                        # that no longer names the inode created by this call.
+                        pass
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
 
     def search_text(self, root: str, query: str) -> dict[str, Any]:
         """Search a bounded prefix of visible text files under one workspace."""
