@@ -75,6 +75,23 @@ describe('LocalCodexPanel', () => {
     expect(screen.getByText('/work/chosen')).toBeInTheDocument()
   })
 
+  it('shows a workspace registered from Server work when returning to Local Codex', async () => {
+    const fake = fakeBridge()
+    const workspaceProject = { id: 'codex-project:workspace', name: 'Workspace checkout', rootPath: '/work/checkouts/one' }
+    let items = [project]
+    fake.localCodex.listProjects.mockImplementation(async () => items)
+    const view = render(<LocalCodexPanel bridge={fake.bridge} active />)
+    await screen.findByRole('option', { name: 'Example project' })
+
+    view.rerender(<LocalCodexPanel bridge={fake.bridge} active={false} />)
+    items = [project, workspaceProject]
+    view.rerender(<LocalCodexPanel bridge={fake.bridge} active />)
+
+    expect(await screen.findByRole('option', { name: 'Workspace checkout' })).toBeInTheDocument()
+    expect(fake.localCodex.listProjects).toHaveBeenCalledTimes(2)
+    expect(fake.localCodex.subscribe).toHaveBeenCalledTimes(1)
+  })
+
   it('preserves completion received before the start response', async () => {
     const fake = fakeBridge()
     const pending = deferred<LocalCodexTurnDto>()

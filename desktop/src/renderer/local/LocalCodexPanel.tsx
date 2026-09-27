@@ -101,6 +101,7 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
   const projectRetryTimer = useRef<number | undefined>(undefined)
   const sessionsRetryTimer = useRef<number | undefined>(undefined)
   const sessionsLoadRequest = useRef(0)
+  const wasActive = useRef(active)
   const formId = useId()
   const api = bridge?.localCodex
   const isCurrent = (current: Session) => current.alive && session.current === current
@@ -231,6 +232,15 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
     }
     // Visibility deliberately does not control the subscription or task lifetime.
   }, [api])
+
+  // The Server work route can register a paired checkout while this panel stays
+  // mounted but hidden. Refresh projects when the user returns to Local Codex.
+  useEffect(() => {
+    const becameActive = active && !wasActive.current
+    wasActive.current = active
+    const current = session.current
+    if (becameActive && current?.ready) void loadProjects(current)
+  }, [active, api])
 
   useEffect(() => {
     setSessions([])
