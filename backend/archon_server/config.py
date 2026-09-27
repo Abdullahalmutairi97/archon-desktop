@@ -94,3 +94,7 @@ class Settings(BaseSettings):
     @property
     def database_path(self) -> Path:
         return self.data_dir / "archon-desktop.db"
+
+    @property
+    def runner_journal_path(self) -> Path:
+        return self.data_dir / "runner-journal" / "runner.sqlite3"

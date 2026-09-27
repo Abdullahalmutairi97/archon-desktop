@@ -11,6 +11,7 @@ from typing import Any, Callable, Protocol, Mapping
 
 from .db import Database
 from .hermes_runner import RunnerCancelled
+from .runner_journal import JournalEntry, RunnerJournal
 from .runtimes import RuntimeRegistry
 
 
@@ -40,6 +41,12 @@ def is_quota_error(error: str) -> bool:
     """Recognise provider exhaustion without confusing ordinary task failures."""
     text = error.lower()
     return bool(re.search(r"\b(?:rate[ -]?limit|quota|usage limit|too many requests|429)\b", text))
+
+
+def _runner_event_key(task_id: str, attempt_id: str, event_number: int) -> str:
+    """Build a stable journal key unique to one event within a captured attempt."""
+    identity = f"{task_id}\0{attempt_id}\0{event_number}".encode("utf-8")
+    return "task-event-" + hashlib.sha256(identity).hexdigest()
 
 
 def hash_request_payload(payload: Mapping[str, Any]) -> str:
@@ -411,6 +418,91 @@ class TaskStore:
             self._append_event(conn, task_id, event_type, data, attempt_id=attempt_id)
             return True
 
+    @staticmethod
+    def _validate_runner_id(runner_id: str) -> None:
+        if not isinstance(runner_id, str) or not runner_id.strip():
+            raise ValueError("runner_id must be a non-empty string")
+        try:
+            runner_id_bytes = runner_id.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("runner_id must be valid UTF-8") from exc
+        if len(runner_id_bytes) > 256:
+            raise ValueError("runner_id must be at most 256 UTF-8 bytes")
+
+    def runner_generation_state(self, runner_id: str) -> dict[str, Any] | None:
+        """Return the durable active runner generation without changing it."""
+        self._validate_runner_id(runner_id)
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """SELECT runner_id,active_generation,last_runner_seq
+                   FROM runner_generation_state WHERE runner_id=?""",
+                (runner_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "runner_id": row["runner_id"],
+            "active_generation": int(row["active_generation"]),
+            "last_runner_seq": int(row["last_runner_seq"]),
+        }
+
+    def activate_runner_generation(
+        self,
+        runner_id: str,
+        *,
+        expected_generation: int,
+        expected_last_runner_seq: int,
+    ) -> dict[str, Any]:
+        """Explicitly fence a lost/restored journal by advancing one generation.
+
+        Callers must pass the generation and sequence from a prior state
+        inspection. The compare-and-set refuses concurrent coordinator progress;
+        old receipts are retained, while the new generation starts at sequence 1.
+        Initial generation 1 is created by the first valid delivery instead.
+        """
+        self._validate_runner_id(runner_id)
+        if (isinstance(expected_generation, bool) or not isinstance(expected_generation, int)
+                or expected_generation < 1):
+            raise ValueError("expected_generation must be a positive integer")
+        if (isinstance(expected_last_runner_seq, bool)
+                or not isinstance(expected_last_runner_seq, int)
+                or expected_last_runner_seq < 0):
+            raise ValueError("expected_last_runner_seq must be a non-negative integer")
+        if expected_generation >= 2**63 - 1:
+            raise ValueError("Runner journal generation cannot be advanced further")
+
+        next_generation = expected_generation + 1
+        with self.db.transaction() as conn:
+            state = conn.execute(
+                """SELECT active_generation,last_runner_seq FROM runner_generation_state
+                   WHERE runner_id=?""",
+                (runner_id,),
+            ).fetchone()
+            if state is None:
+                raise ValueError("Runner generation state does not exist; initial generation starts on delivery")
+            if (int(state["active_generation"]) != expected_generation
+                    or int(state["last_runner_seq"]) != expected_last_runner_seq):
+                raise ValueError("Runner generation state changed since inspection; refusing activation")
+            if conn.execute(
+                """SELECT 1 FROM runner_event_receipts
+                   WHERE runner_id=? AND journal_generation=? LIMIT 1""",
+                (runner_id, next_generation),
+            ).fetchone():
+                raise ValueError("Next runner generation already has receipts; refusing activation")
+            updated = conn.execute(
+                """UPDATE runner_generation_state
+                   SET active_generation=?,last_runner_seq=0
+                   WHERE runner_id=? AND active_generation=? AND last_runner_seq=?""",
+                (next_generation, runner_id, expected_generation, expected_last_runner_seq),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("Runner generation state changed since inspection; refusing activation")
+        return {
+            "runner_id": runner_id,
+            "active_generation": next_generation,
+            "last_runner_seq": 0,
+        }
+
     def _deliver_runner_journal_event(
         self,
         runner_id: str,
@@ -430,14 +522,7 @@ class TaskStore:
         durable receipt, but it cannot append a task event or keep session-binding
         side effects.
         """
-        if not isinstance(runner_id, str) or not runner_id.strip():
-            raise ValueError("runner_id must be a non-empty string")
-        try:
-            runner_id_bytes = runner_id.encode("utf-8")
-        except UnicodeEncodeError as exc:
-            raise ValueError("runner_id must be valid UTF-8") from exc
-        if len(runner_id_bytes) > 256:
-            raise ValueError("runner_id must be at most 256 UTF-8 bytes")
+        self._validate_runner_id(runner_id)
         if (isinstance(journal_generation, bool) or not isinstance(journal_generation, int)
                 or journal_generation < 1):
             raise ValueError("journal_generation must be a positive integer")
@@ -955,11 +1040,22 @@ class TaskStore:
 
 
 class TaskEngine:
-    def __init__(self, store: TaskStore, runner: Runner | Mapping[str, Runner], poll_seconds: float = 0.5, quota_retry_seconds: float = 18000, *, registry: RuntimeRegistry | None = None, preflight: Callable[[dict[str, Any]], None] | None = None):
+    def __init__(
+        self,
+        store: TaskStore,
+        runner: Runner | Mapping[str, Runner],
+        poll_seconds: float = 0.5,
+        quota_retry_seconds: float = 18000,
+        *,
+        registry: RuntimeRegistry | None = None,
+        preflight: Callable[[dict[str, Any]], None] | None = None,
+        journal: RunnerJournal | None = None,
+    ):
         self.store = store
         self.runner = runner
         self.registry = registry
         self.preflight = preflight
+        self.journal = journal
         self.poll_seconds = poll_seconds
         # Retain the constructor argument for callers; started work is no longer
         # replayed automatically after a provider error.
@@ -968,6 +1064,10 @@ class TaskEngine:
         self._recovered = False
 
     async def run_once(self, *, worker_id: str | None = None, tracker=None) -> bool:
+        # Keep the runner sequence contiguous before claiming more work. If a
+        # prior coordinator delivery failed, replay must succeed before this
+        # worker can emit events for another task.
+        self.replay_unacked()
         task = self.store.claim_next()
         if task is None:
             return False
@@ -977,13 +1077,32 @@ class TaskEngine:
         # This callback is adapter-only ephemeral state. It is never part of a
         # persisted task, event, or result payload.
         task["_attempt_active"] = lambda: self.store.attempt_active(task["id"], attempt_id)
+        emitted_event_count = 0
 
         async def emit(event_type: str, data: dict[str, Any]) -> None:
+            nonlocal emitted_event_count
             # Hermes announces its session id on stderr as soon as it has one,
             # long before the task finishes. Persist it the moment it arrives so
             # the row is addressable while it is still running — otherwise every
             # follow-up prompt has no session to continue and opens a new one.
-            self.store.append_running_event(task["id"], event_type, data, attempt_id=attempt_id)
+            if self.journal is None:
+                self.store.append_running_event(task["id"], event_type, data, attempt_id=attempt_id)
+                return
+
+            _, canonical_data = _canonical_runner_envelope(
+                task["id"], attempt_id, event_type, data,
+            )
+            emitted_event_count += 1
+            payload = {
+                "task_id": task["id"],
+                "attempt_id": attempt_id,
+                "event_type": event_type,
+                "data": canonical_data,
+            }
+            entry = self.journal.append(
+                _runner_event_key(task["id"], attempt_id, emitted_event_count), payload,
+            )
+            self._deliver_journal_entry(entry)
 
         try:
             if self.registry is not None:
@@ -1024,6 +1143,55 @@ class TaskEngine:
             if worker_id is not None and tracker is not None:
                 tracker.finished(worker_id)
         return True
+
+    def replay_unacked(self) -> int:
+        """Deliver every committed journal entry before workers start.
+
+        Each entry stays in the runner outbox unless TaskStore returns from its
+        transaction with a durable receipt. Delivery or acknowledgement errors
+        propagate so startup cannot silently skip pending events.
+        """
+        if self.journal is None:
+            return 0
+        entries = self.journal.replay_unacked()
+        for entry in entries:
+            self._deliver_journal_entry(entry)
+        return len(entries)
+
+    def _deliver_journal_entry(self, entry: JournalEntry) -> dict[str, Any]:
+        journal = self.journal
+        if journal is None:
+            raise RuntimeError("Runner journal is not configured")
+        payload = entry.payload
+        if not isinstance(payload, dict):
+            raise ValueError("Runner journal event payload must be an object")
+        task_id = payload.get("task_id")
+        attempt_id = payload.get("attempt_id")
+        event_type = payload.get("event_type")
+        data = payload.get("data")
+        if (not isinstance(task_id, str) or not task_id
+                or not isinstance(attempt_id, str) or not attempt_id
+                or not isinstance(event_type, str)
+                or not isinstance(data, dict)):
+            raise ValueError("Runner journal event payload is malformed")
+        receipt = self.store._deliver_runner_journal_event(
+            entry.runner_id,
+            entry.journal_generation,
+            entry.runner_seq,
+            task_id=task_id,
+            attempt_id=attempt_id,
+            event_type=event_type,
+            data=data,
+        )
+        # _deliver_runner_journal_event returns only after the event and receipt
+        # transaction commits. Acking any earlier could lose the runner event.
+        if (not isinstance(receipt, dict)
+                or receipt.get("runner_id") != entry.runner_id
+                or receipt.get("journal_generation") != entry.journal_generation
+                or receipt.get("runner_seq") != entry.runner_seq):
+            raise RuntimeError("TaskStore did not return a durable runner event receipt")
+        journal.acknowledge(entry.runner_seq)
+        return receipt
 
     def _runner_for(self, task: dict[str, Any]) -> Runner:
         if self.registry is not None:

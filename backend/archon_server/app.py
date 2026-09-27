@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import stat
 import uuid
 from contextlib import asynccontextmanager
 from collections.abc import Mapping
@@ -42,12 +43,71 @@ from .services.kanban import KanbanService
 from .services.voice import VoiceService
 from .services.workspace import ProjectService, SessionService, PrimeSessionService
 from .tasks import TaskEngine, TaskStore, hash_request_payload
+from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
 
 
 logger = logging.getLogger(__name__)
 WEBSOCKET_AUTH_TIMEOUT_SECONDS = 5.0
+LOCAL_TASK_RUNNER_ID = "archon-desktop-local"
+
+
+def _prepare_private_runner_journal_dir(path: Path) -> None:
+    """Create or tighten the journal directory without following its final symlink."""
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise UnsafeJournalPath("cannot safely open runner journal directory") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+            raise UnsafeJournalPath("runner journal directory must be owned by the current user")
+        if stat.S_IMODE(info.st_mode) != 0o700:
+            os.fchmod(descriptor, 0o700)
+    finally:
+        os.close(descriptor)
+
+
+def _validate_runner_journal_state(store: TaskStore, journal: RunnerJournal) -> None:
+    """Reject coordinator or journal rollback before worker recovery can claim tasks."""
+    state = store.runner_generation_state(journal.runner_id)
+    entries = journal.replay_unacked()
+    journal_last = journal.last_sequence
+    pending = {entry.runner_seq for entry in entries}
+
+    if state is None:
+        # With no coordinator receipt, every committed runner event must still
+        # be available for replay. Otherwise the coordinator database was
+        # restored behind an already-acknowledged journal event.
+        if len(pending) != journal_last or any(
+            sequence != expected
+            for expected, sequence in enumerate(sorted(pending), start=1)
+        ):
+            raise RunnerJournalError(
+                "coordinator runner state is missing committed journal history"
+            )
+        return
+
+    active_generation = int(state["active_generation"])
+    coordinator_last = int(state["last_runner_seq"])
+    if active_generation != journal.journal_generation:
+        raise RunnerJournalError("coordinator and local runner journal generations disagree")
+    if coordinator_last > journal_last:
+        raise RunnerJournalError("local runner journal is behind coordinator delivery state")
+    future_pending = sorted(sequence for sequence in pending if sequence > coordinator_last)
+    missing_count = journal_last - coordinator_last
+    if len(future_pending) != missing_count or any(
+        sequence != coordinator_last + offset
+        for offset, sequence in enumerate(future_pending, start=1)
+    ):
+        raise RunnerJournalError("local runner journal cannot replay coordinator delivery gap")
 
 
 class TaskCreate(BaseModel):
@@ -249,6 +309,21 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     agents = AgentService(settings.hermes_home, settings.profile)
     kanban = KanbanService(settings.kanban_db, settings.hermes_executable, agents)
     store = TaskStore(Database(settings.database_path))
+    _prepare_private_runner_journal_dir(settings.runner_journal_path.parent)
+    coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
+    try:
+        settings.runner_journal_path.lstat()
+    except FileNotFoundError:
+        if coordinator_runner_state is not None:
+            raise RunnerJournalError(
+                "local runner journal is missing while coordinator delivery state exists"
+            )
+    journal = RunnerJournal(
+        settings.runner_journal_path,
+        LOCAL_TASK_RUNNER_ID,
+        1,
+    )
+    _validate_runner_journal_state(store, journal)
     selected_runner = {
         "prime": PrimeRunner(
             settings.prime_executable,
@@ -323,7 +398,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         task['cwd'] = revalidate_workspace(task.get('cwd'), admitted.authorized_roots)
 
     engine = TaskEngine(store, selected_runner, settings.worker_poll_seconds, settings.quota_retry_seconds,
-                        registry=registry, preflight=preflight)
+                        registry=registry, preflight=preflight, journal=journal)
     for adapter in selected_runner.values():
         if isinstance(adapter, (PrimeRunner, PiRunner)):
             adapter.preflight = preflight
@@ -367,6 +442,9 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         app.state.runtimes = registry
         app.state.worker_tracker = worker_tracker
         app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
+        # Consume durable runner events before any worker can recover an
+        # inflight task or claim queued work.
+        engine.replay_unacked()
         if settings.start_worker:
             # Each worker shares the engine's one-time recovery guard and
             # claims its own row atomically.
