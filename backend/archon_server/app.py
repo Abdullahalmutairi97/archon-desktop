@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import pwd
 import re
 import stat
 import threading
@@ -176,6 +177,7 @@ class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     path: str | None = Field(default=None, max_length=1000)
     description: str = Field(default="", max_length=2000)
+    existing_git: bool = False
 
 
 class WorkspaceProvisionRequest(BaseModel):
@@ -1102,6 +1104,8 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
 
     @app.post("/api/projects", dependencies=protected)
     def create_project(payload: ProjectCreate):
+        if payload.existing_git and (not payload.path or not Path(payload.path).is_absolute()):
+            raise HTTPException(status_code=400, detail="Existing Git project path must be absolute")
         root = settings.archon_root.expanduser().resolve()
         if payload.path:
             requested = Path(payload.path).expanduser()
@@ -1109,16 +1113,29 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         else:
             slug = re.sub(r"[^a-z0-9]+", "-", payload.name.lower()).strip("-") or "project"
             target = (root / slug).resolve()
-        # The default stays in the configured projects root, while an explicit
-        # folder may point elsewhere inside the server account's home (matching
-        # existing projects such as daily-projects and sandbox workspaces).
-        allowed_root = root.parent
+        # The default archon_root is the account home; do not widen its allowed
+        # project area to /home and thereby include other accounts' folders.
+        # A custom root retains its historical sibling-project behavior.
+        account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+        allowed_root = root if root == account_home else root.parent
         try:
             target.relative_to(allowed_root)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"Project folder must be inside {allowed_root}") from exc
         try:
-            return {"project": projects.create(payload.name, target, payload.description)}
+            project = projects.create(
+                payload.name, target, payload.description, require_existing=payload.existing_git,
+            )
+            if payload.existing_git:
+                try:
+                    workspace_checkout_service().head_revision(project_id=project["id"])
+                except (ValueError, RuntimeError, OSError) as exc:
+                    projects.delete(project["id"])
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Project folder is not a usable Git checkout with a commit",
+                    ) from exc
+            return {"project": project}
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except OSError as exc:

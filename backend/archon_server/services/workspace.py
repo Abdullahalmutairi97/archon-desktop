@@ -86,13 +86,16 @@ class ProjectService:
                 """
             )
 
-    def create(self, name: str, path: Path, description: str = "") -> dict[str, Any]:
+    def create(self, name: str, path: Path, description: str = "", *, require_existing: bool = False) -> dict[str, Any]:
         clean_name = name.strip()
         if not clean_name:
             raise ValueError("Project name is required")
-        root = path.expanduser().resolve()
+        root = path.expanduser().resolve(strict=require_existing)
+        if require_existing and not root.is_dir():
+            raise ValueError("Existing project folder is required")
         created_folder = not root.exists()
-        root.mkdir(parents=True, exist_ok=True)
+        if not require_existing:
+            root.mkdir(parents=True, exist_ok=True)
         slug = re.sub(r"[^a-z0-9]+", "-", clean_name.lower()).strip("-") or "project"
         project_id = f"project-{uuid.uuid4().hex[:12]}"
         from datetime import datetime, timezone

@@ -52,6 +52,9 @@ describe('finite desktop bridge validation', () => {
     expect(parseOperationRequest('workspaces.provision', {
       projectId: 'project-1', revision: 'a'.repeat(40),
     })).toEqual(['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(40) }])
+    expect(parseOperationRequest('projects.create', {
+      name: 'Existing project', path: '/srv/archon/projects/existing',
+    })).toEqual(['projects.create', { name: 'Existing project', path: '/srv/archon/projects/existing' }])
     expect(parseOperationRequest('workspaces.files.search', {
       workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent',
     })).toEqual(['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent' }])
@@ -84,6 +87,12 @@ describe('finite desktop bridge validation', () => {
       ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(65) }],
       ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(40), root: '/tmp' }],
       ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(64), ownerId: 'someone' }],
+      ['projects.create', { name: 'Project', path: 'relative/path' }],
+      ['projects.create', { name: 'Project', path: '/srv/project/../outside' }],
+      ['projects.create', { name: '   ', path: '/srv/project' }],
+      ['projects.create', { name: 'x'.repeat(121), path: '/srv/project' }],
+      ['projects.create', { name: 'Project', path: `/srv/${'p'.repeat(1_000)}` }],
+      ['projects.create', { name: 'Project', path: '/srv/project', existing_git: true }],
       ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: '  ' }],
       ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'q'.repeat(129) }],
       ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent\nsecret' }],
@@ -255,6 +264,17 @@ describe('finite desktop bridge validation', () => {
       projects: Array.from({ length: 501 }, () => ({ id: 'p' })),
     }, 'projects.list')).toThrow(TypeError)
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { cursor: -1 }, 'events.cursor')).toThrow(TypeError)
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      project: { id: 'project-1', name: 'Existing project', primary_path: '/srv/archon/projects/existing' },
+    }, 'projects.create')).toEqual({
+      project: { id: 'project-1', name: 'Existing project', primary_path: '/srv/archon/projects/existing' },
+    })
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      project: { id: 'project-1', api_token: 'sentinel' },
+    }, 'projects.create')).toThrow(TypeError)
+    expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
+      project: { id: 'project-1' }, extra: true,
+    }, 'projects.create')).toThrow(TypeError)
   })
 
   it('accepts only the narrow Prime submit/get/events/cancel payloads', () => {

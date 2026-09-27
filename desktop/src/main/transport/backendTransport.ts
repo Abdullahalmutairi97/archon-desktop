@@ -28,6 +28,10 @@ export const READ_ONLY_OPERATIONS: readonly OperationName[] = Object.freeze([
   'workspaces.files.search',
 ])
 
+export const PROJECT_OPERATIONS: readonly OperationName[] = Object.freeze([
+  'projects.create',
+])
+
 export const TASK_OPERATIONS: readonly OperationName[] = Object.freeze([
   'runtimes.list',
   'tasks.submit',
@@ -45,6 +49,7 @@ export const WORKSPACE_OPERATIONS: readonly OperationName[] = Object.freeze([
 const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Object.freeze({
   readiness: 'GET',
   'projects.list': 'GET',
+  'projects.create': 'POST',
   'projects.head': 'GET',
   'sessions.list': 'GET',
   'tasks.list': 'GET',
@@ -79,6 +84,7 @@ const RESPONSE_PAYLOAD_LIMITS: BoundedPayloadLimits = Object.freeze({
 const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   readiness: '/api/readiness',
   'projects.list': '/api/projects',
+  'projects.create': '/api/projects',
   'projects.head': '/api/projects',
   'sessions.list': '/api/sessions',
   'tasks.list': '/api/tasks',
@@ -485,6 +491,10 @@ function checkResponseStatus(operation: OperationName, response: Response): void
 }
 
 function requestBody(operation: OperationName, payload: OperationMap[OperationName]['payload']): string | undefined {
+  if (operation === 'projects.create') {
+    const projectPayload = payload as OperationMap['projects.create']['payload']
+    return JSON.stringify({ name: projectPayload.name, path: projectPayload.path, existing_git: true })
+  }
   if (operation === 'tasks.submit') {
     const submitPayload = payload as OperationMap['tasks.submit']['payload']
     return JSON.stringify({
@@ -717,7 +727,7 @@ export class BackendTransport {
         Accept: 'application/json',
         Authorization: `Bearer ${connection.token}`,
       }
-      if (operation === 'tasks.submit' || operation === 'workspaces.provision' ||
+      if (operation === 'projects.create' || operation === 'tasks.submit' || operation === 'workspaces.provision' ||
           operation === 'workspaces.files.write' || operation === 'workspaces.files.create') {
         headers['Content-Type'] = 'application/json'
       }

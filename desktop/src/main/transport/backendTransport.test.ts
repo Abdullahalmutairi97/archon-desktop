@@ -3,6 +3,7 @@ import { BRIDGE_CHANNELS, parseBridgeResponse } from '../../shared/bridge/valida
 import {
   BackendTransport,
   BackendTransportError,
+  PROJECT_OPERATIONS,
   READ_ONLY_OPERATIONS,
   TASK_OPERATIONS,
   WORKSPACE_OPERATIONS,
@@ -101,6 +102,7 @@ describe('backend transport', () => {
     expect(TASK_OPERATIONS).toEqual([
       'runtimes.list', 'tasks.submit', 'tasks.get', 'tasks.events', 'tasks.cancel',
     ])
+    expect(PROJECT_OPERATIONS).toEqual(['projects.create'])
   })
 
   it('keeps checkout creation in its own narrow operation set', () => {
@@ -300,6 +302,27 @@ describe('backend transport', () => {
     expect(init?.method).toBe('GET')
     expect(init?.redirect).toBe('manual')
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+  })
+
+  it('registers an existing Git project through the fixed authenticated POST route', async () => {
+    const project = { id: 'project-1', name: 'Existing project', primary_path: '/srv/archon/projects/existing' }
+    const fetcher = vi.fn<BackendFetch>(async () => response({ project }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('projects.create', {
+      name: 'Existing project', path: project.primary_path,
+    })).resolves.toEqual({ project })
+    expect(fetcher).toHaveBeenCalledOnce()
+    const [url, init] = fetcher.mock.calls[0]
+    expect(String(url)).toBe('http://127.0.0.1:8000/api/projects')
+    expect(init?.method).toBe('POST')
+    expect(init?.redirect).toBe('manual')
+    const headers = new Headers(init?.headers)
+    expect(headers.get('authorization')).toBe(`Bearer ${localConnection.token}`)
+    expect(headers.get('content-type')).toBe('application/json')
+    expect(init?.body).toBe(JSON.stringify({
+      name: 'Existing project', path: project.primary_path, existing_git: true,
+    }))
   })
 
   it('loads server-managed workspaces through one fixed read-only route', async () => {

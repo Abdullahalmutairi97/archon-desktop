@@ -127,6 +127,12 @@ export interface ProjectHeadPayload {
   projectId: string
 }
 
+/** Registers an existing absolute backend-side Git project directory. */
+export interface ProjectCreatePayload {
+  name: string
+  path: string
+}
+
 export interface WorkspaceFileListPayload {
   workspaceId: string
   path: string
@@ -212,6 +218,10 @@ export interface OperationMap {
   'projects.list': {
     payload: EmptyPayload
     result: { projects: readonly JsonRecord[] }
+  }
+  'projects.create': {
+    payload: ProjectCreatePayload
+    result: { project: JsonRecord }
   }
   'projects.head': {
     payload: ProjectHeadPayload

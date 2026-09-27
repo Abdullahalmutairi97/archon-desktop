@@ -66,6 +66,71 @@ describe('ServerCollections', () => {
     expect(apiInvoke).not.toHaveBeenCalled()
   })
 
+  it('registers an existing backend Git project and refreshes the project collection', async () => {
+    const pendingCreate = deferred<unknown>()
+    let registered = false
+    const { bridge, apiInvoke } = fakeBridge((operation, payload) => {
+      if (operation === 'projects.create') {
+        expect(payload).toEqual({ name: 'Backend project', path: '/home/archon/backend-project' })
+        registered = true
+        return pendingCreate.promise
+      }
+      return collections(registered ? [{ id: 'project-new', name: 'Backend project' }] : [])(operation)
+    })
+    render(<ServerCollections bridge={bridge} connection={connection()} />)
+
+    expect(screen.getByText('Use an absolute path inside the backend’s allowed project area. The directory must already exist and contain a Git repository.')).toBeInTheDocument()
+    const name = screen.getByRole('textbox', { name: 'Project name' })
+    const path = screen.getByRole('textbox', { name: 'Backend Git directory path' })
+    const submit = screen.getByRole('button', { name: 'Register server project' })
+    fireEvent.change(name, { target: { value: 'Backend project' } })
+    fireEvent.change(path, { target: { value: 'relative/project' } })
+    expect(submit).toBeDisabled()
+    expect(apiInvoke.mock.calls.some(([operation]) => operation === 'projects.create')).toBe(false)
+
+    fireEvent.change(path, { target: { value: ' /home/archon/backend-project ' } })
+    fireEvent.click(submit)
+    expect(await screen.findByRole('button', { name: 'Registering project…' })).toBeDisabled()
+    expect(apiInvoke.mock.calls.find(([operation]) => operation === 'projects.create')?.[1]).toEqual({
+      name: 'Backend project', path: '/home/archon/backend-project',
+    })
+
+    await act(async () => { pendingCreate.resolve({ project: { id: 'project-new', name: 'Backend project' } }) })
+    const registration = screen.getByRole('region', { name: 'Register server project' })
+    expect(await within(registration).findByRole('status')).toHaveTextContent('Registered “Backend project” from the server Git repository.')
+    expect(await screen.findByText('Backend project')).toBeInTheDocument()
+    await waitFor(() => expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'projects.list')).toHaveLength(2))
+  })
+
+  it('explains that server-side registration needs an existing Git directory when rejected', async () => {
+    const { bridge } = fakeBridge((operation) => {
+      if (operation === 'projects.create') return Promise.reject(Object.assign(new Error('bad path'), { code: 'http_error' }))
+      return collections()(operation)
+    })
+    render(<ServerCollections bridge={bridge} connection={connection()} />)
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Missing project' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Backend Git directory path' }), { target: { value: '/srv/missing/project' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Register server project' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Check that the directory exists, is a Git repository, and is inside the backend’s allowed project area.')
+  })
+
+  it('refreshes projects after an ambiguous registration failure before allowing a retry', async () => {
+    const { bridge, apiInvoke } = fakeBridge((operation) => {
+      if (operation === 'projects.create') return Promise.reject(Object.assign(new Error('connection lost'), { code: 'network_error' }))
+      return collections()(operation)
+    })
+    render(<ServerCollections bridge={bridge} connection={connection()} />)
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Maybe registered' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Backend Git directory path' }), { target: { value: '/home/archon/maybe-registered' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Register server project' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not confirm whether registration completed. The project list was refreshed; check for this project before retrying.')
+    await waitFor(() => expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'projects.list')).toHaveLength(2))
+  })
+
   it('uses only the finite list operations and renders only bounded fixed fields as server data', async () => {
     const htmlLikeName = '<img src=x onerror=alert(1)>'
     const { bridge, apiInvoke } = fakeBridge(collections(

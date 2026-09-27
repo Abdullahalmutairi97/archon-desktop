@@ -16,6 +16,7 @@ import type {
   OperationMap,
   OperationName,
   ProjectHeadPayload,
+  ProjectCreatePayload,
   RuntimeRecord,
   SessionsListPayload,
   TaskByIdPayload,
@@ -61,6 +62,7 @@ export type BridgeChannel = (typeof BRIDGE_CHANNELS)[keyof typeof BRIDGE_CHANNEL
 const operationNames = Object.freeze([
   'readiness',
   'projects.list',
+  'projects.create',
   'projects.head',
   'sessions.list',
   'tasks.list',
@@ -257,6 +259,20 @@ function parseProjectHeadPayload(value: unknown): ProjectHeadPayload {
   return Object.freeze({ projectId: record.projectId })
 }
 
+function parseProjectCreatePayload(value: unknown): ProjectCreatePayload {
+  const record = exactObject(value, ['name', 'path'])
+  if (!workspaceText(record.name, 120)) return fail()
+  if (!isCanonicalAbsoluteProjectPath(record.path)) return fail()
+  return Object.freeze({ name: record.name, path: record.path })
+}
+
+function isCanonicalAbsoluteProjectPath(value: unknown): value is string {
+  if (!boundedString(value, 1_000) || !value.startsWith('/') || /[\u0001-\u001f\u007f-\u009f]/u.test(value)) return false
+  if (value === '/') return true
+  if (value.endsWith('/')) return false
+  return value.slice(1).split('/').every((part) => part.length > 0 && part !== '.' && part !== '..')
+}
+
 function workspaceFilePath(value: unknown, allowRoot: boolean): value is string {
   if (typeof value !== 'string' || value.length > MAX_WORKSPACE_FILE_PATH_LENGTH) return false
   if (value === '') return allowRoot
@@ -399,6 +415,8 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseWorkspaceByIdPayload(payload)])
     case 'projects.head':
       return Object.freeze([operation, parseProjectHeadPayload(payload)])
+    case 'projects.create':
+      return Object.freeze([operation, parseProjectCreatePayload(payload)])
     case 'workspaces.files.list':
       return Object.freeze([operation, parseWorkspaceFileListPayload(payload)])
     case 'workspaces.files.read':
@@ -664,6 +682,10 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       const list = parseBoundedJson(record[key], { nodes: 0, estimatedBytes: 0, seen: new WeakSet<object>() })
       if (!Array.isArray(list) || list.some((item) => !isRecord(item))) return fail()
       return Object.freeze({ [key]: list }) as OperationMap[OperationName]['result']
+    }
+    case 'projects.create': {
+      const record = exactObject(value, ['project'])
+      return Object.freeze({ project: boundedJsonRecord(record.project) })
     }
     case 'workspaces.list': {
       const record = exactObject(value, ['workspaces'])

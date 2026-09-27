@@ -120,6 +120,97 @@ function CollectionSection({
   </section>
 }
 
+function isAbsoluteServerPath(value: string): boolean {
+  if (value.length > 1_000 || !value.startsWith('/') || /[\u0001-\u001f\u007f-\u009f]/u.test(value)) return false
+  if (value === '/') return true
+  if (value.endsWith('/')) return false
+  return value.slice(1).split('/').every((part) => part.length > 0 && part !== '.' && part !== '..')
+}
+
+function ServerProjectRegistration({ bridge, onRegistered }: { bridge: DesktopBridge; onRegistered: () => void }) {
+  const [name, setName] = useState('')
+  const [path, setPath] = useState('')
+  const [pending, setPending] = useState(false)
+  const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+  const lock = useRef(false)
+  const validPath = isAbsoluteServerPath(path.trim())
+  const projectName = name.trim()
+  const validName = projectName.length > 0 && !/[\u0001-\u001f\u007f-\u009f]/u.test(projectName)
+
+  async function registerProject(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    const serverPath = path.trim()
+    if (lock.current || !validName || !isAbsoluteServerPath(serverPath)) return
+    lock.current = true
+    setPending(true)
+    setFeedback(null)
+    try {
+      await bridge.api.invoke('projects.create', { name: projectName, path: serverPath })
+      setName('')
+      setPath('')
+      setFeedback({ kind: 'success', text: `Registered “${projectName}” from the server Git repository.` })
+      onRegistered()
+    } catch (error) {
+      const code = operationErrorCode(error)
+      const text = code === 'unauthorized'
+        ? 'Project registration was rejected. Return to Connection to re-enter the server token.'
+        : code === 'unsupported_operation'
+          ? 'This server does not support project registration yet.'
+          : code === 'http_error'
+            ? 'The server could not register this project. Check that the directory exists, is a Git repository, and is inside the backend’s allowed project area.'
+            : code === 'network_error' || code === 'invalid_response' || code === 'response_too_large'
+              ? 'Could not confirm whether registration completed. The project list was refreshed; check for this project before retrying.'
+              : 'Could not register this server project. Check the backend path and connection, then try again.'
+      setFeedback({ kind: 'error', text })
+      if (code === 'network_error' || code === 'invalid_response' || code === 'response_too_large') onRegistered()
+    } finally {
+      lock.current = false
+      setPending(false)
+    }
+  }
+
+  return <section className="server-project-registration" aria-label="Register server project">
+    <form className="server-project-form" onSubmit={(event) => { void registerProject(event) }}>
+      <h4>Register an existing Git project</h4>
+      <p>Use an absolute path inside the backend’s allowed project area. The directory must already exist and contain a Git repository.</p>
+      <label>
+        <span>Project name</span>
+        <input
+          aria-label="Project name"
+          type="text"
+          autoComplete="off"
+          required
+          maxLength={120}
+          value={name}
+          onChange={(event) => setName(event.currentTarget.value)}
+          disabled={pending}
+        />
+      </label>
+      <label>
+        <span>Backend Git directory path</span>
+        <input
+          aria-label="Backend Git directory path"
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          required
+          maxLength={1000}
+          placeholder="/path/to/my-project"
+          value={path}
+          onChange={(event) => setPath(event.currentTarget.value)}
+          disabled={pending}
+          aria-invalid={path.trim().length > 0 && !validPath}
+        />
+      </label>
+      {path.trim().length > 0 && !validPath && <p className="server-project-hint">Enter a canonical absolute POSIX path, such as <code>/path/to/my-project</code>.</p>}
+      <button type="submit" disabled={pending || !validName || !validPath}>
+        {pending ? 'Registering project…' : 'Register server project'}
+      </button>
+      {feedback && <p className={`server-project-feedback feedback-${feedback.kind}`} role={feedback.kind === 'error' ? 'alert' : 'status'}>{feedback.text}</p>}
+    </form>
+  </section>
+}
+
 function WorkspaceSection({
   bridge,
   state,
@@ -461,6 +552,8 @@ export function ServerCollections({
         : 'SERVER data unavailable. Check the server connection and token, then retry. No collection results are shown.'}</p>
       {configured && !accessRejected && <button type="button" onClick={() => setReload((current) => current + 1)}>Retry SERVER data</button>}
     </div>}
+
+    {bridge && configured && validGeneration && <ServerProjectRegistration key={`server-project-registration-${generation}`} bridge={bridge} onRegistered={() => setReload((current) => current + 1)} />}
 
     {(data || (bridge && configured)) && <div className="server-collections-grid">
       {data && <>

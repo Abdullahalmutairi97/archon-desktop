@@ -44,6 +44,44 @@ def _settings(tmp_path: Path) -> Settings:
     )
 
 
+def test_register_existing_git_project_only_accepts_usable_checkout(tmp_path):
+    settings = _settings(tmp_path)
+    source = tmp_path / "register-source"
+    source.mkdir()
+    _git(source, "init", "--quiet")
+    _git(source, "config", "user.name", "API Fixture")
+    _git(source, "config", "user.email", "api-fixture@example.invalid")
+    (source / "README.md").write_text("ready\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git(source, "commit", "--quiet", "-m", "fixture")
+    headers = {"Authorization": "Bearer workspace-api-token"}
+    plain = tmp_path / "not-git"
+    plain.mkdir()
+    absent = tmp_path / "absent"
+
+    with TestClient(create_app(settings)) as client:
+        for path in (plain, absent):
+            response = client.post("/api/projects", headers=headers, json={
+                "name": path.name, "path": str(path), "existing_git": True,
+            })
+            assert response.status_code in (400, 409)
+        relative = client.post("/api/projects", headers=headers, json={
+            "name": "relative", "path": "register-source", "existing_git": True,
+        })
+        assert relative.status_code == 400
+        assert not absent.exists()
+        assert client.get("/api/projects", headers=headers).json()["projects"] == []
+
+        response = client.post("/api/projects", headers=headers, json={
+            "name": "Registered source", "path": str(source), "existing_git": True,
+        })
+        assert response.status_code == 200
+        project = response.json()["project"]
+        assert project["primary_path"] == str(source)
+        head = client.get(f"/api/projects/{project['id']}/head", headers=headers)
+        assert head.json()["revision"] == _git(source, "rev-parse", "HEAD")
+
+
 def test_workspace_provision_api_requires_existing_bearer_auth(tmp_path):
     settings = _settings(tmp_path)
     with TestClient(create_app(settings)) as client:
