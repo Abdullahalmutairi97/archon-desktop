@@ -32,6 +32,26 @@ def rows(path, table):
         return conn.execute(f'SELECT * FROM {table}').fetchall()
 
 
+def seed_v3_database(path):
+    seed_legacy(path)
+    with sqlite3.connect(path) as conn:
+        for version, migration in (
+            (1, db_module.v001),
+            (2, db_module.v002),
+            (3, db_module.v003),
+        ):
+            migration.apply(conn)
+            if version == 1:
+                conn.execute(
+                    'CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,checksum TEXT NOT NULL,applied_at TEXT NOT NULL)'
+                )
+            conn.execute(
+                'INSERT INTO schema_migrations VALUES (?,?,?)',
+                (version, db_module.MIGRATION_CHECKSUMS[version], f'historical-v{version}'),
+            )
+            conn.execute(f'PRAGMA user_version={version}')
+
+
 def schema(path):
     with sqlite3.connect(path) as conn:
         return conn.execute('SELECT name,sql FROM sqlite_master ORDER BY name').fetchall()
@@ -44,16 +64,17 @@ def test_versioned_migration_preserves_history_and_verifiable_backup_restores_le
     original_schema = schema(path)
     db = Database(path)
     with db.connect() as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 3
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 4
         ledger = conn.execute('SELECT version,checksum FROM schema_migrations').fetchall()
         assert [(r[0], r[1]) for r in ledger] == [
             (1, db_module.MIGRATION_CHECKSUM), (2, db_module.MIGRATION_CHECKSUMS[2]),
             (3, db_module.MIGRATION_CHECKSUMS[3]),
+            (4, db_module.MIGRATION_CHECKSUMS[4]),
         ]
         assert conn.execute('SELECT request_hash FROM tasks').fetchall()[0][0] is None
         assert [tuple(r) for r in conn.execute('SELECT id,status,session_id FROM tasks ORDER BY id')] == [
             ('active', 'running', 'prime-active'), ('pending', 'queued', 'native-session-123')]
-    snapshots = list(tmp_path.glob('state.db.pre-v3-*.sqlite3'))
+    snapshots = list(tmp_path.glob('state.db.pre-v4-*.sqlite3'))
     assert len(snapshots) == 1
     assert stat.S_IMODE(snapshots[0].stat().st_mode) == 0o600
     assert db.migration_backup == snapshots[0]
@@ -68,12 +89,36 @@ def test_versioned_migration_preserves_history_and_verifiable_backup_restores_le
     for table, expected in original.items():
         assert rows(restored, table) == expected
     Database(path)
-    assert list(tmp_path.glob('state.db.pre-v3-*.sqlite3')) == snapshots
+    assert list(tmp_path.glob('state.db.pre-v4-*.sqlite3')) == snapshots
 
 
 def test_new_database_needs_no_snapshot(tmp_path):
     Database(tmp_path / 'new.db')
     assert list(tmp_path.glob('*.sqlite3')) == []
+
+
+def test_v4_adds_explicit_workspace_registry_without_guessing_legacy_mappings(tmp_path):
+    path = tmp_path / 'state-v3.db'
+    seed_v3_database(path)
+    before_tasks = rows(path, 'tasks')
+    before_events = rows(path, 'events')
+
+    Database(path)
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 4
+        assert conn.execute('SELECT id FROM tasks ORDER BY id').fetchall() == [
+            ('active',), ('pending',),
+        ]
+        assert conn.execute('SELECT seq,type FROM events').fetchall() == [(17, 'task.running')]
+        assert conn.execute('SELECT COUNT(*) FROM workspaces').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM workspace_native_sessions').fetchone()[0] == 0
+        owner = conn.execute(
+            "SELECT runtime_id,cwd,state FROM session_ownership WHERE session_id='native-session-123'"
+        ).fetchone()
+        assert owner == (None, '/workspace', 'review_required')
+    assert len(rows(path, 'tasks')) == len(before_tasks)
+    assert len(rows(path, 'events')) == len(before_events)
 
 
 def test_old_ad_hoc_schema_normalized_atomically(tmp_path):
@@ -133,7 +178,7 @@ def test_failed_migration_rolls_back_all_schema_and_data(tmp_path, monkeypatch):
     assert len(list(tmp_path.glob('*.sqlite3'))) == 1
 
 
-def test_v1_upgrade_creates_one_pre_v3_wal_inclusive_snapshot(tmp_path):
+def test_v1_upgrade_creates_one_pre_v4_wal_inclusive_snapshot(tmp_path):
     path = tmp_path / 'v1.db'
     seed_legacy(path)
     with sqlite3.connect(path) as conn:
@@ -151,14 +196,14 @@ def test_v1_upgrade_creates_one_pre_v3_wal_inclusive_snapshot(tmp_path):
 
     db = Database(path)
     assert db.migration_backup is not None
-    assert db.migration_backup.name.startswith('v1.db.pre-v3-')
+    assert db.migration_backup.name.startswith('v1.db.pre-v4-')
     assert stat.S_IMODE(db.migration_backup.stat().st_mode) == 0o600
     with sqlite3.connect(db.migration_backup) as backup:
         assert backup.execute('PRAGMA user_version').fetchone()[0] == 1
         assert backup.execute("SELECT prompt FROM tasks WHERE id='pending'").fetchone()[0] == 'committed in v1 WAL'
-    assert len(list(tmp_path.glob('v1.db.pre-v3-*.sqlite3'))) == 1
+    assert len(list(tmp_path.glob('v1.db.pre-v4-*.sqlite3'))) == 1
     Database(path)
-    assert len(list(tmp_path.glob('v1.db.pre-v3-*.sqlite3'))) == 1
+    assert len(list(tmp_path.glob('v1.db.pre-v4-*.sqlite3'))) == 1
 
 
 def test_v2_migration_failure_rolls_back_v1_schema_and_ledger(tmp_path, monkeypatch):
@@ -320,7 +365,7 @@ def test_v3_creates_durable_immutable_runner_receipts_and_generation_state(tmp_p
     path = tmp_path / "state.db"
     Database(path)
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         receipt_info = conn.execute("PRAGMA table_info(runner_event_receipts)").fetchall()
         assert [row[1] for row in receipt_info] == [
             "runner_id", "journal_generation", "runner_seq", "envelope_json",
@@ -592,7 +637,7 @@ def test_parallel_initializers_migrate_only_once(tmp_path):
     seed_legacy(path)
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda _: Database(path), range(4)))
-    assert len(rows(path, 'schema_migrations')) == 3
+    assert len(rows(path, 'schema_migrations')) == 4
     assert len(list(tmp_path.glob('*.sqlite3'))) == 1
 
 

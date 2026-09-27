@@ -11,21 +11,50 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
-from .migrations import v001, v002, v003
+from .migrations import v001, v002, v003, v004
 
 SCHEMA = v001.SCHEMA
-MIGRATION_VERSION = 3
+MIGRATION_VERSION = 4
 MIGRATION_CHECKSUM = hashlib.sha256(Path(v001.__file__).read_bytes()).hexdigest()
 MIGRATION_CHECKSUMS = {
     1: MIGRATION_CHECKSUM,
     2: hashlib.sha256(Path(v002.__file__).read_bytes()).hexdigest(),
     3: hashlib.sha256(Path(v003.__file__).read_bytes()).hexdigest(),
+    4: hashlib.sha256(Path(v004.__file__).read_bytes()).hexdigest(),
 }
-MIGRATIONS = {1: v001, 2: v002, 3: v003}
+MIGRATIONS = {1: v001, 2: v002, 3: v003, 4: v004}
 MIGRATION_LOCK_TIMEOUT = 30.0
 SNAPSHOT_TIMEOUT = 30.0
+
+
+def _workspace_text(value: Any, name: str, *, limit: int) -> str:
+    if (not isinstance(value, str) or not value or value != value.strip()
+            or len(value) > limit or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        raise ValueError(f"{name} must be a non-empty value of at most {limit} characters")
+    return value
+
+
+def _optional_workspace_text(value: Any, name: str, *, limit: int) -> str | None:
+    if value is None:
+        return None
+    return _workspace_text(value, name, limit=limit)
+
+
+def _canonical_workspace_directory(value: Any, name: str) -> Path:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"{name} must be a non-empty absolute directory path")
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError(f"{name} must be an absolute directory path")
+    try:
+        canonical = candidate.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"{name} must resolve to an existing directory") from exc
+    if not canonical.is_dir():
+        raise ValueError(f"{name} must resolve to an existing directory")
+    return canonical
 
 
 @contextmanager
@@ -309,6 +338,54 @@ def _validate_schema_shape(conn: sqlite3.Connection, version: int) -> None:
             conn, "runner_event_receipts_immutable", v003.RUNNER_EVENT_RECEIPTS_TRIGGER_SQL,
         )
 
+    if version >= 4:
+        _validate_columns(conn, "workspaces", {
+            "workspace_id", "root", "owner_id", "project_id", "base_revision", "head_revision",
+            "generation", "isolation_profile", "created_at", "updated_at",
+        })
+        _validate_columns(conn, "workspace_native_sessions", {
+            "native_session_id", "workspace_id", "runtime_id", "cwd", "mapped_at",
+        })
+        _require_exact_table_columns(conn, "workspaces", (
+            ("workspace_id", "TEXT", 1, None, 1),
+            ("root", "TEXT", 1, None, 0),
+            ("owner_id", "TEXT", 1, None, 0),
+            ("project_id", "TEXT", 0, None, 0),
+            ("base_revision", "TEXT", 0, None, 0),
+            ("head_revision", "TEXT", 0, None, 0),
+            ("generation", "INTEGER", 1, None, 0),
+            ("isolation_profile", "TEXT", 1, None, 0),
+            ("created_at", "TEXT", 1, None, 0),
+            ("updated_at", "TEXT", 1, None, 0),
+        ))
+        _require_exact_table_columns(conn, "workspace_native_sessions", (
+            ("native_session_id", "TEXT", 1, None, 2),
+            ("workspace_id", "TEXT", 1, None, 0),
+            ("runtime_id", "TEXT", 1, None, 1),
+            ("cwd", "TEXT", 1, None, 0),
+            ("mapped_at", "TEXT", 1, None, 0),
+        ))
+        _require_table_primary_key(conn, "workspaces", ("workspace_id",))
+        _require_table_primary_key(conn, "workspace_native_sessions", ("runtime_id", "native_session_id"))
+        if _foreign_keys(conn, "workspaces") or _foreign_keys(conn, "workspace_native_sessions") != {
+            ("workspaces", "workspace_id", "workspace_id", "NO ACTION", "RESTRICT"),
+        }:
+            raise RuntimeError("Database schema differs from its migration ledger: malformed workspace relationships")
+        _require_table_sql(conn, "workspaces", v004.WORKSPACES_SQL)
+        _require_table_sql(conn, "workspace_native_sessions", v004.WORKSPACE_SESSIONS_SQL)
+        _require_index(
+            conn, "idx_workspace_native_sessions_workspace", v004.WORKSPACE_SESSIONS_INDEX_SQL,
+        )
+        _require_trigger(
+            conn, "workspace_id_root_immutable", v004.WORKSPACE_IDENTITY_TRIGGER_SQL,
+        )
+        _require_trigger(
+            conn, "workspace_generation_fenced", v004.WORKSPACE_GENERATION_TRIGGER_SQL,
+        )
+        _require_trigger(
+            conn, "workspace_native_session_immutable", v004.WORKSPACE_SESSION_IMMUTABLE_TRIGGER_SQL,
+        )
+
 
 def _snapshot(path: Path, destination_version: int) -> Path:
     """Copy committed pages, including WAL, while another connection blocks writers."""
@@ -408,6 +485,166 @@ class Database:
                 raise
             else:
                 conn.commit()
+
+    def create_workspace(
+        self,
+        *,
+        workspace_id: str,
+        root: str,
+        owner_id: str,
+        generation: int,
+        isolation_profile: str,
+        project_id: str | None = None,
+        base_revision: str | None = None,
+        head_revision: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist one workspace id to one canonical authoritative directory.
+
+        The isolation profile is recorded as identity metadata; this method
+        does not implement or attest any filesystem isolation controls.
+        """
+        workspace_id = _workspace_text(workspace_id, "workspace_id", limit=200)
+        owner_id = _workspace_text(owner_id, "owner_id", limit=200)
+        isolation_profile = _workspace_text(isolation_profile, "isolation_profile", limit=128)
+        project_id = _optional_workspace_text(project_id, "project_id", limit=200)
+        base_revision = _optional_workspace_text(base_revision, "base_revision", limit=256)
+        head_revision = _optional_workspace_text(head_revision, "head_revision", limit=256)
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+            raise ValueError("generation must be a positive integer")
+        canonical_root = str(_canonical_workspace_directory(root, "root"))
+        now = datetime.now(timezone.utc).isoformat()
+        with self.transaction() as conn:
+            existing = conn.execute(
+                "SELECT * FROM workspaces WHERE workspace_id=?", (workspace_id,),
+            ).fetchone()
+            if existing is not None:
+                expected = (
+                    canonical_root, owner_id, project_id, base_revision, head_revision,
+                    generation, isolation_profile,
+                )
+                actual = tuple(existing[name] for name in (
+                    "root", "owner_id", "project_id", "base_revision", "head_revision",
+                    "generation", "isolation_profile",
+                ))
+                if actual != expected:
+                    raise ValueError(
+                        "workspace id conflicts with existing identity, revision, generation, or isolation data"
+                    )
+                return dict(existing)
+            try:
+                conn.execute(
+                    """INSERT INTO workspaces
+                       (workspace_id,root,owner_id,project_id,base_revision,head_revision,
+                        generation,isolation_profile,created_at,updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    (workspace_id, canonical_root, owner_id, project_id, base_revision, head_revision,
+                     generation, isolation_profile, now, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("canonical workspace root already has an authoritative workspace id") from exc
+            return dict(conn.execute(
+                "SELECT * FROM workspaces WHERE workspace_id=?", (workspace_id,),
+            ).fetchone())
+
+    def get_workspace(self, workspace_id: str) -> dict[str, Any]:
+        workspace_id = _workspace_text(workspace_id, "workspace_id", limit=200)
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM workspaces WHERE workspace_id=?", (workspace_id,)).fetchone()
+        if row is None:
+            raise KeyError(workspace_id)
+        return dict(row)
+
+    def map_native_session(
+        self,
+        workspace_id: str,
+        native_session_id: str,
+        *,
+        runtime_id: str,
+        cwd: str,
+    ) -> dict[str, Any]:
+        """Import a native id once, binding it to one runtime, cwd and workspace."""
+        workspace_id = _workspace_text(workspace_id, "workspace_id", limit=200)
+        native_session_id = _workspace_text(native_session_id, "native_session_id", limit=200)
+        if not isinstance(runtime_id, str) or runtime_id not in {"prime", "pi"}:
+            raise ValueError("runtime_id must be 'prime' or 'pi'")
+        now = datetime.now(timezone.utc).isoformat()
+        with self.transaction() as conn:
+            workspace = conn.execute(
+                "SELECT root FROM workspaces WHERE workspace_id=?", (workspace_id,),
+            ).fetchone()
+            if workspace is None:
+                raise KeyError(workspace_id)
+            canonical_cwd = _canonical_workspace_directory(cwd, "cwd")
+            try:
+                canonical_cwd.relative_to(Path(workspace["root"]))
+            except ValueError as exc:
+                raise ValueError("cwd must be within the authoritative workspace root") from exc
+            canonical_cwd_text = str(canonical_cwd)
+            legacy_owner = conn.execute(
+                "SELECT runtime_id,cwd,state FROM session_ownership WHERE session_id=?",
+                (native_session_id,),
+            ).fetchone()
+            if legacy_owner is not None:
+                if legacy_owner["state"] != "verified":
+                    raise ValueError("legacy native session ownership requires review before workspace mapping")
+                if (legacy_owner["runtime_id"], legacy_owner["cwd"]) != (runtime_id, canonical_cwd_text):
+                    raise ValueError("native session mapping conflicts with verified legacy runtime or cwd ownership")
+            existing = conn.execute(
+                "SELECT * FROM workspace_native_sessions WHERE runtime_id=? AND native_session_id=?",
+                (runtime_id, native_session_id),
+            ).fetchone()
+            if existing is not None:
+                actual = tuple(existing[name] for name in ("workspace_id", "cwd"))
+                expected = (workspace_id, canonical_cwd_text)
+                if actual != expected:
+                    raise ValueError(
+                        "native session mapping conflicts with an existing workspace or working directory"
+                    )
+                return dict(existing)
+            try:
+                conn.execute(
+                    """INSERT INTO workspace_native_sessions
+                       (native_session_id,workspace_id,runtime_id,cwd,mapped_at)
+                       VALUES (?,?,?,?,?)""",
+                    (native_session_id, workspace_id, runtime_id, canonical_cwd_text, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("native session identity is already mapped") from exc
+            return dict(conn.execute(
+                "SELECT * FROM workspace_native_sessions WHERE runtime_id=? AND native_session_id=?",
+                (runtime_id, native_session_id),
+            ).fetchone())
+
+    def resolve_native_session(
+        self,
+        native_session_id: str,
+        *,
+        runtime_id: str,
+        cwd: str,
+    ) -> dict[str, Any]:
+        """Resolve only when caller runtime and canonical cwd match ownership."""
+        native_session_id = _workspace_text(native_session_id, "native_session_id", limit=200)
+        if not isinstance(runtime_id, str) or runtime_id not in {"prime", "pi"}:
+            raise ValueError("runtime_id must be 'prime' or 'pi'")
+        canonical_cwd = str(_canonical_workspace_directory(cwd, "cwd"))
+        with self.connect() as conn:
+            row = conn.execute(
+                """SELECT sessions.native_session_id,sessions.workspace_id,sessions.runtime_id,
+                          sessions.cwd,sessions.mapped_at,workspaces.root,workspaces.owner_id,
+                          workspaces.project_id,workspaces.base_revision,workspaces.head_revision,
+                          workspaces.generation,workspaces.isolation_profile
+                   FROM workspace_native_sessions AS sessions
+                   JOIN workspaces ON workspaces.workspace_id=sessions.workspace_id
+                   WHERE sessions.runtime_id=? AND sessions.native_session_id=?""",
+                (runtime_id, native_session_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(native_session_id)
+        if row["runtime_id"] != runtime_id:
+            raise ValueError("native session runtime does not match its recorded ownership")
+        if row["cwd"] != canonical_cwd:
+            raise ValueError("native session cwd does not match its recorded ownership")
+        return dict(row)
 
     def session_locations(self, session_ids: list[str]) -> dict[str, dict[str, str]]:
         """Return durable working directories by Hermes session id."""

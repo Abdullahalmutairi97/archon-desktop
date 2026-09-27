@@ -44,6 +44,7 @@ from .services.voice import VoiceService
 from .services.workspace import ProjectService, SessionService, PrimeSessionService
 from .tasks import TaskEngine, TaskStore, hash_request_payload
 from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
+from .runner_ownership import RunnerOwnershipLock
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
 
@@ -310,6 +311,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     kanban = KanbanService(settings.kanban_db, settings.hermes_executable, agents)
     store = TaskStore(Database(settings.database_path))
     _prepare_private_runner_journal_dir(settings.runner_journal_path.parent)
+    runner_ownership = RunnerOwnershipLock(settings.runner_journal_path.parent / "server.lock")
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
         settings.runner_journal_path.lstat()
@@ -436,79 +438,85 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         nonlocal worker_tasks, telegram_bridge, telegram_task
-        app.state.settings = settings
-        app.state.store = store
-        app.state.engine = engine
-        app.state.runtimes = registry
-        app.state.worker_tracker = worker_tracker
-        app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
-        # Consume durable runner events before any worker can recover an
-        # inflight task or claim queued work.
-        engine.replay_unacked()
-        if settings.start_worker:
-            # Each worker shares the engine's one-time recovery guard and
-            # claims its own row atomically.
-            # compare-and-swap (UPDATE ... WHERE id=? AND status='queued', then a
-            # rowcount check), so two workers can never take the same task.
-            worker_tasks = {}
-            for worker_id in worker_ids:
-                worker = asyncio.create_task(
-                    engine.run_forever(worker_id=worker_id, tracker=worker_tracker),
-                    name=f"archon-task-{worker_id}",
+        runner_ownership.acquire()
+        try:
+            app.state.settings = settings
+            app.state.store = store
+            app.state.engine = engine
+            app.state.runtimes = registry
+            app.state.worker_tracker = worker_tracker
+            app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
+            # Consume durable runner events before any worker can recover an
+            # inflight task or claim queued work.
+            engine.replay_unacked()
+            if settings.start_worker:
+                # Each worker shares the engine's one-time recovery guard and
+                # claims its own row atomically.
+                # compare-and-swap (UPDATE ... WHERE id=? AND status='queued', then a
+                # rowcount check), so two workers can never take the same task.
+                worker_tasks = {}
+                for worker_id in worker_ids:
+                    worker = asyncio.create_task(
+                        engine.run_forever(worker_id=worker_id, tracker=worker_tracker),
+                        name=f"archon-task-{worker_id}",
+                    )
+                    worker_tasks[worker_id] = worker
+
+                    def record_worker_exit(task: asyncio.Task, *, stable_id: str = worker_id) -> None:
+                        if task.cancelled():
+                            worker_tracker.stopped(stable_id)
+                            return
+                        try:
+                            error = task.exception()
+                        except asyncio.CancelledError:
+                            error = None
+                        if error is None:
+                            worker_tracker.stopped(stable_id)
+                        else:
+                            worker_tracker.stopped(stable_id, error_code="worker_loop_failed")
+                            # Keep failure details out of API responses and logs.
+                            logger.error("Task worker %s stopped unexpectedly (worker_loop_failed)", stable_id)
+
+                    worker.add_done_callback(record_worker_exit)
+            if settings.telegram_enabled:
+                telegram_bridge = TelegramBridge(
+                    store.db, store, TelegramBotClient(settings.telegram_bot_token),
+                    settings.telegram_allowed_user_id,
+                    default_cwd=str((settings.task_scratch_root or settings.archon_root).expanduser().resolve()),
                 )
-                worker_tasks[worker_id] = worker
-
-                def record_worker_exit(task: asyncio.Task, *, stable_id: str = worker_id) -> None:
-                    if task.cancelled():
-                        worker_tracker.stopped(stable_id)
-                        return
+                telegram_task = asyncio.create_task(telegram_bridge.run_forever(), name="archon-telegram-bridge")
+            yield
+        finally:
+            try:
+                # Close Telegram intake first. If it already submitted a turn, keep the
+                # engine alive until that turn completes; otherwise a queued Telegram
+                # task could be stranded while the bridge waits for it forever.
+                if telegram_bridge is not None:
+                    telegram_bridge.stop()
+                if telegram_task is not None:
                     try:
-                        error = task.exception()
+                        await telegram_task
                     except asyncio.CancelledError:
-                        error = None
-                    if error is None:
-                        worker_tracker.stopped(stable_id)
-                    else:
-                        worker_tracker.stopped(stable_id, error_code="worker_loop_failed")
-                        # Keep failure details out of API responses and logs.
-                        logger.error("Task worker %s stopped unexpectedly (worker_loop_failed)", stable_id)
-
-                worker.add_done_callback(record_worker_exit)
-        if settings.telegram_enabled:
-            telegram_bridge = TelegramBridge(
-                store.db, store, TelegramBotClient(settings.telegram_bot_token),
-                settings.telegram_allowed_user_id,
-                default_cwd=str((settings.task_scratch_root or settings.archon_root).expanduser().resolve()),
-            )
-            telegram_task = asyncio.create_task(telegram_bridge.run_forever(), name="archon-telegram-bridge")
-        yield
-        # Close Telegram intake first. If it already submitted a turn, keep the
-        # engine alive until that turn completes; otherwise a queued Telegram
-        # task could be stranded while the bridge waits for it forever.
-        if telegram_bridge is not None:
-            telegram_bridge.stop()
-        if telegram_task is not None:
-            try:
-                await telegram_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                # Cleanup must continue even if the optional Telegram transport
-                # failed before shutdown began.
-                logger.exception("Telegram bridge stopped unexpectedly")
-        # Stop claiming new work, but let every active Prime turn finish before
-        # Uvicorn exits. Cancelling workers here used to kill the child process
-        # mid-session and leave Prime's session lock behind after a restart.
-        engine.stop()
-        for worker_id, worker in worker_tasks.items():
-            try:
-                await worker
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                worker_tracker.stopped(worker_id, error_code="worker_loop_failed")
-                # A dead worker must not prevent cleanup of its siblings.
-                logger.error("Task worker %s failed during shutdown (worker_loop_failed)", worker_id)
+                        pass
+                    except Exception:
+                        # Cleanup must continue even if the optional Telegram transport
+                        # failed before shutdown began.
+                        logger.exception("Telegram bridge stopped unexpectedly")
+                # Stop claiming new work, but let every active Prime turn finish before
+                # Uvicorn exits. Cancelling workers here used to kill the child process
+                # mid-session and leave Prime's session lock behind after a restart.
+                engine.stop()
+                for worker_id, worker in worker_tasks.items():
+                    try:
+                        await worker
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        worker_tracker.stopped(worker_id, error_code="worker_loop_failed")
+                        # A dead worker must not prevent cleanup of its siblings.
+                        logger.error("Task worker %s failed during shutdown (worker_loop_failed)", worker_id)
+            finally:
+                runner_ownership.release()
 
     app = FastAPI(title="Archon Desktop Server", version="0.2.0", lifespan=lifespan)
     app.add_middleware(
