@@ -110,3 +110,16 @@ def test_remote_runner_result_api_contract(tmp_path):
         rows = results.json()["results"]
         assert rows and rows[0]["eventKey"] == "task:1" and rows[0]["status"] == "ok"
         assert client.get(f"/api/local/runners/runner-{'0' * 32}/results", headers=headers).status_code == 404
+
+        # End-to-end dispatch: owner submits a task, the runner claims it.
+        submitted = client.post(
+            f"/api/local/runners/{runner['runnerId']}/tasks", headers=headers,
+            json={"prompt": "build the thing", "cwd": "project-a"},
+        )
+        assert submitted.status_code == 201
+        claimed = client.post(f"/api/runners/{runner['runnerId']}/claim", headers=auth, json={"limit": 10})
+        payloads = [entry["payload"] for entry in claimed.json()["events"]]
+        assert {"kind": "prompt", "prompt": "build the thing", "cwd": "project-a"} in payloads
+        assert client.post(
+            f"/api/local/runners/runner-{'0' * 32}/tasks", headers=headers, json={"prompt": "x"},
+        ).status_code == 404

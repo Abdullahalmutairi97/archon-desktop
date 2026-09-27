@@ -354,6 +354,13 @@ class RunnerResultRequest(BaseModel):
     output: str | None = Field(default=None, max_length=8000)
 
 
+class RunnerTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1, max_length=8000)
+    cwd: str = Field(default=".", max_length=512)
+
+
 class WorkspaceFileWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1542,6 +1549,23 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Runner is not enrolled")
         try:
             entry = runner_outbox_service().enqueue(runner_id, payload.event_key, payload.payload)
+        except (RunnerOutboxError, RunnerOutboxUnavailable) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(status_code=201, content={"entry": entry}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/local/runners/{runner_id}/tasks", status_code=201, dependencies=[Depends(require_local_owner)])
+    async def local_runner_submit_task(runner_id: str, payload: RunnerTaskRequest):
+        """Owner submits a prompt for an enrolled remote runner; it is dispatched through the durable outbox."""
+        if not any(row["runnerId"] == runner_id for row in runner_enrollment_service().list()):
+            raise HTTPException(status_code=404, detail="Runner is not enrolled")
+        try:
+            entry = runner_outbox_service().enqueue(
+                runner_id,
+                "task-" + uuid.uuid4().hex,
+                {"kind": "prompt", "prompt": payload.prompt, "cwd": payload.cwd},
+            )
         except (RunnerOutboxError, RunnerOutboxUnavailable) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:

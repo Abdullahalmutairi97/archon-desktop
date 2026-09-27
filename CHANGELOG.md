@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — remote runner dispatch
+
+- Owner submits a prompt for an enrolled runner via `POST /api/local/runners/{id}/tasks`; it is dispatched through the durable outbox and the runner claims, executes and reports it. The multi-machine loop (submit -> durable dispatch -> remote execute -> bounded result) is now end-to-end.
+
 ## Unreleased — remote runner worker loop
 
 - Add the remote half of the runner: a `RemoteRunnerClient` (authenticated claim/report/ack), a `RunnerAgent` that claims a bounded batch, executes, reports the bounded outcome and then acknowledges (a failed item is reported, never silently dropped), a `prompt` executor over a runtime CLI confined to a work root, and `scripts/runner_agent.py`. The coordinator records bounded per-runner results in a private ledger with an owner-only read endpoint.
