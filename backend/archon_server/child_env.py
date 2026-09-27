@@ -66,6 +66,10 @@ _SCOPE_SOURCE_KEYS: Final[dict[str, frozenset[str]]] = {
 }
 
 _VOICE_OVERRIDE_KEYS: Final[frozenset[str]] = frozenset({"HERMES_HOME", "PYTHONPATH"})
+# Archon holds the native session lease for a resumed Prime session itself, so
+# the child must not try to take the same lease and abort its own turn.
+_PRIME_OVERRIDE_KEYS: Final[frozenset[str]] = frozenset({"PRIME_AGENT_INTERNAL_SESSION_LEASES"})
+_PRIME_LEASE_OVERRIDE_VALUES: Final[frozenset[str]] = frozenset({"0"})
 _HERMES_OVERRIDE_KEYS: Final[frozenset[str]] = frozenset(
     {"HERMES_HOME", "ARCHON_DESKTOP_CONTROL_MODULE"}
 )
@@ -106,6 +110,8 @@ def _scope_source_keys(scope: str) -> frozenset[str]:
 
 def _scope_override_keys(scope: str) -> frozenset[str]:
     common = COMMON_ENV_KEYS | PROVIDER_ENV_ALLOWLIST[scope]
+    if scope == "prime":
+        return common | _PRIME_OVERRIDE_KEYS
     if scope == "terminal":
         return common | {"TERM"}
     if scope == "voice":
@@ -147,6 +153,10 @@ def build_child_env(
 
     if any(key not in allowed_overrides for key in override_values):
         raise ValueError("Environment overrides contain a key not allowed for this scope")
+    if "PRIME_AGENT_INTERNAL_SESSION_LEASES" in override_values:
+        if (scope != "prime"
+                or override_values["PRIME_AGENT_INTERNAL_SESSION_LEASES"] not in _PRIME_LEASE_OVERRIDE_VALUES):
+            raise ValueError("Prime session-lease override must disable the child-side lease for the prime scope")
     if "ARCHON_DESKTOP_CONTROL_MODULE" in override_values:
         if scope != "hermes" or override_values["ARCHON_DESKTOP_CONTROL_MODULE"] != _HERMES_CONTROL_MODULE_PATH:
             raise ValueError("Hermes control-module override must use the server-owned path")

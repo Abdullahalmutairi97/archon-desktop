@@ -70,9 +70,9 @@ Likely files: `prime_runner.py`, `pi_runner.py`, registry and API validation.
 
 ### M1.4 — Bounded session locking (Phase 1A)
 
-- [ ] Prefer an OS advisory lock with bounded nonblocking waits and owner metadata; establish compatibility with native Prime locking.
+- [ ] Prefer an OS advisory lock with bounded nonblocking waits and owner metadata; establish compatibility with native Prime locking. Archon keeps its bounded flock with owner metadata, and for a resumed native session it now also takes Prime Agent's own lease directory (atomic candidate rename plus an `owner.json` record), so each side refuses a session the other holds: a live native owner fails the turn closed, and an Archon-held lease makes native Prime refuse. Compatibility is tested in both directions against the installed Prime Agent module, and dead or recycled owners are reclaimed. Two limits remain: this module takes the native guard directory but does not refresh it in the background, and the lease owner is the server process rather than the supervisor, so after a server crash the native side may judge the lease reclaimable while a supervised run continues.
 - [x] Never delete a live lock inode to manufacture a new owner.
-- [ ] Test killed owner release, malformed metadata, responsive heartbeat and twenty contenders without overlapping critical sections. All finish or return bounded errors.
+- [ ] Test killed owner release, malformed metadata, responsive heartbeat and twenty contenders without overlapping critical sections. All finish or return bounded errors. Killed-owner release, malformed or unreadable owner records (refused, never reclaimed), twenty contenders with exactly one winner and the rest bounded refusals, and an end-to-end native holder blocking a runner turn are covered in `backend/tests/test_prime_session_lease.py`; the "responsive heartbeat" case has no equivalent in either implementation, because ownership is decided by kernel-level rename atomicity plus process liveness rather than by a heartbeat.
 
 Likely files: `prime_runner.py` and its regression tests. Any native-lock compatibility not observed remains an explicit limitation in the PR.
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — native Prime session leases
+
+- Add native-compatible Prime Agent session leases. Archon now takes Prime's own lease directory (`<agent dir>/session-leases/<sha256 of the canonical session path>.lock` with a `owner.json` record) for every resumed native session, so an interactive Prime process and an Archon run cannot work the same session at once: a live native owner makes the turn fail closed with an actionable message, and an Archon-held lease makes native Prime refuse the session. Compatibility is tested against the installed Prime Agent implementation in both directions, and a killed owner is reclaimed. Limits: this module does not run a guard-refresh timer, and the lease owner is the server process, so the exclusion holds for the server's lifetime rather than the supervised run's.
+
 ## Unreleased — fresh package builds and native frame checks
 
 - Add `desktop/scripts/native-hostile-frame-check.mjs` (`npm run native:hostile-frame`): it launches the real Electron app in an isolated fixture profile and reports, as a pass/fail JSON report, whether the trusted top frame sees the preload bridge, whether same-origin and out-of-process sandboxed frames can reach it, whether a new window or remote top-level navigation is refused and whether that attempt revokes IPC trust, whether the credential store persisted anything, and whether the run wrote outside the fixture root. Two fresh `npm ci` workspaces built byte-identical portable packages; the Chromium sandbox and native keyring gates are recorded as blocked on this host rather than worked around. Evidence: [P2D fresh builds and native checks](docs/releases/p2d-fresh-builds.md).

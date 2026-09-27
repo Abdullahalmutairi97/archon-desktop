@@ -11,6 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from .child_env import build_child_env
+from .prime_session_lease import (
+    LEASE_ENABLED_ENV as PRIME_LEASE_ENABLED_ENV,
+    PrimeSessionAlreadyActive,
+    PrimeSessionLease,
+    PrimeSessionLeaseUnavailable,
+    acquire_session_lease,
+    release_session_lease,
+)
 from .runtimes import execution_cwd, validate_execution_mode
 from .hermes_runner import (
     MAX_EVENT_TEXT,
@@ -129,6 +137,9 @@ class PrimeRunner:
         self.default_cwd = Path(default_cwd or Path.home())
         self.agent_session_root = Path(agent_session_root or (Path.home() / '.prime/agent/sessions'))
         self._active: dict[str, asyncio.subprocess.Process] = {}
+        # Native session path per active attempt, resolved by run() so the native
+        # lease and the process-wide lease cover the same run window.
+        self._agent_paths: dict[str, Path | None] = {}
         self._identities: dict[str, ProcessIdentity] = {}
         self._active_attempts: dict[str, str] = {}
         self._released_attempts: dict[str, str] = {}
@@ -162,6 +173,26 @@ class PrimeRunner:
             self._released_attempts.pop(task_id, None)
             self._active.pop(task_id, None)
             self._identities.pop(task_id, None)
+
+    def _acquire_native_lease(self, agent_path: Path | None, session_id: str) -> PrimeSessionLease | None:
+        """Take Prime's own session lease for a native session, or fail closed."""
+        if agent_path is None:
+            return None
+        try:
+            return acquire_session_lease(
+                agent_path,
+                self.agent_session_root.parent,
+                active_session_id=f"archon:{session_id}",
+            )
+        except PrimeSessionAlreadyActive as exc:
+            raise RuntimeError(
+                f"Session '{session_id}' is already active in a native Prime process. "
+                "Close that session, then retry."
+            ) from exc
+        except PrimeSessionLeaseUnavailable as exc:
+            raise RuntimeError(
+                f"Session '{session_id}' could not be leased safely, so no turn was started: {exc}"
+            ) from exc
 
     def _agent_session_path(self, session_id: str) -> Path | None:
         direct = self.agent_session_root / f"{session_id}.jsonl"
@@ -201,19 +232,28 @@ class PrimeRunner:
             if self._cancellation_requested(task, task_id, attempt_key):
                 self._consume_cancellation(task_id, attempt_key)
                 raise RunnerCancelled(task_id)
-            lease = await _acquire_session_lease(
-                self.session_root,
-                session_id,
-                cancel_check=lambda: self._cancellation_requested(task, task_id, attempt_key),
-                cancel_task_id=task_id,
-            )
+            agent_path = self._agent_session_path(session_id) if task.get("session_id") else None
+            native_lease = self._acquire_native_lease(agent_path, session_id) if agent_path is not None else None
+            if agent_path is not None:
+                self._agent_paths[attempt_key] = agent_path
             try:
-                if self._cancellation_requested(task, task_id, attempt_key):
-                    self._consume_cancellation(task_id, attempt_key)
-                    raise RunnerCancelled(task_id)
-                return await self._run_once(task, emit, lease)
+                lease = await _acquire_session_lease(
+                    self.session_root,
+                    session_id,
+                    cancel_check=lambda: self._cancellation_requested(task, task_id, attempt_key),
+                    cancel_task_id=task_id,
+                )
+                try:
+                    if self._cancellation_requested(task, task_id, attempt_key):
+                        self._consume_cancellation(task_id, attempt_key)
+                        raise RunnerCancelled(task_id)
+                    return await self._run_once(task, emit, lease)
+                finally:
+                    _release_session_lease(lease)
             finally:
-                _release_session_lease(lease)
+                self._agent_paths.pop(attempt_key, None)
+                if native_lease is not None:
+                    release_session_lease(native_lease)
         except RunnerCancelled as exc:
             self._consume_cancellation(task_id, attempt_key)
             raise RunnerCancelled(task_id) from exc
@@ -240,7 +280,12 @@ class PrimeRunner:
         # Sessions started in Prime Agent's CLI/TUI are single JSONL files in its
         # native store. Resume those by exact id; Archon-owned sessions continue
         # to use their isolated per-session directories.
-        agent_path = self._agent_session_path(session_id) if task.get('session_id') else None
+        # A session that Prime Agent owns is protected by Prime's own lease
+        # directory, which run() holds for this whole attempt; the path is
+        # resolved there once so it is never scanned twice.
+        agent_path = self._agent_paths.get(attempt_key)
+        if agent_path is None and task.get('session_id'):
+            agent_path = self._agent_session_path(session_id)
         agent_session = agent_path is not None
         session_dir = self.session_root / session_id
         if not agent_session:
@@ -282,8 +327,17 @@ class PrimeRunner:
         if self._cancellation_requested(task, task_id, attempt_key):
             self._consume_cancellation(task_id, attempt_key)
             raise RunnerCancelled(task_id)
+        # When this run holds Prime's own lease for a resumed native session, the
+        # child must not try to take the same lease and abort its own turn.
+        child_env = build_child_env(
+            "prime",
+            overrides=(
+                {PRIME_LEASE_ENABLED_ENV: "0"}
+                if self._agent_paths.get(attempt_key) is not None else None
+            ),
+        )
         process = await asyncio.create_subprocess_exec(
-            *supervised_argv(argv), cwd=str(cwd), env=build_child_env("prime"), stdin=asyncio.subprocess.PIPE,
+            *supervised_argv(argv), cwd=str(cwd), env=child_env, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True,
             # The supervisor keeps the lease if the backend is killed. The
             # native CLI is launched by the supervisor with close_fds=True.
