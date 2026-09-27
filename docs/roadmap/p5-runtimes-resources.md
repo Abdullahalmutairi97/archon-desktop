@@ -1,6 +1,6 @@
 # P5 — Native runtime parity and resource management
 
-**Status:** not started. **Dependencies:** P3; P4 for integrated UX. Individual adapter work can proceed independently once the contracts are stable. **Outcome:** Hermes, Pi, Prime and Codex are selectable with truthful capabilities, scoped native authentication and managed MCP/skills.
+**Status:** in progress. Prime, Pi, Codex and Hermes are installed on the target workstation with pinned identities, headless start and native account material present (see [installed runtime availability](releases/p5-runtime-availability.md)). Adapter manifests, conformance fixtures, native resource accounting and enforced isolation remain open, and no adapter is qualified beyond availability. **Dependencies:** P3; P4 for integrated UX. Individual adapter work can proceed independently once the contracts are stable. **Outcome:** Hermes, Pi, Prime and Codex are selectable with truthful capabilities, scoped native authentication and managed MCP/skills.
 
 ## Scope
 
@@ -8,7 +8,7 @@ Keep provider/model, runtime, harness and execution environment distinct. Use na
 
 ## Checklist
 
-- [ ] Publish adapter manifests with runtime version/executable digest, modalities, resume/fork/steer, approval/read-only/chat-only support, reconnect semantics and resource formats/transports.
+- [ ] Publish adapter manifests with runtime version/executable digest, modalities, resume/fork/steer, approval/read-only/chat-only support, reconnect semantics and resource formats/transports. Installed identities for Prime/Pi/Codex/Hermes on the target host are recorded in releases/p5-runtime-availability.md; manifests and reproducibility are not yet published.
 - [ ] Add conformance fixtures for prompt/stream/cancel/auth/approval/unsupported/resume/error behavior; validate before admission and again when binary/config identity changes.
 - [ ] Pin and qualify Prime/Pi RPC, separate Hermes ACP registration and runner-owned Codex app-server stdio. Do not silently fall back across runtimes or assume untested remote transports.
 - [ ] Preserve imported native history restrictions until exact native resume mappings are validated. Reject cross-runtime or wrong-cwd resume.
@@ -32,6 +32,6 @@ Keep provider/model, runtime, harness and execution environment distinct. Use na
 - [ ] No cross-user auth or secret values appear in API/UI/logs. Resource scope precedence, incompatible transport, update rollback and active revocation pass.
 - [ ] Compatibility records include binary/version/digest, date, fixture/native evidence and limits. Unavailable credentials mark that adapter unverified, never ready.
 
-Known blockers: exact installed runtime versions, native API behavior/accounts, extension/MCP bridge compatibility, authenticated tool availability and demonstrable credential isolation. Current upstream documentation alone is not qualification of an installed executable. Jev/Laya are optional advisers and are not required for agent operation or permissions.
+Known blockers: exact installed runtime versions, native API behavior/accounts, extension/MCP bridge compatibility, authenticated tool availability and demonstrable credential isolation. Current upstream documentation alone is not qualification of an installed executable. Jev/Laya are optional advisers and are not required for agent operation or permissions. The target workstation now has the full runtime roster installed (see releases/p5-runtime-availability.md); the remaining blockers are behavioral qualification and enforcement, not availability.
 
 Follow the [roadmap workflow](README.md). No fake adapter may be published as production-ready.

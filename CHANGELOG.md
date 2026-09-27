@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — P5 runtime availability record
+
+- Record the installed Prime/Pi/Codex/Hermes identities, headless availability, native account material and host facilities on the target workstation, and mark P5 in progress with availability established but no adapter qualified.
+- Reinstall Hermes 0.19.0 as an isolated `uv` tool from the retired migration source; no gateway, dashboard, cron or systemd unit is installed or started.
+
 ## Unreleased — managed workspace services
 
 - Add a bounded, validated registry of workspace services: an argv array, a workspace-relative working directory, referenced (allowlisted) environment names, named ports, an optional health target, dependencies and a restart policy. Definitions persist behind the workspace generation fence; dependencies must exist and cannot cycle.
