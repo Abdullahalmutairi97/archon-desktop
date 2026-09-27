@@ -91,7 +91,7 @@ describe('preload bridge', () => {
     const workspaceId = `workspace-${'a'.repeat(32)}`
     const service = {
       name: 'web', argv: ['/bin/echo', 'hi'], cwd: '.', ports: [{ name: 'http', port: 4173 }],
-      restart: 'never', state: 'registered', exitCode: null, restarts: 0,
+      restart: 'never', state: 'registered', exitCode: null, restarts: 0, health: 'unknown',
     }
     const invoke = vi.fn(async (channel: string) => {
       if (channel === WORKSPACE_SERVICES_CHANNELS.list) return [service]

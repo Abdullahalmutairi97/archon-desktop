@@ -21,6 +21,7 @@ import json
 import os
 import re
 import stat
+import urllib.request
 import uuid
 from collections import deque
 from datetime import datetime, timezone
@@ -45,6 +46,8 @@ _MAX_DEPENDENCIES = 4
 _MAX_LOGS_BYTES = 16 * 1024
 _MAX_RESTARTS = 3
 _STARTING_GRACE_SECONDS = 1.0
+_HEALTH_INTERVAL_SECONDS = 2.0
+_HEALTH_TIMEOUT_SECONDS = 1.5
 # Server-constructed environment names a definition may request as a reference.
 _ALLOWED_ENV_REFS = frozenset({"NODE_ENV", "PYTHONUNBUFFERED"})
 _ALLOWED_RESTART = frozenset({"never", "on-failure"})
@@ -71,6 +74,23 @@ class WorkspaceServiceConflict(WorkspaceServiceError):
 
 
 SpawnProcess = Callable[..., Awaitable[Any]]
+HealthProbe = Callable[[str], Awaitable[bool]]
+
+
+async def _default_health_probe(url: str) -> bool:
+    """Probe a declared loopback health target with a bounded, credential-free GET."""
+    def check() -> bool:
+        try:
+            request = urllib.request.Request(url, method="GET", headers={"User-Agent": "archon-service-health"})
+            with urllib.request.urlopen(request, timeout=_HEALTH_TIMEOUT_SECONDS) as response:
+                return 200 <= int(getattr(response, "status", 0)) < 400
+        except Exception:
+            return False
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(check), timeout=_HEALTH_TIMEOUT_SECONDS + 0.5)
+    except (TimeoutError, asyncio.TimeoutError):
+        return False
 
 
 def _private_directory(path: str | os.PathLike[str], *, label: str) -> Path:
@@ -103,6 +123,7 @@ class WorkspaceServiceManager:
         state_root: str | os.PathLike[str],
         max_services: int = _DEFAULT_MAX_SERVICES,
         spawn: SpawnProcess | None = None,
+        health_probe: HealthProbe | None = None,
     ):
         if not isinstance(owner_id, str) or not owner_id.strip() or len(owner_id) > 200:
             raise ValueError("owner_id is invalid")
@@ -113,6 +134,7 @@ class WorkspaceServiceManager:
         self.state_root = _private_directory(state_root, label="workspace service state root")
         self.max_services = max_services
         self._spawn = spawn or asyncio.create_subprocess_exec
+        self._health_probe = health_probe or _default_health_probe
         self._lock = asyncio.Lock()
         self._runtime: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -238,6 +260,8 @@ class WorkspaceServiceManager:
             "process": None,
             "supervisor": None,
             "reader": None,
+            "health": "unknown",
+            "healthTask": None,
             "logs": deque(),
             "logsTruncated": False,
         }
@@ -261,8 +285,27 @@ class WorkspaceServiceManager:
         runtime["process"] = process
         runtime["state"] = "running"
         runtime["exitCode"] = None
+        runtime["health"] = "starting" if entry.get("health") else "unknown"
         runtime["reader"] = asyncio.create_task(self._drain(runtime, process))
         runtime["supervisor"] = asyncio.create_task(self._supervise(runtime, entry, cwd, env))
+        if entry.get("health"):
+            runtime["healthTask"] = asyncio.create_task(self._health_loop(runtime, entry))
+
+    async def _health_loop(self, runtime: dict[str, Any], entry: dict[str, Any]) -> None:
+        ports = {port["name"]: port["port"] for port in entry["ports"]}
+        health = entry.get("health")
+        if not health or health["port"] not in ports:
+            return
+        url = f"http://127.0.0.1:{ports[health['port']]}{health['path']}"
+        try:
+            while not runtime["stopping"]:
+                healthy = await self._health_probe(url)
+                if runtime["stopping"]:
+                    return
+                runtime["health"] = "healthy" if healthy else "unhealthy"
+                await asyncio.sleep(_HEALTH_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            return
 
     async def _drain(self, runtime: dict[str, Any], process: Any) -> None:
         stream = getattr(process, "stdout", None)
@@ -321,6 +364,7 @@ class WorkspaceServiceManager:
         process = runtime["process"]
         supervisor = runtime["supervisor"]
         reader = runtime["reader"]
+        health_task = runtime.get("healthTask")
         if process is not None and getattr(process, "returncode", None) is None:
             try:
                 process.terminate()
@@ -333,7 +377,7 @@ class WorkspaceServiceManager:
                 pass
             except OSError:
                 pass
-        for task in (reader, supervisor):
+        for task in (reader, supervisor, health_task):
             if task is not None and not task.done():
                 task.cancel()
         runtime["state"] = "stopped"
@@ -597,4 +641,5 @@ class WorkspaceServiceManager:
             "state": runtime["state"] if runtime else "registered",
             "exitCode": runtime["exitCode"] if runtime else None,
             "restarts": runtime["restarts"] if runtime else 0,
+            "health": runtime["health"] if runtime else "unknown",
         }

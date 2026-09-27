@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — managed service health state
+
+- Probe each service's declared loopback health target with a bounded, credential-free GET (2s interval, 1.5s timeout) and report `starting`/`healthy`/`unhealthy`; a service without a health target reports `unknown`. Health stops with the service and is exposed on the service DTO and in the panel.
+
 ## Unreleased — desktop service surface
 
 - Add a finite `workspaceServices` preload bridge (list, define, remove, start, stop, logs) with strict input validation of every definition field: argv bounds and control-character rejection, workspace-relative cwd, referenced allowlisted env names, unique named ports, absolute health paths and a bounded dependency list.

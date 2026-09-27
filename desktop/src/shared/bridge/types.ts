@@ -284,6 +284,7 @@ export interface WorkspaceServiceDto {
   state: 'registered' | 'starting' | 'running' | 'stopped' | 'exited' | 'failed'
   exitCode: number | null
   restarts: number
+  health: 'unknown' | 'starting' | 'healthy' | 'unhealthy'
 }
 
 export interface WorkspaceServiceLogsDto {

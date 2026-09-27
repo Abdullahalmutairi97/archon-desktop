@@ -127,7 +127,7 @@ describe('backend transport', () => {
 
   it('maps workspace service calls to fixed owner-only routes', async () => {
     const workspaceId = `workspace-${'a'.repeat(32)}`
-    const service = { name: 'web', argv: ['/bin/echo'], cwd: '.', ports: [], restart: 'never', state: 'registered', exitCode: null, restarts: 0 }
+    const service = { name: 'web', argv: ['/bin/echo'], cwd: '.', ports: [], restart: 'never', state: 'registered', exitCode: null, restarts: 0, health: 'unknown' }
     const fetcher = vi.fn<BackendFetch>(async (url, init) => response(
       url.pathname.endsWith('/logs') ? { text: 'x', truncated: false }
         : init?.method === 'GET' ? { services: [service] }

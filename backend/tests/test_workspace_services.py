@@ -24,7 +24,7 @@ OWNER_ID = "local-uid:1000"
 WORKSPACE_ID = "workspace-0123456789abcdef0123456789abcdef"
 
 
-def _manager(tmp_path: Path) -> WorkspaceServiceManager:
+def _manager(tmp_path: Path, *, health_probe=None) -> WorkspaceServiceManager:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(exist_ok=True)
     database = Database(tmp_path / "database.sqlite3")
@@ -43,6 +43,7 @@ def _manager(tmp_path: Path) -> WorkspaceServiceManager:
         database,
         owner_id=OWNER_ID,
         state_root=tmp_path / "private-state",
+        health_probe=health_probe,
     )
 
 
@@ -90,6 +91,50 @@ async def test_define_lists_and_persists_bounded_definitions(tmp_path):
         manager.database, owner_id=OWNER_ID, state_root=tmp_path / "private-state",
     )
     assert [entry["name"] for entry in await reloaded.list(WORKSPACE_ID)] == ["web"]
+
+
+@pytest.mark.asyncio
+async def test_declared_health_target_is_probed_on_loopback(tmp_path):
+    calls: list[str] = []
+    healthy = {"value": False}
+
+    async def fake_probe(url: str) -> bool:
+        calls.append(url)
+        return healthy["value"]
+
+    manager = _manager(tmp_path, health_probe=fake_probe)
+    await manager.define(WORKSPACE_ID, _definition(
+        name="web",
+        argv=["/bin/sleep", "5"],
+        ports=[{"name": "http", "port": 4173}],
+        health={"port": "http", "path": "/health"},
+    ))
+    await manager.start(WORKSPACE_ID, "web")
+    assert (await manager.list(WORKSPACE_ID))[0]["health"] == "starting"
+    healthy["value"] = True
+    for _ in range(40):
+        await asyncio.sleep(0.05)
+        if (await manager.list(WORKSPACE_ID))[0]["health"] == "healthy":
+            break
+    assert (await manager.list(WORKSPACE_ID))[0]["health"] == "healthy"
+    assert calls and calls[0] == "http://127.0.0.1:4173/health"
+    healthy["value"] = False
+    for _ in range(80):
+        await asyncio.sleep(0.05)
+        if (await manager.list(WORKSPACE_ID))[0]["health"] == "unhealthy":
+            break
+    assert (await manager.list(WORKSPACE_ID))[0]["health"] == "unhealthy"
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_service_without_health_target_reports_unknown(tmp_path):
+    manager = _manager(tmp_path)
+    await manager.define(WORKSPACE_ID, _definition(name="plain", argv=["/bin/sleep", "5"]))
+    await manager.start(WORKSPACE_ID, "plain")
+    await asyncio.sleep(0.2)
+    assert (await manager.list(WORKSPACE_ID))[0]["health"] == "unknown"
+    await manager.shutdown()
 
 
 @pytest.mark.asyncio

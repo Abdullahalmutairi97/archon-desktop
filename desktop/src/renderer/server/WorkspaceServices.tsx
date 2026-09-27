@@ -163,6 +163,7 @@ export function WorkspaceServices({
       {services.length === 0 && <li>No services registered.</li>}
       {services.map((service) => <li key={service.name}>
         <span className={`service-state service-${service.state}`}>{service.state}</span>
+        <span className={`service-health service-health-${service.health}`}>health: {service.health}</span>
         <code>{service.name}</code>
         <span className="service-argv">{service.argv.join(' ')}</span>
         {service.state !== 'running' && <button type="button" onClick={() => { void startService(service.name) }} disabled={busy || !pairingAvailable}>Start</button>}

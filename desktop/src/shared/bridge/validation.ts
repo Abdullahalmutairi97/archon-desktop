@@ -1110,6 +1110,7 @@ const WORKSPACE_SERVICE_NAME = /^[a-z][a-z0-9-]{0,31}$/u
 const WORKSPACE_SERVICE_PORT_NAME = /^[a-z][a-z0-9-]{0,15}$/u
 const WORKSPACE_SERVICE_ENV_REFS = new Set<string>(['NODE_ENV', 'PYTHONUNBUFFERED'])
 const WORKSPACE_SERVICE_STATES = new Set<string>(['registered', 'starting', 'running', 'stopped', 'exited', 'failed'])
+const WORKSPACE_SERVICE_HEALTH = new Set<string>(['unknown', 'starting', 'healthy', 'unhealthy'])
 
 function workspaceServiceName(value: unknown): string {
   if (typeof value !== 'string' || !WORKSPACE_SERVICE_NAME.test(value)) return fail()
@@ -1162,7 +1163,7 @@ function parseWorkspaceServiceDefinition(value: unknown): WorkspaceServiceDefini
 }
 
 function parseWorkspaceServiceDto(value: unknown): WorkspaceServiceDto {
-  const record = exactObject(value, ['name', 'argv', 'cwd', 'ports', 'restart', 'state', 'exitCode', 'restarts'])
+  const record = exactObject(value, ['name', 'argv', 'cwd', 'ports', 'restart', 'state', 'exitCode', 'restarts', 'health'])
   const name = workspaceServiceName(record.name)
   if (!Array.isArray(record.argv)
     || record.argv.some((item) => typeof item !== 'string' || item.length > MAX_WORKSPACE_SERVICE_ARG_LENGTH)) return fail()
@@ -1172,10 +1173,12 @@ function parseWorkspaceServiceDto(value: unknown): WorkspaceServiceDto {
   if (typeof record.state !== 'string' || !WORKSPACE_SERVICE_STATES.has(record.state)) return fail()
   if (record.exitCode !== null && (typeof record.exitCode !== 'number' || !Number.isInteger(record.exitCode))) return fail()
   if (typeof record.restarts !== 'number' || !Number.isInteger(record.restarts) || record.restarts < 0) return fail()
+  if (typeof record.health !== 'string' || !WORKSPACE_SERVICE_HEALTH.has(record.health)) return fail()
   return Object.freeze({
     name, argv: Object.freeze(record.argv as string[]), cwd: record.cwd, ports,
     restart: record.restart, state: record.state as WorkspaceServiceDto['state'],
     exitCode: record.exitCode as number | null, restarts: record.restarts,
+    health: record.health as WorkspaceServiceDto['health'],
   })
 }
 
