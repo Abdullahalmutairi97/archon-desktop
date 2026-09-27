@@ -448,3 +448,41 @@ def test_local_owner_workspace_service_api_contract(tmp_path):
         body = resources.json()
         assert body["services"] == {"registered": 0, "running": 0, "reservedMemoryMb": 0, "maxTotalMemoryMb": 4096}
         assert body["terminals"] == {"count": 0, "max": 16}
+
+
+def test_workspace_code_server_template_api(tmp_path):
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        workspace_root = tmp_path / "registered-checkout"
+        workspace_root.mkdir()
+        workspace_id = "workspace-cccccccccccccccccccccccccccccccc"
+        client.app.state.store.db.create_workspace(
+            workspace_id=workspace_id,
+            root=str(workspace_root),
+            owner_id=f"local-uid:{os.geteuid()}",
+            project_id="project-codeserver",
+            generation=1,
+            isolation_profile="git-checkout",
+        )
+        created = client.post(
+            f"/api/local/workspaces/{workspace_id}/services/code-server",
+            headers=headers,
+            json={"port": 4173},
+        )
+        assert created.status_code == 201
+        service = created.json()["service"]
+        assert service["name"] == "code-server"
+        assert service["argv"][1:5] == ["--bind-addr", "127.0.0.1:4173", "--auth", "none"]
+        assert service["ports"] == [{"name": "http", "port": 4173}]
+        assert client.post(
+            f"/api/local/workspaces/{workspace_id}/services/code-server",
+            headers=headers, json={"port": 80},
+        ).status_code == 422

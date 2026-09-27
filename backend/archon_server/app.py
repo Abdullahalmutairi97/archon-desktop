@@ -361,6 +361,12 @@ class RunnerTaskRequest(BaseModel):
     cwd: str = Field(default=".", max_length=512)
 
 
+class WorkspaceCodeServerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    port: int = Field(strict=True, ge=1024, le=65535)
+
+
 class WorkspaceFileWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1239,6 +1245,44 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         except WorkspaceTerminalAttachUnavailable as exc:
             raise HTTPException(status_code=410, detail="Attach lease is unknown or already released") from exc
         return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
+
+    @app.post(
+        "/api/local/workspaces/{workspace_id}/services/code-server",
+        status_code=201,
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_service_code_server(
+        workspace_id: str,
+        payload: WorkspaceCodeServerRequest,
+    ):
+        """Register a workspace-hosted code-server bound to loopback for the preview gateway."""
+        current_owner_workspace(workspace_id)
+        executable = str(settings.code_server_executable)
+        definition = {
+            "name": "code-server",
+            "argv": [
+                executable, "--bind-addr", f"127.0.0.1:{payload.port}",
+                "--auth", "none", "--disable-telemetry", ".",
+            ],
+            "cwd": ".",
+            "env": [],
+            "ports": [{"name": "http", "port": payload.port}],
+            "health": {"port": "http", "path": "/healthz"},
+            "dependsOn": [],
+            "restart": "on-failure",
+            "memoryLimitMb": None,
+        }
+        try:
+            defined = await workspace_service_manager().define(workspace_id, definition)
+        except WorkspaceServiceCapacity as exc:
+            raise HTTPException(status_code=409, detail="Workspace service limit reached") from exc
+        except WorkspaceServiceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkspaceServiceUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Workspace services are unavailable") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(status_code=201, content={"service": defined}, headers={"Cache-Control": "no-store"})
 
     def workspace_service_manager() -> WorkspaceServiceManager:
         if local_workspace_services is None:

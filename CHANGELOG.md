@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — workspace code-server template
+
+- Install code-server 4.139.1 and add `POST /api/local/workspaces/{id}/services/code-server`, which registers a loopback-bound code-server (`--auth none`, telemetry disabled, health `/healthz`) as a workspace service so the full IDE can be started on demand and reached through the sandboxed preview gateway.
+
 ## Unreleased — runner liveness
 
 - The enrolled-runner list now reports a `stale` flag derived from the last authenticated heartbeat against a configurable threshold, so the owner can tell a live remote runner from a silent one.

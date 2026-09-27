@@ -12,7 +12,7 @@ Prioritize an authenticated interactive attach to the existing checkout shell, t
 
 ## Checklist
 
-- [ ] Launch code-server on demand inside the workspace; pin supported extensions and verify licensing/source. Show unknown/unsupported language features honestly.
+- [ ] Launch code-server on demand inside the workspace; pin supported extensions and verify licensing/source. Show unknown/unsupported language features honestly. code-server 4.139.1 can now be registered on demand as a loopback workspace service (`.../services/code-server`) and reached through the sandboxed preview gateway; extension pinning/licensing and honest unknown-feature reporting remain.
 - [ ] Implement completions, diagnostics, project-wide search, Git diff and breakpoint/debug flows against the same root used by agents and terminals.
 - [ ] Require human writer ownership for full IDE; agent ownership uses the read-only viewer. Enforce P3's full process teardown before handing over write access.
 - [ ] Complete revision-aware brokered file saves, file invalidation, and editor draft recovery. Small existing UTF-8 files now use owner-scoped relative paths, no-symlink traversal, observed-content conflict detection, atomic same-directory replacement, and bounded local draft recovery. This does not fence native writers; claim atomic conflict protection only while the broker has exclusive mutator authority, and test native IDE save conflicts separately.
