@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — native capture and visual comparison harness
+
+- Add an isolated native capture harness: `capture-app.sh` launches a built app on a throwaway Xvfb display with a remote-debugging port, `capture-cdp.py` captures its real renderer over the Chrome DevTools Protocol at a forced 1440×900 viewport, and `compare-captures.py` reports the differing-pixel ratio against an explicit threshold.
+- Result: the frozen v0.3.0 baseline and the candidate built from it both render at 1440×900 with a 0.728% differing-pixel ratio (99.27% identical). This is a capture-level comparison, not a semantic parity claim.
+
 ## Unreleased — Prime and Pi qualified on DeepSeek Flash
 
 - Prime and Pi both completed a bounded headless provider turn on DeepSeek Flash (`deepseek` / `deepseek-flash`), joining Hermes; Codex is intentionally unused for this workstream. Pi's defaults and Prime's key were switched to DeepSeek.

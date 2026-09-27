@@ -49,9 +49,31 @@ Result on 2026-09-27:
 This verifies the input identity and the patched change-set. It is not a native or
 visual parity claim.
 
+## Native visual capture
+
+An isolated native capture harness is now in the repository:
+
+- `current/testing/capture-app.sh` launches a built app on a throwaway virtual
+display (`Xvfb`) with a remote-debugging port, and `current/testing/capture-cdp.py`
+captures its **real renderer** through the Chrome DevTools Protocol at a forced
+1440×900 viewport (the sandbox is disabled only for this disposable capture, never
+as production configuration).
+- `current/testing/compare-captures.py` compares two captures and reports the
+differing-pixel ratio against an explicit `--threshold`.
+
+Result on 2026-09-27 (frozen baseline vs the candidate built from it):
+
+- Both render at **1440×900**; the differing-pixel ratio is **0.728%**
+  (`--threshold 0.15`), with the diff bounding box `[161, 5, 1422, 882]` — about
+  99.27% of pixels identical.
+
+This is a capture-level comparison: it shows the candidate preserves the baseline
+layout and changes only a small, localized fraction. It is not a semantic or
+behavioural parity claim, and no threshold was lowered.
+
 ## Limits
 
 - The candidate is an app payload, not an Electron installer or an official release.
-- Native Electron compositing, live transport and visual parity against the
-  frozen archive were not exercised here.
+- The capture harness runs the renderer of each app on a virtual display; interactive
+  input, live transport and multi-monitor/DPI behaviour are not exercised.
 - The installed app was not replaced, and no release/deploy step was performed.
