@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Phase 2B.2 isolated profile and credential storage core
+
+- Add versioned profile settings and explicit, source-preserving migration with secret omission and path/symlink checks.
+- Add protected `safeStorage` ciphertext policy with memory-only fallback for unprotected storage; main-process wiring and native keyring qualification remain open.
+
 ## Unreleased — Phase 2B.1 trusted connection boundary
 
 - Add a finite, validated preload bridge and top-frame IPC binding for five read-only backend operations and explicit connection methods.

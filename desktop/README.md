@@ -22,6 +22,8 @@ P2A provides a synthetic reference shell and pure typed models for runtime ident
 
 P2B.1 adds a finite preload bridge and main-process backend transport for five read-only operations. The token stays in main-process memory, and the current renderer still shows synthetic data. The bridge is exercised with fake services; no real backend or local Codex agent is started. See [the P2B.1 scope](../docs/releases/phase-2b1-trusted-connection.md).
 
+P2B.2 adds injected profile and credential storage modules under `src/main/storage/`. They are exercised only with temporary fixtures and fake `safeStorage`; the active connection does not yet use them. See [the P2B.2 scope](../docs/releases/phase-2b2-profile-credential-storage.md).
+
 ## Source boundaries
 
 The historical Electron/React tree at commit `69bcf1ecb25e4004c11576d3becdb3cb2d266767` supplies layout/theme references. Readable pure helpers from `current/` supply behavior references. Neither the historical 1.0.0 label nor a matching prototype screenshot proves v0.3.0 parity. Authored modules have origin/transformation records; the normal build does not import bundle string-replacement patches or require recovered source directories.

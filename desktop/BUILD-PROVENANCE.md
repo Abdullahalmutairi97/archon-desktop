@@ -4,7 +4,7 @@ This directory is a new, isolated desktop reconstruction scaffold. Its package i
 
 The renderer and domain modules are authored or selectively reconstructed from the inputs documented next to those modules. The shell runs with Electron's sandbox and context isolation enabled, with Node integration disabled. P2B.1 adds a finite preload bridge and main-process memory-only read transport; the renderer still uses fixtures, and there are no provider adapters, updater or live UI connection. The product name, application ID, user-data namespace, and package name are all distinct from the installed application. Build metadata states `baselineParity: "unverified"` and `liveConnectionsEnabled: false`.
 
-The P2B.1 bridge, frame guard and fixed-route transport are newly authored against the Phase 1D backend routes and readiness shape. The historical privileged main process was inspected as a compatibility reference only; its IPC registration, asset scheme, updater and plaintext safe-storage test toggle were not imported.
+The P2B.1 bridge, frame guard and fixed-route transport are newly authored against the Phase 1D backend routes and readiness shape. P2B.2 adds isolated, injected profile and credential storage cores that are not wired to the active connection. The historical privileged main process was inspected as a compatibility reference only; its IPC registration, asset scheme, updater and plaintext safe-storage test toggle were not imported.
 
 ## Pinned toolchain
 
