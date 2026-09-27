@@ -44,6 +44,7 @@ export const LOCAL_CODEX_CHANNELS = Object.freeze({
   listProjects: 'archon:local-codex:projects:list',
   listSessions: 'archon:local-codex:sessions:list',
   registerProject: 'archon:local-codex:projects:register',
+  registerWorkspace: 'archon:local-codex:projects:register-workspace',
   startTurn: 'archon:local-codex:turn:start',
   cancelTurn: 'archon:local-codex:turn:cancel',
   answerApproval: 'archon:local-codex:approval:answer',
@@ -67,6 +68,7 @@ const operationNames = Object.freeze([
   'tasks.events',
   'tasks.cancel',
   'workspaces.list',
+  'workspaces.get',
   'workspaces.provision',
   'workspaces.files.list',
   'workspaces.files.read',
@@ -229,6 +231,12 @@ function parseWorkspaceProvisionPayload(value: unknown): WorkspaceProvisionPaylo
   return Object.freeze({ projectId: record.projectId, revision: record.revision })
 }
 
+function parseWorkspaceByIdPayload(value: unknown): { workspaceId: string } {
+  const record = exactObject(value, ['workspaceId'])
+  if (!workspaceFileId(record.workspaceId)) return fail()
+  return Object.freeze({ workspaceId: record.workspaceId })
+}
+
 function parseProjectHeadPayload(value: unknown): ProjectHeadPayload {
   const record = exactObject(value, ['projectId'])
   if (!workspaceText(record.projectId, MAX_PROJECT_ID_LENGTH)) return fail()
@@ -312,6 +320,8 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseEmptyPayload(payload)])
     case 'workspaces.provision':
       return Object.freeze([operation, parseWorkspaceProvisionPayload(payload)])
+    case 'workspaces.get':
+      return Object.freeze([operation, parseWorkspaceByIdPayload(payload)])
     case 'projects.head':
       return Object.freeze([operation, parseProjectHeadPayload(payload)])
     case 'workspaces.files.list':
@@ -579,6 +589,10 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       if (!Array.isArray(list)) return fail()
       return Object.freeze({ workspaces: Object.freeze(list.map(parseWorkspaceRecord)) })
     }
+    case 'workspaces.get': {
+      const record = exactObject(value, ['workspace'])
+      return Object.freeze({ workspace: parseWorkspaceRecord(record.workspace) })
+    }
     case 'workspaces.provision': {
       const record = exactObject(value, ['workspace'])
       return Object.freeze({ workspace: parseWorkspaceRecord(record.workspace) })
@@ -842,6 +856,12 @@ function parseLocalSessionsPayload(value: unknown): { projectId: string } {
   return Object.freeze({ projectId: record.projectId })
 }
 
+function parseLocalWorkspacePayload(value: unknown): { workspaceId: string } {
+  const record = exactObject(value, ['workspaceId'])
+  if (!workspaceFileId(record.workspaceId)) return fail()
+  return Object.freeze({ workspaceId: record.workspaceId })
+}
+
 function parseLocalTaskPayload(value: unknown): { taskId: string } {
   const record = exactObject(value, ['taskId'])
   if (!isLocalTaskId(record.taskId)) return fail()
@@ -881,6 +901,9 @@ export function parseLocalCodexRequest(channel: unknown, args: readonly unknown[
     case LOCAL_CODEX_CHANNELS.registerProject:
       if (safeArgs.length !== 0) return fail()
       return makeLocalCodexRequest(channel, [])
+    case LOCAL_CODEX_CHANNELS.registerWorkspace:
+      if (safeArgs.length !== 1) return fail()
+      return makeLocalCodexRequest(channel, [parseLocalWorkspacePayload(safeArgs[0])])
     case LOCAL_CODEX_CHANNELS.listSessions:
       if (safeArgs.length !== 1) return fail()
       return makeLocalCodexRequest(channel, [parseLocalSessionsPayload(safeArgs[0])])
@@ -917,6 +940,8 @@ export function parseLocalCodexResponse(channel: unknown, value: unknown): unkno
     }
     case LOCAL_CODEX_CHANNELS.registerProject:
       return value === null ? null : boundedLocalResult(parseLocalProject(value))
+    case LOCAL_CODEX_CHANNELS.registerWorkspace:
+      return boundedLocalResult(parseLocalProject(value))
     case LOCAL_CODEX_CHANNELS.startTurn:
       return boundedLocalResult(parseLocalTurn(value))
     case LOCAL_CODEX_CHANNELS.cancelTurn:

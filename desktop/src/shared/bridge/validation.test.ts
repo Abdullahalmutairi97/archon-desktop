@@ -47,6 +47,8 @@ describe('finite desktop bridge validation', () => {
     })
     expect(parseOperationRequest('tasks.list', { limit: 1 })).toEqual(['tasks.list', { limit: 1 }])
     expect(parseOperationRequest('workspaces.list', {})).toEqual(['workspaces.list', {}])
+    expect(parseOperationRequest('workspaces.get', { workspaceId: `workspace-${'a'.repeat(32)}` }))
+      .toEqual(['workspaces.get', { workspaceId: `workspace-${'a'.repeat(32)}` }])
     expect(parseOperationRequest('workspaces.provision', {
       projectId: 'project-1', revision: 'a'.repeat(40),
     })).toEqual(['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(40) }])
@@ -58,6 +60,8 @@ describe('finite desktop bridge validation', () => {
       ['tasks.list', { limit: 0 }],
       ['events.cursor', { after: 12 }],
       ['workspaces.list', { limit: 501 }],
+      ['workspaces.get', { workspaceId: '../workspace' }],
+      ['workspaces.get', { workspaceId: `workspace-${'a'.repeat(32)}`, root: '/etc' }],
       ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(39) }],
       ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(65) }],
       ['workspaces.provision', { projectId: 'project-1', revision: 'a'.repeat(40), root: '/tmp' }],
@@ -228,6 +232,9 @@ describe('finite desktop bridge validation', () => {
     }, 'workspaces.list')).toThrow(TypeError)
     expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { workspace }, 'workspaces.provision'))
       .toEqual({ workspace })
+    const handoffWorkspace = { ...workspace, workspace_id: `workspace-${'a'.repeat(32)}` }
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { workspace: handoffWorkspace }, 'workspaces.get'))
+      .toEqual({ workspace: handoffWorkspace })
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { workspace: { ...workspace, generation: 0 } }, 'workspaces.provision'))
       .toThrow(TypeError)
   })
@@ -244,6 +251,11 @@ describe('finite desktop bridge validation', () => {
     expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.registerProject, [])).toEqual({
       channel: LOCAL_CODEX_CHANNELS.registerProject,
       args: [],
+    })
+    const workspaceId = `workspace-${'b'.repeat(32)}`
+    expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.registerWorkspace, [{ workspaceId }])).toEqual({
+      channel: LOCAL_CODEX_CHANNELS.registerWorkspace,
+      args: [{ workspaceId }],
     })
     expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.startTurn, [{
       projectId: 'codex-project:fixture', prompt: 'Review this file',
@@ -264,6 +276,8 @@ describe('finite desktop bridge validation', () => {
 
     for (const [channel, args] of [
       [LOCAL_CODEX_CHANNELS.registerProject, [{ rootPath: '/tmp/workspace' }]],
+      [LOCAL_CODEX_CHANNELS.registerWorkspace, [{ workspaceId, root: '/etc' }]],
+      [LOCAL_CODEX_CHANNELS.registerWorkspace, [{ workspaceId: 'workspace-../etc' }]],
       [LOCAL_CODEX_CHANNELS.listSessions, [{ projectId: 'wrong:fixture' }]],
       [LOCAL_CODEX_CHANNELS.startTurn, [{ projectId: 'codex-project:fixture', prompt: 'work', command: '/bin/sh' }]],
       [LOCAL_CODEX_CHANNELS.startTurn, [{ projectId: 'codex-project:fixture', prompt: 'work', sessionId: 'other:thread' }]],
@@ -285,6 +299,8 @@ describe('finite desktop bridge validation', () => {
     expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.listSessions, [session])).toEqual([session])
     expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.registerProject, null)).toBeNull()
     expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.registerProject, project)).toEqual(project)
+    expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.registerWorkspace, project)).toEqual(project)
+    expect(() => parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.registerWorkspace, null)).toThrow(TypeError)
     expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.startTurn, {
       taskId: 'codex-task:fixture', projectId: project.id, sessionId: 'codex:thread-1', state: 'running',
     })).toEqual({

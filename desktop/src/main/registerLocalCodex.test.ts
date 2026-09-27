@@ -29,6 +29,7 @@ describe('fixed local Codex IPC registrar', () => {
       listProjects: async () => [project()],
       listSessions: async () => [],
       registerProject: async () => null,
+      registerWorkspaceRoot: vi.fn(async (rootPath) => ({ ...project(), rootPath })),
       startTurn,
       cancelTurn: async () => false,
       answerApproval: () => false,
@@ -39,6 +40,7 @@ describe('fixed local Codex IPC registrar', () => {
       guard: () => true,
       trustedFrame: { assertTrusted: () => undefined },
       controller,
+      getWorkspaceRoot: async () => '/tmp/server-workspace',
       getWindow: () => undefined,
     })
     expect([...handlers.keys()].sort()).toEqual(Object.values(LOCAL_CODEX_CHANNELS)
@@ -52,6 +54,44 @@ describe('fixed local Codex IPC registrar', () => {
     expect(handlers.size).toBe(0)
   })
 
+  it('resolves workspace handoff from only a validated identity and never accepts a renderer path', async () => {
+    const { ipc, handlers } = createIpc()
+    const workspaceId = `workspace-${'c'.repeat(32)}`
+    const registerWorkspaceRoot = vi.fn(async (rootPath: string) => ({ ...project(), rootPath }))
+    const getWorkspaceRoot = vi.fn(async (id: string) => `/srv/workspaces/${id}`)
+    const controller: LocalCodexIpcController = {
+      listProjects: async () => [],
+      listSessions: async () => [],
+      registerProject: async () => null,
+      registerWorkspaceRoot,
+      startTurn: async () => { throw new Error('unused') },
+      cancelTurn: async () => false,
+      answerApproval: () => false,
+      subscribe: () => () => undefined,
+    }
+    const unregister = registerLocalCodex({
+      ipc,
+      guard: () => true,
+      trustedFrame: { assertTrusted: () => undefined },
+      controller,
+      getWorkspaceRoot,
+      getWindow: () => undefined,
+    })
+    const handoff = handlers.get(LOCAL_CODEX_CHANNELS.registerWorkspace)!
+
+    await expect(handoff({}, { workspaceId })).resolves.toEqual({
+      ...project(), rootPath: `/srv/workspaces/${workspaceId}`,
+    })
+    expect(getWorkspaceRoot).toHaveBeenCalledWith(workspaceId)
+    expect(registerWorkspaceRoot).toHaveBeenCalledWith(`/srv/workspaces/${workspaceId}`)
+
+    await expect(handoff({}, { workspaceId, rootPath: '/etc' })).rejects.toThrow(/invalid desktop bridge request/i)
+    await expect(handoff({}, { workspaceId: 'workspace-../../etc' })).rejects.toThrow(/invalid desktop bridge request/i)
+    expect(getWorkspaceRoot).toHaveBeenCalledOnce()
+    expect(registerWorkspaceRoot).toHaveBeenCalledOnce()
+    unregister()
+  })
+
   it('rechecks trust after an async invoke and validates outbound events before send', async () => {
     const { ipc, handlers } = createIpc()
     const listProjects = vi.fn(async () => [project()])
@@ -60,6 +100,7 @@ describe('fixed local Codex IPC registrar', () => {
       listProjects,
       listSessions: async () => [],
       registerProject: async () => null,
+      registerWorkspaceRoot: vi.fn(async (rootPath) => ({ ...project(), rootPath })),
       startTurn: async () => { throw new Error('unused') },
       cancelTurn: async () => false,
       answerApproval: () => false,
@@ -77,7 +118,8 @@ describe('fixed local Codex IPC registrar', () => {
         send,
       },
     }
-    const unregister = registerLocalCodex({ ipc, guard, trustedFrame: { assertTrusted: trust }, controller, getWindow: () => window })
+    const unregister = registerLocalCodex({ ipc, guard, trustedFrame: { assertTrusted: trust }, controller,
+      getWorkspaceRoot: async () => '/tmp/server-workspace', getWindow: () => window })
     await expect(handlers.get(LOCAL_CODEX_CHANNELS.listProjects)!({})).rejects.toThrow(/untrusted desktop frame/i)
     expect(listProjects).toHaveBeenCalledTimes(1)
 

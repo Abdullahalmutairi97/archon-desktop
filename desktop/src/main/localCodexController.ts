@@ -266,6 +266,19 @@ export class LocalCodexController {
   }
 
   async registerProject(): Promise<LocalCodexProjectDto | null> {
+    return this.registerFromDirectoryProvider(() => this.options.pickProjectDirectory())
+  }
+
+  /** Register a main-process-resolved directory through the same metadata path as the native picker. */
+  async registerWorkspaceRoot(rootPath: string): Promise<LocalCodexProjectDto> {
+    const project = await this.registerFromDirectoryProvider(async () => rootPath)
+    if (project === null) throw new Error('The server workspace directory is unavailable.')
+    return project
+  }
+
+  private async registerFromDirectoryProvider(
+    selectDirectory: () => Promise<string | null>,
+  ): Promise<LocalCodexProjectDto | null> {
     this.assertOpen()
     if (this.registrationReserved || this.startReserved || this.hasActiveTurn()) {
       throw new Error('Finish the active local Codex turn before registering a project.')
@@ -274,7 +287,7 @@ export class LocalCodexController {
     // race the registry read/replace or start a turn from stale metadata.
     this.registrationReserved = true
     try {
-      const selected = await this.options.pickProjectDirectory()
+      const selected = await selectDirectory()
       this.assertOpen()
       if (selected === null) return null
       if (this.startReserved || this.hasActiveTurn()) {

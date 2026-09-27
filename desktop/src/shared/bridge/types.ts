@@ -119,6 +119,10 @@ export interface WorkspaceProvisionPayload {
   revision: string
 }
 
+export interface WorkspaceByIdPayload {
+  workspaceId: string
+}
+
 export interface ProjectHeadPayload {
   projectId: string
 }
@@ -182,6 +186,10 @@ export interface OperationMap {
   'workspaces.list': {
     payload: EmptyPayload
     result: { workspaces: readonly WorkspaceRecord[] }
+  }
+  'workspaces.get': {
+    payload: WorkspaceByIdPayload
+    result: { workspace: WorkspaceRecord }
   }
   'workspaces.provision': {
     payload: WorkspaceProvisionPayload
@@ -293,6 +301,8 @@ export interface LocalCodexBridge {
   listSessions(projectId: string): Promise<readonly LocalCodexSessionDto[]>
   /** Opens a native directory picker; the renderer cannot supply a path. */
   registerProject(): Promise<LocalCodexProjectDto | null>
+  /** Registers a server-provisioned workspace by its opaque identity; the renderer cannot supply a path. */
+  registerWorkspace(input: WorkspaceByIdPayload): Promise<LocalCodexProjectDto>
   startTurn(input: { projectId: string; prompt: string; sessionId?: string }): Promise<LocalCodexTurnDto>
   cancelTurn(input: { taskId: string }): Promise<boolean>
   subscribe(listener: (event: LocalCodexEvent) => void): () => void

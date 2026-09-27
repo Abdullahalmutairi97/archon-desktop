@@ -103,6 +103,60 @@ describe('main-process connection service', () => {
     })
   })
 
+  it('rejects workspace handoff on a saved remote loopback connection', async () => {
+    const transport = fakeTransport()
+    const credentials = fakeCredentials({ saved: firstPair })
+    const localPairing = { pair: vi.fn(async () => pairedLocal) }
+    const service = await createConnectionService(transport, credentials, { localPairing })
+
+    await expect(service.getPairedLocalWorkspace(`workspace-${'a'.repeat(32)}`))
+      .rejects.toThrow(/active local archon pairing/i)
+    expect(localPairing.pair).not.toHaveBeenCalled()
+    expect(transport.invoke).not.toHaveBeenCalled()
+  })
+
+  it('uses the active same-user pairing for a workspace GET and rejects a mismatched identity', async () => {
+    const transport = fakeTransport()
+    const credentials = fakeCredentials()
+    const localPairing = { pair: vi.fn(async () => pairedLocal) }
+    const service = await createConnectionService(transport, credentials, { localPairing })
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const workspace = {
+      workspace_id: workspaceId, root: '/srv/archon/workspaces/workspace-a', project_id: null,
+      base_revision: null, head_revision: null, generation: 1,
+    }
+    transport.invoke.mockImplementationOnce(async () => ({ workspace }) as never)
+
+    await expect(service.getPairedLocalWorkspace(workspaceId)).resolves.toEqual(workspace)
+    expect(transport.invoke).toHaveBeenCalledWith('workspaces.get', { workspaceId })
+
+    transport.invoke.mockImplementationOnce(async () => ({
+      workspace: { ...workspace, workspace_id: `workspace-${'b'.repeat(32)}` },
+    }) as never)
+    await expect(service.getPairedLocalWorkspace(workspaceId)).rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('rejects a workspace response when the local pairing generation changes in flight', async () => {
+    const transport = fakeTransport()
+    const credentials = fakeCredentials()
+    const localPairing = { pair: vi.fn(async () => pairedLocal) }
+    const service = await createConnectionService(transport, credentials, { localPairing })
+    const workspaceId = `workspace-${'e'.repeat(32)}`
+    const workspace = {
+      workspace_id: workspaceId, root: '/srv/archon/workspaces/workspace-e', project_id: null,
+      base_revision: null, head_revision: null, generation: 1,
+    }
+    let resolveFetch: ((value: unknown) => void) | undefined
+    transport.invoke.mockImplementationOnce(() => new Promise<unknown>((resolve) => { resolveFetch = resolve }) as never)
+    const pending = service.getPairedLocalWorkspace(workspaceId)
+    await new Promise((resolve) => setImmediate(resolve))
+
+    await expect(service.save(secondPair)).resolves.toMatchObject({ description: { generation: 2 } })
+    resolveFetch?.({ workspace })
+    await expect(pending).rejects.toMatchObject({ code: 'connection_changed' })
+    expect(transport.active).toEqual(secondPair)
+  })
+
   it('disconnects an expired local bearer when renewal fails and permits a later retry', async () => {
     vi.useFakeTimers()
     try {

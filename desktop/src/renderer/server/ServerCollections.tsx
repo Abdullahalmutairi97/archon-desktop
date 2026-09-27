@@ -128,6 +128,7 @@ function WorkspaceSection({
   accessRejected,
   projects,
   projectsLoading,
+  localCodexPairingAvailable,
 }: {
   bridge: DesktopBridge
   state: 'loading' | 'ready' | 'unavailable'
@@ -136,6 +137,7 @@ function WorkspaceSection({
   accessRejected: boolean
   projects: readonly JsonRecord[] | null
   projectsLoading: boolean
+  localCodexPairingAvailable: boolean
 }) {
   const choices = workspaceProjectChoices(projects ?? [])
   const [projectId, setProjectId] = useState('')
@@ -144,9 +146,12 @@ function WorkspaceSection({
   const [headMessage, setHeadMessage] = useState<string | null>(null)
   const [provisionPending, setProvisionPending] = useState(false)
   const [provisionMessage, setProvisionMessage] = useState<{ kind: 'success' | 'error' | 'ambiguous'; text: string } | null>(null)
+  const [localCodexPendingWorkspaceId, setLocalCodexPendingWorkspaceId] = useState<string | null>(null)
+  const [localCodexFeedback, setLocalCodexFeedback] = useState<{ workspaceId: string; kind: 'success' | 'error'; text: string } | null>(null)
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
   const provisionLock = useRef(false)
   const headLock = useRef(false)
+  const localCodexLock = useRef(false)
   const readOnlyFilePort = useMemo<WorkspaceReadOnlyFilePort>(() => ({
     list: (workspaceId, path, limit) => bridge.api.invoke('workspaces.files.list', { workspaceId, path, limit }),
     read: (workspaceId, path, maxBytes) => bridge.api.invoke('workspaces.files.read', { workspaceId, path, maxBytes }),
@@ -203,9 +208,33 @@ function WorkspaceSection({
     }
   }
 
+  async function registerWorkspaceWithLocalCodex(workspaceId: string): Promise<void> {
+    if (!localCodexPairingAvailable || localCodexLock.current || !/^workspace-[0-9a-f]{32}$/u.test(workspaceId)) return
+    localCodexLock.current = true
+    setLocalCodexPendingWorkspaceId(workspaceId)
+    setLocalCodexFeedback(null)
+    try {
+      await bridge.localCodex.registerWorkspace({ workspaceId })
+      setLocalCodexFeedback({
+        workspaceId,
+        kind: 'success',
+        text: 'Added to Local Codex. Open the Local Codex view to start a task.',
+      })
+    } catch {
+      setLocalCodexFeedback({
+        workspaceId,
+        kind: 'error',
+        text: 'Could not add this workspace to Local Codex. Try again.',
+      })
+    } finally {
+      localCodexLock.current = false
+      setLocalCodexPendingWorkspaceId(null)
+    }
+  }
+
   return <section className="server-collection server-workspaces" aria-label="SERVER WORKSPACES">
     <div className="server-collection-heading"><h3>SERVER WORKSPACES</h3><span>{state === 'ready' ? `${records.length} shown` : state === 'loading' ? 'loading' : 'unavailable'}</span></div>
-    <p className="server-workspace-status">Git checkout; native execution isolation not yet enabled</p>
+    <p className="server-workspace-status">Server Git checkout; Local Codex remains Electron-owned and native execution isolation is not enabled.</p>
     {state === 'loading' && <p className="server-collection-empty">Loading workspaces from this server…</p>}
     {state === 'unavailable' && <div className="server-workspace-unavailable" role="alert">
       <span>{accessRejected
@@ -274,6 +303,19 @@ function WorkspaceSection({
             {/^workspace-[0-9a-f]{32}$/u.test(id) && <button type="button" className="server-workspace-browse" aria-pressed={activeWorkspaceId === id} onClick={() => setSelectedWorkspaceId(activeWorkspaceId === id ? null : id)}>
               {activeWorkspaceId === id ? 'Close files' : 'Browse files'}
             </button>}
+            {localCodexPairingAvailable && /^workspace-[0-9a-f]{32}$/u.test(id) && <>
+              <button
+                type="button"
+                className="server-workspace-local-codex"
+                onClick={() => { void registerWorkspaceWithLocalCodex(id) }}
+                disabled={localCodexPendingWorkspaceId !== null}
+              >
+                {localCodexPendingWorkspaceId === id ? 'Registering…' : 'Add to Local Codex'}
+              </button>
+              {localCodexFeedback?.workspaceId === id && <p className={`server-workspace-feedback feedback-${localCodexFeedback.kind}`} role={localCodexFeedback.kind === 'error' ? 'alert' : 'status'}>
+                {localCodexFeedback.text}
+              </p>}
+            </>}
           </li>
         })}
       </ul>}
@@ -422,6 +464,7 @@ export function ServerCollections({
         onRetry={() => setWorkspaceReload((current) => current + 1)}
         projects={data?.projects ?? null}
         projectsLoading={state === 'loading'}
+        localCodexPairingAvailable={configured && connection?.localPairingAvailable === true}
       />}
     </div>}
     {(data || currentWorkspaceLoadState?.state === 'ready') && <p className="server-collections-note">Counts show rows returned; the server may cap session, task and workspace lists.</p>}

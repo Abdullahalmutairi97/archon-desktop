@@ -21,6 +21,7 @@ export interface LocalCodexIpcController {
   listProjects(): Promise<readonly LocalCodexProjectDto[]>
   listSessions(projectId: string): Promise<readonly LocalCodexSessionDto[]>
   registerProject(): Promise<LocalCodexProjectDto | null>
+  registerWorkspaceRoot(rootPath: string): Promise<LocalCodexProjectDto>
   startTurn(input: { projectId: string; prompt: string; sessionId?: string }): Promise<LocalCodexTurnDto>
   cancelTurn(input: { taskId: string }): Promise<boolean>
   answerApproval(input: { approvalId: string; allow: boolean }): boolean
@@ -32,6 +33,8 @@ export interface RegisterLocalCodexOptions {
   guard(event: unknown): boolean | void
   trustedFrame: Pick<TrustedShellFrameGuard, 'assertTrusted'>
   controller: LocalCodexIpcController
+  /** Resolves an owner-scoped server identity over the active local pairing; never supplied by the renderer. */
+  getWorkspaceRoot(workspaceId: string): Promise<string>
   getWindow(): LocalCodexWindowLike | undefined
 }
 
@@ -39,6 +42,7 @@ const LOCAL_CODEX_INVOKE_CHANNELS = Object.freeze([
   LOCAL_CODEX_CHANNELS.listProjects,
   LOCAL_CODEX_CHANNELS.listSessions,
   LOCAL_CODEX_CHANNELS.registerProject,
+  LOCAL_CODEX_CHANNELS.registerWorkspace,
   LOCAL_CODEX_CHANNELS.startTurn,
   LOCAL_CODEX_CHANNELS.cancelTurn,
   LOCAL_CODEX_CHANNELS.answerApproval,
@@ -87,6 +91,12 @@ export function registerLocalCodex(options: RegisterLocalCodexOptions): () => vo
           case LOCAL_CODEX_CHANNELS.registerProject:
             result = await options.controller.registerProject()
             break
+          case LOCAL_CODEX_CHANNELS.registerWorkspace: {
+            const { workspaceId } = request.args[0] as { workspaceId: string }
+            const rootPath = await options.getWorkspaceRoot(workspaceId)
+            result = await options.controller.registerWorkspaceRoot(rootPath)
+            break
+          }
           case LOCAL_CODEX_CHANNELS.startTurn:
             result = await options.controller.startTurn(request.args[0] as { projectId: string; prompt: string; sessionId?: string })
             break

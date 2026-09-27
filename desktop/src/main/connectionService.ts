@@ -5,6 +5,7 @@ import type {
   ConnectionSaveResult,
   OperationMap,
   OperationName,
+  WorkspaceRecord,
 } from '../shared/bridge/types'
 import type { CredentialDescription, CredentialStore } from './storage/credentialStore'
 import { BackendTransportError, validateBackendConnectionInput } from './transport/backendTransport'
@@ -90,7 +91,8 @@ export async function createConnectionService(
 
   const activeLocalPairingGeneration = (): number | undefined => {
     if (!localPairingEnabled || localPairingExpiresAt === undefined || serverUrl === null
-      || localPairingGeneration !== transport.generation) return undefined
+      || localPairingGeneration !== transport.generation
+      || localPairingExpiresAt <= Math.floor(Date.now() / 1000)) return undefined
     return localPairingGeneration
   }
 
@@ -246,6 +248,22 @@ export async function createConnectionService(
         }
         return transport.invoke(operation, payload)
       }
+    },
+    getPairedLocalWorkspace: async (workspaceId: string): Promise<WorkspaceRecord> => {
+      if (typeof workspaceId !== 'string' || !/^workspace-[0-9a-f]{32}$/u.test(workspaceId)) {
+        throw new TypeError('Invalid server workspace identity.')
+      }
+      // A refresh is allowed only through the configured same-user Unix-socket
+      // pairing client. Saved remote connections never enable localPairingEnabled.
+      await ensureLocalPairing(true)
+      const requestGeneration = activeLocalPairingGeneration()
+      if (requestGeneration === undefined) throw new Error('An active local Archon pairing is required.')
+      const result = await transport.invoke('workspaces.get', { workspaceId }) as { workspace: WorkspaceRecord }
+      if (transport.generation !== requestGeneration || activeLocalPairingGeneration() !== requestGeneration) {
+        throw new BackendTransportError('connection_changed')
+      }
+      if (result.workspace.workspace_id !== workspaceId) throw new BackendTransportError('invalid_response')
+      return result.workspace
     },
   }
 }

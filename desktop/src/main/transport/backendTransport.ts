@@ -20,6 +20,7 @@ export const READ_ONLY_OPERATIONS: readonly OperationName[] = Object.freeze([
   'tasks.list',
   'events.cursor',
   'workspaces.list',
+  'workspaces.get',
   'workspaces.files.list',
   'workspaces.files.read',
 ])
@@ -49,6 +50,7 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'tasks.events': 'GET',
   'tasks.cancel': 'POST',
   'workspaces.list': 'GET',
+  'workspaces.get': 'GET',
   'workspaces.provision': 'POST',
   'workspaces.files.list': 'GET',
   'workspaces.files.read': 'GET',
@@ -78,6 +80,7 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'tasks.events': '/api/tasks',
   'tasks.cancel': '/api/tasks',
   'workspaces.list': '/api/workspaces',
+  'workspaces.get': '/api/workspaces',
   'workspaces.provision': '/api/workspaces',
   'workspaces.files.list': '/api/workspaces',
   'workspaces.files.read': '/api/workspaces',
@@ -310,6 +313,9 @@ function operationUrl(
     path += `/${taskId}`
     if (operation === 'tasks.events') path += '/events'
     if (operation === 'tasks.cancel') path += '/cancel'
+  } else if (operation === 'workspaces.get') {
+    const workspacePayload = payload as OperationMap['workspaces.get']['payload']
+    path += `/${encodeURIComponent(workspacePayload.workspaceId)}`
   } else if (operation === 'workspaces.files.list' || operation === 'workspaces.files.read') {
     const workspacePayload = payload as OperationMap['workspaces.files.list']['payload']
     path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files`
@@ -360,6 +366,10 @@ function isSupportedResult(
         Number.isSafeInteger(event.seq) &&
         event.seq > after,
       )
+    }
+    if (operation === 'workspaces.get') {
+      const requestedWorkspaceId = (payload as OperationMap['workspaces.get']['payload']).workspaceId
+      return isRecord(value.workspace) && value.workspace.workspace_id === requestedWorkspaceId
     }
     if (operation === 'workspaces.files.list') {
       const requested = payload as OperationMap['workspaces.files.list']['payload']

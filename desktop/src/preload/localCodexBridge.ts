@@ -34,6 +34,9 @@ export function createLocalCodexBridge(ipc: LocalCodexIpcInvoker): LocalCodexBri
     registerProject: () => invokeLocalCodex<Awaited<ReturnType<LocalCodexBridge['registerProject']>>>(
       ipc, LOCAL_CODEX_CHANNELS.registerProject, [],
     ),
+    registerWorkspace: (input: Parameters<LocalCodexBridge['registerWorkspace']>[0]) => invokeLocalCodex<Awaited<ReturnType<LocalCodexBridge['registerWorkspace']>>>(
+      ipc, LOCAL_CODEX_CHANNELS.registerWorkspace, [input],
+    ),
     startTurn: (input: Parameters<LocalCodexBridge['startTurn']>[0]) => invokeLocalCodex<Awaited<ReturnType<LocalCodexBridge['startTurn']>>>(
       ipc, LOCAL_CODEX_CHANNELS.startTurn, [input],
     ),

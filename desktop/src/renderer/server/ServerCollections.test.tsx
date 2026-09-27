@@ -5,19 +5,26 @@ import { ServerCollections } from './ServerCollections'
 
 afterEach(cleanup)
 
-function connection(configured = true, generation = 1): ConnectionDescription {
+function connection(configured = true, generation = 1, localPairingAvailable = false): ConnectionDescription {
   return {
     serverUrl: configured ? 'https://archon.example' : null,
     configured,
     storageMode: 'memory',
     generation,
+    ...(localPairingAvailable ? { localPairingAvailable: true } : {}),
   }
 }
 
-function fakeBridge(invoke: (operation: string, payload?: unknown) => Promise<unknown>) {
+function fakeBridge(
+  invoke: (operation: string, payload?: unknown) => Promise<unknown>,
+  registerWorkspace: (input: { workspaceId: string }) => Promise<unknown> = vi.fn(async (_input: { workspaceId: string }) => ({
+    id: 'local-project-1', name: 'Local checkout', rootPath: '/private/local/root',
+  })),
+) {
   const apiInvoke = vi.fn(invoke)
-  const bridge = { api: { invoke: apiInvoke } } as unknown as DesktopBridge
-  return { bridge, apiInvoke }
+  const startTurn = vi.fn()
+  const bridge = { api: { invoke: apiInvoke }, localCodex: { registerWorkspace, startTurn } } as unknown as DesktopBridge
+  return { bridge, apiInvoke, registerWorkspace, startTurn }
 }
 
 function collections(projects: unknown[] = [], sessions: unknown[] = [], tasks: unknown[] = [], workspaces: unknown[] = []) {
@@ -121,7 +128,78 @@ describe('ServerCollections', () => {
     expect(within(section).getByText(`Base revision: ${'a'.repeat(40)}`)).toBeInTheDocument()
     expect(within(section).getByText(`Head revision: ${'b'.repeat(40)}`)).toBeInTheDocument()
     expect(within(section).getByText(`Authoritative root: ${workspace.root}`)).toBeInTheDocument()
-    expect(within(section).getByText('Git checkout; native execution isolation not yet enabled')).toBeInTheDocument()
+    expect(within(section).getByText('Server Git checkout; Local Codex remains Electron-owned and native execution isolation is not enabled.')).toBeInTheDocument()
+  })
+
+  it('offers local Codex registration only for valid workspaces on an active local pairing', async () => {
+    const eligibleId = `workspace-${'a'.repeat(32)}`
+    const { bridge } = fakeBridge(collections([], [], [], [
+      { workspace_id: eligibleId, root: '/srv/workspace', project_id: 'project-1' },
+    ]))
+    const { rerender } = render(<ServerCollections bridge={bridge} connection={connection()} />)
+    const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
+
+    expect(within(section).queryByRole('button', { name: 'Add to Local Codex' })).not.toBeInTheDocument()
+
+    rerender(<ServerCollections bridge={bridge} connection={connection(true, 1, true)} />)
+    expect(await within(section).findByRole('button', { name: 'Add to Local Codex' })).toBeInTheDocument()
+  })
+
+  it('registers the workspace identity with Local Codex without starting a task', async () => {
+    const workspaceId = `workspace-${'b'.repeat(32)}`
+    const localRoot = '/private/local/codex/root'
+    const pendingRegistration = deferred<unknown>()
+    const registerWorkspace = vi.fn((_input: { workspaceId: string }) => pendingRegistration.promise)
+    const { bridge, apiInvoke, startTurn } = fakeBridge(collections([], [], [], [{
+      workspace_id: workspaceId,
+      root: '/srv/archon/workspaces/server-root',
+      project_id: 'project-1',
+    }]), registerWorkspace)
+    const { container } = render(<ServerCollections bridge={bridge} connection={connection(true, 1, true)} />)
+
+    const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
+    const button = within(section).getByRole('button', { name: 'Add to Local Codex' })
+    fireEvent.click(button)
+
+    expect(await within(section).findByRole('button', { name: 'Registering…' })).toBeDisabled()
+    expect(registerWorkspace).toHaveBeenCalledTimes(1)
+    expect(registerWorkspace).toHaveBeenCalledWith({ workspaceId })
+    expect(startTurn).not.toHaveBeenCalled()
+    expect(apiInvoke.mock.calls.some(([operation]) => operation === 'workspaces.provision')).toBe(false)
+
+    pendingRegistration.resolve({ id: 'local-project-1', name: 'Local checkout', rootPath: localRoot })
+    expect(await within(section).findByText('Added to Local Codex. Open the Local Codex view to start a task.')).toBeInTheDocument()
+    expect(container.textContent).not.toContain(localRoot)
+    expect(registerWorkspace.mock.calls).toEqual([[{ workspaceId }]])
+    expect(startTurn).not.toHaveBeenCalled()
+  })
+
+  it('keeps malformed workspace identifiers out of the Local Codex handoff action', async () => {
+    const { bridge } = fakeBridge(collections([], [], [], [
+      { workspace_id: `workspace-${'C'.repeat(32)}`, root: '/srv/workspaces/uppercase' },
+      { workspace_id: 'workspace-123', root: '/srv/workspaces/short' },
+    ]))
+
+    render(<ServerCollections bridge={bridge} connection={connection(true, 1, true)} />)
+
+    const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
+    expect(within(section).queryByRole('button', { name: 'Add to Local Codex' })).not.toBeInTheDocument()
+  })
+
+  it('shows a concise error if Local Codex cannot register the workspace', async () => {
+    const workspaceId = `workspace-${'c'.repeat(32)}`
+    const registerWorkspace = vi.fn((_input: { workspaceId: string }) => Promise.reject(new Error('/private/source failed for internal reason')))
+    const { bridge, startTurn } = fakeBridge(collections([], [], [], [{ workspace_id: workspaceId, root: '/srv/workspace' }]), registerWorkspace)
+
+    render(<ServerCollections bridge={bridge} connection={connection(true, 1, true)} />)
+
+    const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
+    fireEvent.click(within(section).getByRole('button', { name: 'Add to Local Codex' }))
+
+    const alert = await within(section).findByRole('alert')
+    expect(alert).toHaveTextContent('Could not add this workspace to Local Codex. Try again.')
+    expect(alert.textContent).not.toContain('/private/source')
+    expect(startTurn).not.toHaveBeenCalled()
   })
 
   it('opens a read-only file preview through the fixed workspace bridge operations', async () => {

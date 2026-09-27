@@ -59,6 +59,33 @@ describe('main-owned local Codex controller', () => {
     controller.close()
   })
 
+  it('registers a main-resolved workspace through the same registry path and rejects protected auth roots', async () => {
+    const protectedRoot = `${root}-codex-auth`
+    const pickProjectDirectory = vi.fn(async () => null)
+    const createRuntime = vi.fn()
+    const controller = new LocalCodexController({
+      metadata, pickProjectDirectory, createRuntime, protectedRoots: [protectedRoot],
+    })
+
+    await expect(controller.registerWorkspaceRoot(root)).resolves.toMatchObject({
+      name: root.split('/').at(-1), rootPath: root,
+    })
+    expect(pickProjectDirectory).not.toHaveBeenCalled()
+    expect(metadata.replace).toHaveBeenCalledOnce()
+    expect(state.projects).toHaveLength(1)
+    expect(createRuntime).not.toHaveBeenCalled()
+    controller.close()
+
+    await mkdir(protectedRoot)
+    const protectedController = new LocalCodexController({
+      metadata, pickProjectDirectory, createRuntime, protectedRoots: [protectedRoot],
+    })
+    await expect(protectedController.registerWorkspaceRoot(protectedRoot)).rejects.toThrow(/not allowed|overlaps/i)
+    expect(metadata.replace).toHaveBeenCalledOnce()
+    protectedController.close()
+    await rm(protectedRoot, { recursive: true, force: true })
+  })
+
   it('does not write a project when the controller closes while the native picker is open', async () => {
     const picker = deferred<string | null>()
     const controller = createController(() => picker.promise)

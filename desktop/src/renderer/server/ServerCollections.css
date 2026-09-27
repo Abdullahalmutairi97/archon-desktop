@@ -93,7 +93,8 @@
   grid-column: 1 / -1;
 }
 
-.server-workspace-browse {
+.server-workspace-browse,
+.server-workspace-local-codex {
   align-self: flex-start;
   min-height: 26px;
   margin-top: 4px;
@@ -272,6 +273,7 @@
 
 .server-workspace-feedback.feedback-success { color: #78bd98; }
 .server-workspace-feedback.feedback-ambiguous { color: #e1bd76; }
+.server-workspace-feedback.feedback-error { color: #e58c83; }
 
 @media (max-width: 700px) {
   .server-collections { padding: 16px; }

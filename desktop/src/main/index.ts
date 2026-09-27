@@ -176,6 +176,7 @@ void app.whenReady().then(async () => {
       listProjects: async () => [],
       listSessions: async () => [],
       registerProject: async () => { throw new Error('Local Codex is unavailable.') },
+      registerWorkspaceRoot: async () => { throw new Error('Local Codex is unavailable.') },
       startTurn: async () => { throw new Error('Local Codex is unavailable.') },
       cancelTurn: async () => false,
       answerApproval: () => false,
@@ -190,6 +191,7 @@ void app.whenReady().then(async () => {
     guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
     trustedFrame,
     controller: localCodexBridge,
+    getWorkspaceRoot: async (workspaceId) => (await connection.getPairedLocalWorkspace(workspaceId)).root,
     getWindow: () => mainWindow,
   })
   registerBridgeHandlers({

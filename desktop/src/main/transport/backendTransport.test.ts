@@ -64,6 +64,7 @@ describe('backend transport', () => {
       'tasks.list',
       'events.cursor',
       'workspaces.list',
+      'workspaces.get',
       'workspaces.files.list',
       'workspaces.files.read',
     ])
@@ -284,6 +285,38 @@ describe('backend transport', () => {
     expect(init?.method).toBe('GET')
     expect(init?.body).toBeUndefined()
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+  })
+
+  it('fetches one owner-scoped workspace through the fixed encoded GET route', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const workspace = {
+      workspace_id: workspaceId, root: '/srv/archon/workspaces/workspace-a',
+      project_id: 'project-1', base_revision: 'a'.repeat(40), head_revision: 'b'.repeat(40), generation: 1,
+    }
+    const fetcher = vi.fn<BackendFetch>(async () => response({ workspace }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.get', { workspaceId })).resolves.toEqual({ workspace })
+    const [url, init] = fetcher.mock.calls[0]
+    expect(String(url)).toBe(`http://127.0.0.1:8000/api/workspaces/${workspaceId}`)
+    expect(init?.method).toBe('GET')
+    expect(init?.body).toBeUndefined()
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+    await expect(transport.invoke('workspaces.get', { workspaceId: `${workspaceId}/files` } as never))
+      .rejects.toMatchObject({ code: 'invalid_payload' })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a workspace response for an identity other than the requested id', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const workspace = {
+      workspace_id: `workspace-${'b'.repeat(32)}`, root: '/srv/archon/workspaces/workspace-b',
+      project_id: 'project-1', base_revision: 'a'.repeat(40), head_revision: 'b'.repeat(40), generation: 1,
+    }
+    const fetcher = vi.fn<BackendFetch>(async () => response({ workspace }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.get', { workspaceId })).rejects.toMatchObject({ code: 'invalid_response' })
   })
 
   it('resolves a registered project current commit through a fixed GET route', async () => {

@@ -18,6 +18,7 @@ describe('local Codex preload bridge', () => {
         case LOCAL_CODEX_CHANNELS.listProjects: return [project]
         case LOCAL_CODEX_CHANNELS.listSessions: return [session]
         case LOCAL_CODEX_CHANNELS.registerProject: return null
+        case LOCAL_CODEX_CHANNELS.registerWorkspace: return project
         case LOCAL_CODEX_CHANNELS.startTurn: return turn
         case LOCAL_CODEX_CHANNELS.cancelTurn:
         case LOCAL_CODEX_CHANNELS.answerApproval: return true
@@ -28,11 +29,13 @@ describe('local Codex preload bridge', () => {
 
     expect(Object.isFrozen(bridge)).toBe(true)
     expect(Object.keys(bridge).sort()).toEqual([
-      'answerApproval', 'cancelTurn', 'listProjects', 'listSessions', 'registerProject', 'startTurn', 'subscribe',
+      'answerApproval', 'cancelTurn', 'listProjects', 'listSessions', 'registerProject', 'registerWorkspace', 'startTurn', 'subscribe',
     ])
     await expect(bridge.listProjects()).resolves.toEqual([project])
     await expect(bridge.listSessions(project.id)).resolves.toEqual([session])
     await expect(bridge.registerProject()).resolves.toBeNull()
+    const workspaceId = `workspace-${'d'.repeat(32)}`
+    await expect(bridge.registerWorkspace({ workspaceId })).resolves.toEqual(project)
     await expect(bridge.startTurn({ projectId: project.id, prompt: 'Do the task' })).resolves.toEqual(turn)
     await expect(bridge.cancelTurn({ taskId: turn.taskId })).resolves.toBe(true)
     await expect(bridge.answerApproval({ approvalId: 'approval-1', allow: false })).resolves.toBe(true)
@@ -40,6 +43,7 @@ describe('local Codex preload bridge', () => {
       [LOCAL_CODEX_CHANNELS.listProjects],
       [LOCAL_CODEX_CHANNELS.listSessions, { projectId: project.id }],
       [LOCAL_CODEX_CHANNELS.registerProject],
+      [LOCAL_CODEX_CHANNELS.registerWorkspace, { workspaceId }],
       [LOCAL_CODEX_CHANNELS.startTurn, { projectId: project.id, prompt: 'Do the task' }],
       [LOCAL_CODEX_CHANNELS.cancelTurn, { taskId: turn.taskId }],
       [LOCAL_CODEX_CHANNELS.answerApproval, { approvalId: 'approval-1', allow: false }],
@@ -55,11 +59,13 @@ describe('local Codex preload bridge', () => {
       startTurn(input: unknown): Promise<unknown>
       cancelTurn(input: unknown): Promise<unknown>
       answerApproval(input: unknown): Promise<unknown>
+      registerWorkspace(input: unknown): Promise<unknown>
     }
 
     expect(() => unsafe.startTurn({ projectId: project.id, prompt: 'run', command: '/bin/sh' })).toThrow(TypeError)
     expect(() => unsafe.cancelTurn({ taskId: turn.taskId, cwd: '/tmp/workspace' })).toThrow(TypeError)
     expect(() => unsafe.answerApproval({ approvalId: 'approval-1', allow: true, paths: ['/tmp/file'] })).toThrow(TypeError)
+    expect(() => unsafe.registerWorkspace({ workspaceId: `workspace-${'d'.repeat(32)}`, rootPath: '/etc' })).toThrow(TypeError)
     await expect(bridge.listProjects()).rejects.toThrow(TypeError)
     expect(invoke).toHaveBeenCalledTimes(1)
   })
