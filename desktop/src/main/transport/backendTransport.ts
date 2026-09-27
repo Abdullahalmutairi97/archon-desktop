@@ -19,6 +19,8 @@ export const READ_ONLY_OPERATIONS: readonly OperationName[] = Object.freeze([
   'tasks.list',
   'events.cursor',
   'workspaces.list',
+  'workspaces.files.list',
+  'workspaces.files.read',
 ])
 
 export const TASK_OPERATIONS: readonly OperationName[] = Object.freeze([
@@ -46,6 +48,8 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'tasks.cancel': 'POST',
   'workspaces.list': 'GET',
   'workspaces.provision': 'POST',
+  'workspaces.files.list': 'GET',
+  'workspaces.files.read': 'GET',
 })
 
 export const MAX_BACKEND_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -72,6 +76,8 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'tasks.cancel': '/api/tasks',
   'workspaces.list': '/api/workspaces',
   'workspaces.provision': '/api/workspaces',
+  'workspaces.files.list': '/api/workspaces',
+  'workspaces.files.read': '/api/workspaces',
 })
 
 const SAFE_MESSAGES = Object.freeze({
@@ -86,6 +92,7 @@ const SAFE_MESSAGES = Object.freeze({
   response_too_large: 'The server response is too large.',
   invalid_response: 'The server returned an invalid response.',
   connection_changed: 'The server connection changed while this request was running.',
+  binary_file: 'Binary files cannot be previewed as text.',
 } as const)
 
 export type BackendTransportErrorCode = keyof typeof SAFE_MESSAGES
@@ -297,6 +304,10 @@ function operationUrl(
     path += `/${taskId}`
     if (operation === 'tasks.events') path += '/events'
     if (operation === 'tasks.cancel') path += '/cancel'
+  } else if (operation === 'workspaces.files.list' || operation === 'workspaces.files.read') {
+    const workspacePayload = payload as OperationMap['workspaces.files.list']['payload']
+    path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files`
+    if (operation === 'workspaces.files.read') path += '/read'
   }
   const url = new URL(path, origin)
   if (operation === 'sessions.list') {
@@ -309,6 +320,14 @@ function operationUrl(
   } else if (operation === 'tasks.events') {
     const eventPayload = payload as OperationMap['tasks.events']['payload']
     url.searchParams.set('after', String(eventPayload.after))
+  } else if (operation === 'workspaces.files.list') {
+    const filePayload = payload as OperationMap['workspaces.files.list']['payload']
+    url.searchParams.set('path', filePayload.path)
+    url.searchParams.set('limit', String(filePayload.limit))
+  } else if (operation === 'workspaces.files.read') {
+    const filePayload = payload as OperationMap['workspaces.files.read']['payload']
+    url.searchParams.set('path', filePayload.path)
+    url.searchParams.set('max_bytes', String(filePayload.maxBytes))
   }
   return url
 }
@@ -336,6 +355,15 @@ function isSupportedResult(
         event.seq > after,
       )
     }
+    if (operation === 'workspaces.files.list') {
+      const requested = payload as OperationMap['workspaces.files.list']['payload']
+      return value.path === requested.path && Array.isArray(value.entries) && value.entries.length <= requested.limit
+    }
+    if (operation === 'workspaces.files.read') {
+      const requested = payload as OperationMap['workspaces.files.read']['payload']
+      return value.path === requested.path && typeof value.content === 'string' &&
+        new TextEncoder().encode(value.content).byteLength <= requested.maxBytes
+    }
     return true
   } catch {
     return false
@@ -348,6 +376,9 @@ function checkResponseStatus(operation: OperationName, response: Response): void
   }
   if (response.status === 401 || response.status === 403) {
     throw new BackendTransportError('unauthorized', response.status)
+  }
+  if (operation === 'workspaces.files.read' && response.status === 415) {
+    throw new BackendTransportError('binary_file')
   }
   if (operation === 'readiness' && (response.status === 200 || response.status === 503)) return
   if (operation === 'tasks.submit') {

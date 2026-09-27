@@ -1,9 +1,9 @@
 /**
  * The finite renderer/main contract for the authored desktop build.
  *
- * Operations are finite reviewed API surfaces. Task submission and cancellation
- * are the only bounded mutations; renderer payloads never accept paths,
- * commands, channels, backend URLs, or idempotency keys.
+ * Operations are finite reviewed API surfaces. Task and workspace mutations
+ * are separately bounded; renderer payloads never accept commands, channels,
+ * backend URLs, idempotency keys, or arbitrary filesystem roots.
  */
 
 export type JsonPrimitive = string | number | boolean | null
@@ -119,6 +119,37 @@ export interface WorkspaceProvisionPayload {
   revision: string
 }
 
+export interface WorkspaceFileListPayload {
+  workspaceId: string
+  path: string
+  limit: number
+}
+
+export interface WorkspaceFileReadPayload {
+  workspaceId: string
+  path: string
+  maxBytes: number
+}
+
+export interface WorkspaceFileEntry {
+  name: string
+  path: string
+  kind: 'file' | 'directory'
+  size: number | null
+}
+
+export interface WorkspaceFileListResult {
+  path: string
+  entries: readonly WorkspaceFileEntry[]
+  truncated: boolean
+}
+
+export interface WorkspaceFileReadResult {
+  path: string
+  content: string
+  truncated: boolean
+}
+
 export interface OperationMap {
   readiness: {
     payload: EmptyPayload
@@ -147,6 +178,14 @@ export interface OperationMap {
   'workspaces.provision': {
     payload: WorkspaceProvisionPayload
     result: { workspace: WorkspaceRecord }
+  }
+  'workspaces.files.list': {
+    payload: WorkspaceFileListPayload
+    result: WorkspaceFileListResult
+  }
+  'workspaces.files.read': {
+    payload: WorkspaceFileReadPayload
+    result: WorkspaceFileReadResult
   }
   'runtimes.list': {
     payload: EmptyPayload

@@ -89,6 +89,23 @@
   background: var(--surface, #212121);
 }
 
+.server-workspaces {
+  grid-column: 1 / -1;
+}
+
+.server-workspace-browse {
+  align-self: flex-start;
+  min-height: 26px;
+  margin-top: 4px;
+  padding: 2px 9px;
+  border: 1px solid var(--line-strong, #484541);
+  border-radius: var(--radius, 5px);
+  background: var(--surface-2, #292929);
+  color: var(--text, #e8e5e0);
+  cursor: pointer;
+  font-size: calc(9px * var(--font-scale, 1));
+}
+
 .server-collection-heading {
   display: flex;
   align-items: center;

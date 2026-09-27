@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import type { ConnectionDescription, DesktopBridge, JsonRecord } from '../../shared/bridge/types'
 import { PrimeTaskPanel } from './PrimeTaskPanel'
+import { WorkspaceFileBrowser, type WorkspaceReadOnlyFilePort } from './WorkspaceFileBrowser'
 import './ServerCollections.css'
 
 type CollectionData = {
@@ -141,9 +142,16 @@ function WorkspaceSection({
   const [revision, setRevision] = useState('')
   const [provisionPending, setProvisionPending] = useState(false)
   const [provisionMessage, setProvisionMessage] = useState<{ kind: 'success' | 'error' | 'ambiguous'; text: string } | null>(null)
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
   const provisionLock = useRef(false)
+  const readOnlyFilePort = useMemo<WorkspaceReadOnlyFilePort>(() => ({
+    list: (workspaceId, path, limit) => bridge.api.invoke('workspaces.files.list', { workspaceId, path, limit }),
+    read: (workspaceId, path, maxBytes) => bridge.api.invoke('workspaces.files.read', { workspaceId, path, maxBytes }),
+  }), [bridge])
   const selectedProjectId = choices.some((choice) => choice.id === projectId) ? projectId : choices[0]?.id ?? ''
   const revisionIsCommit = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(revision)
+  const activeWorkspaceId = state === 'ready' && records.some((record) => record.workspace_id === selectedWorkspaceId)
+    ? selectedWorkspaceId : null
 
   async function provisionWorkspace(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -176,7 +184,7 @@ function WorkspaceSection({
     }
   }
 
-  return <section className="server-collection" aria-label="SERVER WORKSPACES">
+  return <section className="server-collection server-workspaces" aria-label="SERVER WORKSPACES">
     <div className="server-collection-heading"><h3>SERVER WORKSPACES</h3><span>{state === 'ready' ? `${records.length} shown` : state === 'loading' ? 'loading' : 'unavailable'}</span></div>
     <p className="server-workspace-status">Git checkout; native execution isolation not yet enabled</p>
     {state === 'loading' && <p className="server-collection-empty">Loading workspaces from this server…</p>}
@@ -240,9 +248,13 @@ function WorkspaceSection({
             <span>Base revision: {baseRevision}</span>
             <span>Head revision: {headRevision}</span>
             <code>Authoritative root: {root}</code>
+            {/^workspace-[0-9a-f]{32}$/u.test(id) && <button type="button" className="server-workspace-browse" aria-pressed={activeWorkspaceId === id} onClick={() => setSelectedWorkspaceId(activeWorkspaceId === id ? null : id)}>
+              {activeWorkspaceId === id ? 'Close files' : 'Browse files'}
+            </button>}
           </li>
         })}
       </ul>}
+    {activeWorkspaceId && <WorkspaceFileBrowser key={activeWorkspaceId} workspaceId={activeWorkspaceId} readOnlyFilePort={readOnlyFilePort} />}
   </section>
 }
 

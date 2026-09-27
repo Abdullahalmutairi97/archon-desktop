@@ -25,6 +25,9 @@ import type {
   TasksListPayload,
   WorkspaceRecord,
   WorkspaceProvisionPayload,
+  WorkspaceFileEntry,
+  WorkspaceFileListPayload,
+  WorkspaceFileReadPayload,
 } from './types'
 
 export const BRIDGE_CHANNELS = Object.freeze({
@@ -63,6 +66,8 @@ const operationNames = Object.freeze([
   'tasks.cancel',
   'workspaces.list',
   'workspaces.provision',
+  'workspaces.files.list',
+  'workspaces.files.read',
 ] as const satisfies readonly OperationName[])
 
 const channels = new Set<string>(Object.values(BRIDGE_CHANNELS))
@@ -97,6 +102,9 @@ const MAX_LOCAL_FILE_CHANGES = 16
 const MAX_LOCAL_FILE_DIFF_LENGTH = 16_000
 const MAX_LOCAL_FILE_CHANGE_BYTES = 24 * 1024
 const MAX_LOCAL_PAYLOAD_BYTES = 64 * 1024
+const MAX_WORKSPACE_FILE_PATH_LENGTH = 1_000
+const MAX_WORKSPACE_FILE_LIST_LIMIT = 200
+const MAX_WORKSPACE_FILE_READ_BYTES = 64 * 1024
 const SENSITIVE_RESPONSE_FIELDS = new Set([
   'token',
   'apitoken',
@@ -219,6 +227,35 @@ function parseWorkspaceProvisionPayload(value: unknown): WorkspaceProvisionPaylo
   return Object.freeze({ projectId: record.projectId, revision: record.revision })
 }
 
+function workspaceFilePath(value: unknown, allowRoot: boolean): value is string {
+  if (typeof value !== 'string' || value.length > MAX_WORKSPACE_FILE_PATH_LENGTH) return false
+  if (value === '') return allowRoot
+  if (value.startsWith('/') || value.includes('\\') || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return false
+  const parts = value.split('/')
+  return parts.length <= 64 && parts.every((part) =>
+    part.length > 0 && part !== '.' && part !== '..' && new TextEncoder().encode(part).byteLength <= 255)
+}
+
+function workspaceFileId(value: unknown): value is string {
+  return typeof value === 'string' && /^workspace-[0-9a-f]{32}$/u.test(value)
+}
+
+function parseWorkspaceFileListPayload(value: unknown): WorkspaceFileListPayload {
+  const record = exactObject(value, ['workspaceId', 'path', 'limit'])
+  if (!workspaceFileId(record.workspaceId) || !workspaceFilePath(record.path, true) ||
+      typeof record.limit !== 'number' || !Number.isInteger(record.limit) ||
+      record.limit < 1 || record.limit > MAX_WORKSPACE_FILE_LIST_LIMIT) return fail()
+  return Object.freeze({ workspaceId: record.workspaceId, path: record.path, limit: record.limit })
+}
+
+function parseWorkspaceFileReadPayload(value: unknown): WorkspaceFileReadPayload {
+  const record = exactObject(value, ['workspaceId', 'path', 'maxBytes'])
+  if (!workspaceFileId(record.workspaceId) || !workspaceFilePath(record.path, false) ||
+      typeof record.maxBytes !== 'number' || !Number.isInteger(record.maxBytes) ||
+      record.maxBytes < 1 || record.maxBytes > MAX_WORKSPACE_FILE_READ_BYTES) return fail()
+  return Object.freeze({ workspaceId: record.workspaceId, path: record.path, maxBytes: record.maxBytes })
+}
+
 function validTaskId(value: unknown): value is string {
   return typeof value === 'string'
     && value.length <= MAX_TASK_ID_LENGTH
@@ -267,6 +304,10 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseEmptyPayload(payload)])
     case 'workspaces.provision':
       return Object.freeze([operation, parseWorkspaceProvisionPayload(payload)])
+    case 'workspaces.files.list':
+      return Object.freeze([operation, parseWorkspaceFileListPayload(payload)])
+    case 'workspaces.files.read':
+      return Object.freeze([operation, parseWorkspaceFileReadPayload(payload)])
     case 'sessions.list':
       return Object.freeze([operation, parseSessionsPayload(payload)])
     case 'tasks.list':
@@ -486,6 +527,17 @@ function parseWorkspaceRecord(value: unknown): WorkspaceRecord {
   })
 }
 
+function parseWorkspaceFileEntry(value: unknown, parentPath: string): WorkspaceFileEntry {
+  const record = exactObject(value, ['name', 'path', 'kind', 'size'])
+  if (!workspaceFilePath(record.name, false) || record.name.includes('/') ||
+      !workspaceFilePath(record.path, false) ||
+      record.path !== (parentPath ? `${parentPath}/${record.name}` : record.name) ||
+      (record.kind !== 'file' && record.kind !== 'directory') ||
+      (record.kind === 'directory' && record.size !== null) ||
+      (record.kind === 'file' && (typeof record.size !== 'number' || !Number.isSafeInteger(record.size) || record.size < 0))) return fail()
+  return Object.freeze({ name: record.name, path: record.path, kind: record.kind, size: record.size }) as WorkspaceFileEntry
+}
+
 function parseTaskEvent(value: unknown): TaskEventRecord {
   const record = boundedJsonRecord(value)
   if (typeof record.seq !== 'number' || !Number.isSafeInteger(record.seq) || record.seq < 1) return fail()
@@ -520,6 +572,20 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
     case 'workspaces.provision': {
       const record = exactObject(value, ['workspace'])
       return Object.freeze({ workspace: parseWorkspaceRecord(record.workspace) })
+    }
+    case 'workspaces.files.list': {
+      const record = exactObject(value, ['path', 'entries', 'truncated'])
+      if (!workspaceFilePath(record.path, true) || !Array.isArray(record.entries) ||
+          record.entries.length > MAX_WORKSPACE_FILE_LIST_LIMIT || typeof record.truncated !== 'boolean') return fail()
+      const entries = record.entries.map((entry) => parseWorkspaceFileEntry(entry, record.path as string))
+      if (new Set(entries.map((entry) => entry.path)).size !== entries.length) return fail()
+      return Object.freeze({ path: record.path, entries: Object.freeze(entries), truncated: record.truncated })
+    }
+    case 'workspaces.files.read': {
+      const record = exactObject(value, ['path', 'content', 'truncated'])
+      if (!workspaceFilePath(record.path, false) || !boundedString(record.content, MAX_WORKSPACE_FILE_READ_BYTES, true) ||
+          typeof record.truncated !== 'boolean' || record.content.includes('\0')) return fail()
+      return Object.freeze({ path: record.path, content: record.content, truncated: record.truncated })
     }
     case 'events.cursor': {
       const record = exactObject(value, ['cursor'])

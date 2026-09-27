@@ -124,6 +124,32 @@ describe('ServerCollections', () => {
     expect(within(section).getByText('Git checkout; native execution isolation not yet enabled')).toBeInTheDocument()
   })
 
+  it('opens a read-only file preview through the fixed workspace bridge operations', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const workspace = {
+      workspace_id: workspaceId, root: `/srv/archon/workspaces/${workspaceId}`,
+      project_id: 'project-1', base_revision: 'a'.repeat(40), head_revision: 'a'.repeat(40), generation: 1,
+    }
+    const { bridge, apiInvoke } = fakeBridge((operation) => {
+      if (operation === 'workspaces.files.list') return Promise.resolve({
+        path: '', entries: [{ name: 'README.md', path: 'README.md', kind: 'file', size: 5 }], truncated: false,
+      })
+      if (operation === 'workspaces.files.read') return Promise.resolve({ path: 'README.md', content: 'hello', truncated: false })
+      return collections([], [], [], [workspace])(operation)
+    })
+    render(<ServerCollections bridge={bridge} connection={connection()} />)
+
+    const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
+    fireEvent.click(within(section).getByRole('button', { name: 'Browse files' }))
+    const browser = await screen.findByRole('region', { name: 'Workspace files' })
+    fireEvent.click(await within(browser).findByRole('button', { name: 'README.md 5 B' }))
+    expect(await within(browser).findByText('hello')).toBeInTheDocument()
+    expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.files.list')[0][1])
+      .toEqual({ workspaceId, path: '', limit: 100 })
+    expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.files.read')[0][1])
+      .toEqual({ workspaceId, path: 'README.md', maxBytes: 65_536 })
+  })
+
   it('creates one checkout from a registered project and refreshes the list after success', async () => {
     const pendingProvision = deferred<unknown>()
     const workspace = {

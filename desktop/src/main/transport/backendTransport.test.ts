@@ -63,6 +63,8 @@ describe('backend transport', () => {
       'tasks.list',
       'events.cursor',
       'workspaces.list',
+      'workspaces.files.list',
+      'workspaces.files.read',
     ])
     expect(TASK_OPERATIONS).toEqual([
       'runtimes.list', 'tasks.submit', 'tasks.get', 'tasks.events', 'tasks.cancel',
@@ -336,6 +338,51 @@ describe('backend transport', () => {
       projectId: 'project-1', revision: 'a'.repeat(40),
     })).rejects.toMatchObject({ code: 'unsupported_operation' })
     expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('maps bounded workspace file reads to fixed owner-scoped GET routes', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const fetcher = vi.fn<BackendFetch>(async (url) => url.pathname.endsWith('/read')
+      ? response({ path: 'src/main.ts', content: 'hello', truncated: false })
+      : response({ path: 'src', entries: [{ name: 'main.ts', path: 'src/main.ts', kind: 'file', size: 5 }], truncated: false }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.files.list', { workspaceId, path: 'src', limit: 100 }))
+      .resolves.toMatchObject({ entries: [{ path: 'src/main.ts' }] })
+    await expect(transport.invoke('workspaces.files.read', { workspaceId, path: 'src/main.ts', maxBytes: 65_536 }))
+      .resolves.toMatchObject({ content: 'hello' })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    const listUrl = new URL(String(fetcher.mock.calls[0][0]))
+    expect(listUrl.pathname).toBe(`/api/workspaces/${workspaceId}/files`)
+    expect(listUrl.searchParams.get('path')).toBe('src')
+    expect(listUrl.searchParams.get('limit')).toBe('100')
+    const readUrl = new URL(String(fetcher.mock.calls[1][0]))
+    expect(readUrl.pathname).toBe(`/api/workspaces/${workspaceId}/files/read`)
+    expect(readUrl.searchParams.get('max_bytes')).toBe('65536')
+    for (const [, init] of fetcher.mock.calls) {
+      expect(init?.method).toBe('GET')
+      expect(init?.body).toBeUndefined()
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+    }
+  })
+
+  it('blocks workspace path escape and mismatched file responses', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const fetcher = vi.fn<BackendFetch>(async () => response({ path: 'other', entries: [], truncated: false }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    await expect(transport.invoke('workspaces.files.list', { workspaceId, path: '../outside', limit: 100 }))
+      .rejects.toMatchObject({ code: 'invalid_payload' })
+    expect(fetcher).not.toHaveBeenCalled()
+    await expect(transport.invoke('workspaces.files.list', { workspaceId, path: 'src', limit: 100 }))
+      .rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('reports binary workspace files distinctly', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const fetcher = vi.fn<BackendFetch>(async () => response({ detail: 'binary' }, 415))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    await expect(transport.invoke('workspaces.files.read', { workspaceId, path: 'image.png', maxBytes: 65_536 }))
+      .rejects.toMatchObject({ code: 'binary_file' })
   })
 
   it('normalizes only bounded list filters into fixed query parameters', async () => {
