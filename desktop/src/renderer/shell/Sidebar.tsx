@@ -2,12 +2,13 @@ import type { FixtureProject, FixtureSession } from './fixtures'
 import { runtimeLabel } from './fixtures'
 import { Icon, type IconName } from './Icon'
 
-export type WorkspaceView = 'chat' | 'sessions' | 'tasks' | 'projects' | 'connection' | 'server'
+export type WorkspaceView = 'chat' | 'sessions' | 'tasks' | 'projects' | 'connection' | 'server' | 'codex'
 
 const primaryItems: { id: WorkspaceView; label: string; icon: IconName; shortcut?: string }[] = [
-  { id: 'chat', label: 'New chat', icon: 'plus', shortcut: '⌘ N' },
+  { id: 'codex', label: 'Local Codex', icon: 'code', shortcut: '⌘ N' },
   { id: 'sessions', label: 'Sessions', icon: 'history' },
   { id: 'tasks', label: 'Tasks', icon: 'activity' },
+  { id: 'chat', label: 'Preview chat', icon: 'chat' },
 ]
 
 export function Sidebar({
@@ -42,7 +43,7 @@ export function Sidebar({
           className={`nav-item ${view === item.id ? 'active' : ''}`}
           title={collapsed ? item.label : undefined}
           aria-current={view === item.id ? 'page' : undefined}
-          onClick={() => item.id === 'chat' ? onNewSession() : onView(item.id)}
+          onClick={() => item.id === 'codex' ? onNewSession() : onView(item.id)}
         ><Icon name={item.icon} /><span className="nav-label">{item.label}</span>{item.shortcut && !collapsed && <kbd>{item.shortcut}</kbd>}</button>)}
       </nav>
 
@@ -75,10 +76,10 @@ export function Sidebar({
       <button className={`nav-item connection-navigation ${view === 'connection' ? 'active' : ''}`} aria-label="Connection" aria-current={view === 'connection' ? 'page' : undefined} onClick={() => onView('connection')}><Icon name="settings" /><span className="nav-label">Connection</span></button>
       <div className="profile-card">
         <span className="profile-avatar">A</span>
-        <span className="profile-copy"><strong>Local preview</strong><small>Fixture profile</small></span>
+        <span className="profile-copy"><strong>Archon Desktop</strong><small>Local and server work</small></span>
         <button className="quiet-icon-button" aria-label="Open appearance settings" onClick={onAppearance}><Icon name="settings" /></button>
       </div>
-      {!collapsed && <div className="footer-state"><span className="state-light" />Reconstruction <span className="footer-version">P2C.3</span></div>}
+      {!collapsed && <div className="footer-state"><span className="state-light" />Reconstruction <span className="footer-version">P3</span></div>}
     </div>
   </aside>
 }

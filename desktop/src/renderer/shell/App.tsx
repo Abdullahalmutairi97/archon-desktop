@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 import { buildMetadata } from '../../shared/buildMetadata'
 import { AppearanceStudio } from '../appearance/AppearanceStudio'
 import { ConnectionPanel } from '../connection/ConnectionPanel'
+import { LocalCodexPanel } from '../local/LocalCodexPanel'
 import { ServerCollectionsView } from '../server/ServerCollectionsView'
 import { readShellPreferences, saveShellPreferences, type ShellPreferences } from '../appearance/themes'
 import { FIXTURE_PROJECTS, FIXTURE_SESSIONS, FIXTURE_TASKS, runtimeLabel, sessionForId } from './fixtures'
@@ -16,29 +17,20 @@ const DEFAULT_SESSION_ID = FIXTURE_SESSIONS[0].scope.sessionId
 
 export function App() {
   const [preferences, setPreferences] = useState<ShellPreferences>(() => readShellPreferences())
-  const [view, setView] = useState<WorkspaceView>('chat')
+  const [view, setView] = useState<WorkspaceView>('codex')
   const [selectedSessionId, setSelectedSessionId] = useState(DEFAULT_SESSION_ID)
   const [selectedProjectId, setSelectedProjectId] = useState(FIXTURE_PROJECTS[0].id)
   const [activeBench, setActiveBench] = useState<BenchId>('activity')
   const [benchOpen, setBenchOpen] = useState(true)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [notice, setNotice] = useState('')
 
   const currentSession = useMemo(() => sessionForId(selectedSessionId) ?? FIXTURE_SESSIONS[0], [selectedSessionId])
   const currentProject = FIXTURE_PROJECTS.find((project) => project.id === selectedProjectId) ?? FIXTURE_PROJECTS[0]
 
   useEffect(() => { saveShellPreferences(preferences) }, [preferences])
 
-  const inform = useCallback((message: string) => {
-    setNotice(message)
-    window.setTimeout(() => setNotice((current) => current === message ? '' : current), 2600)
-  }, [])
-
-  const newSessionPreview = useCallback(() => {
-    setView('chat')
-    inform('New session creation is disabled in this synthetic preview.')
-  }, [inform])
+  const openLocalCodex = useCallback(() => setView('codex'), [])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -50,7 +42,7 @@ export function App() {
           setPreferences((value) => ({ ...value, sidebarCollapsed: !value.sidebarCollapsed }))
           break
         case 'new-session':
-          newSessionPreview()
+          openLocalCodex()
           break
         case 'open-appearance':
           setPaletteOpen(false)
@@ -77,7 +69,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [appearanceOpen, benchOpen, newSessionPreview, paletteOpen])
+  }, [appearanceOpen, benchOpen, openLocalCodex, paletteOpen])
 
   const showProject = (projectId: string) => {
     setSelectedProjectId(projectId)
@@ -108,14 +100,14 @@ export function App() {
         selectedSessionId={selectedSessionId}
         onView={setView}
         onSession={selectSession}
-        onNewSession={newSessionPreview}
+        onNewSession={openLocalCodex}
         onProject={showProject}
         onAppearance={() => { setPaletteOpen(false); setAppearanceOpen(true) }}
       />
       <main className="workspace-main" dir={preferences.direction}>
         <div className="workspace-view-header">
           <div className="view-heading">
-            <span className="eyebrow">{view === 'chat' ? runtimeLabel(currentSession.scope.runtime) : view === 'connection' ? 'DESKTOP CONNECTION' : view === 'server' ? 'SERVER WORK' : 'SYNTHETIC WORKSPACE'}</span>
+            <span className="eyebrow">{view === 'chat' ? runtimeLabel(currentSession.scope.runtime) : view === 'connection' ? 'DESKTOP CONNECTION' : view === 'server' ? 'SERVER WORK' : view === 'codex' ? 'THIS PC · CODEX' : 'SYNTHETIC WORKSPACE'}</span>
             <h1>{viewTitle(view, currentSession.title)}</h1>
           </div>
           <div className="view-actions">
@@ -131,15 +123,15 @@ export function App() {
         {view === 'projects' && <ProjectsView selectedProjectId={selectedProjectId} onSelectSession={selectSession} onViewChat={() => setView('chat')} />}
         {view === 'connection' && <ConnectionPanel bridge={window.archon} />}
         {view === 'server' && <ServerCollectionsView bridge={window.archon} />}
+        <div hidden={view !== 'codex'}><LocalCodexPanel bridge={window.archon} active={view === 'codex'} /></div>
       </main>
       <WorkspaceBench active={activeBench} open={benchOpen} scope={currentSession.scope} onSelect={setActiveBench} onClose={() => setBenchOpen(false)} />
     </div>
 
     <div className="reconstruction-ribbon" aria-label="Reconstruction and fixture status">
-      <span><i />SOURCE RECONSTRUCTION</span><b>·</b><span>{view === 'connection' ? 'CONNECTION STATUS' : view === 'server' ? 'SERVER DATA · PRIME TASKS' : 'SYNTHETIC FIXTURE DATA'}</span><b>·</b><span>BASELINE PARITY UNVERIFIED</span>
+      <span><i />SOURCE RECONSTRUCTION</span><b>·</b><span>{view === 'connection' ? 'CONNECTION STATUS' : view === 'server' ? 'SERVER DATA · PRIME TASKS' : view === 'codex' ? 'LOCAL CODEX · ONE TURN' : 'SYNTHETIC FIXTURE DATA'}</span><b>·</b><span>BASELINE PARITY UNVERIFIED</span>
     </div>
 
-    {notice && <div className="toast-notice" role="status">{notice}</div>}
     {appearanceOpen && <AppearanceStudio value={preferences} onChange={setPreferences} onClose={() => setAppearanceOpen(false)} />}
     {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNavigate={(next) => { setView(next); setPaletteOpen(false) }} onAppearance={() => { setPaletteOpen(false); setAppearanceOpen(true) }} onBench={(tab) => { setActiveBench(tab); setBenchOpen(true); setPaletteOpen(false) }} />}
     <div className="build-stamp" aria-hidden="true">v{buildMetadata.appVersion} · source {buildMetadata.sourceCommit.slice(0, 7)} · parity unverified</div>
@@ -152,6 +144,7 @@ function viewTitle(view: WorkspaceView, sessionTitle: string) {
   if (view === 'tasks') return 'Task queue'
   if (view === 'connection') return 'Connection'
   if (view === 'server') return 'Server work'
+  if (view === 'codex') return 'Local Codex'
   return 'Projects'
 }
 
@@ -224,13 +217,14 @@ function CommandPalette({ onClose, onNavigate, onAppearance, onBench }: { onClos
         <button onClick={() => onNavigate('projects')}><Icon name="folder" /><span>View projects</span></button>
         <button onClick={() => onNavigate('connection')}><Icon name="settings" /><span>Connection and readiness</span></button>
         <button onClick={() => onNavigate('server')}><Icon name="folder" /><span>Server data and Prime tasks</span></button>
+        <button onClick={() => onNavigate('codex')}><Icon name="code" /><span>Local Codex task</span></button>
       </div>
       <div className="palette-group"><span className="eyebrow">PANELS & SETTINGS</span>
         <button onClick={() => onBench('files')}><Icon name="file" /><span>Open synthetic files</span><kbd>Ctrl 2</kbd></button>
         <button onClick={() => onBench('browser')}><Icon name="browser" /><span>Open offline browser fixture</span><kbd>Ctrl 4</kbd></button>
         <button onClick={onAppearance}><Icon name="settings" /><span>Appearance</span><kbd>Ctrl ,</kbd></button>
       </div>
-      <p className="palette-footnote">Chat, sessions, projects and workbench panels use fixtures. Server work uses the desktop bridge.</p>
+      <p className="palette-footnote">Preview chat, sessions, projects and workbench panels use fixtures. Local Codex and Server work use the desktop bridge.</p>
     </section>
   </div>
 }

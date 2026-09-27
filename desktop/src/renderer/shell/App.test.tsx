@@ -8,6 +8,8 @@ describe('reconstruction preview shell', () => {
   it('shows the parity caveat and distinct synthetic identities', () => {
     render(<App />)
     expect(screen.getByText('BASELINE PARITY UNVERIFIED')).toBeInTheDocument()
+    expect(screen.getByText('LOCAL CODEX · ONE TURN')).toBeInTheDocument()
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Main' })).getByRole('button', { name: 'Preview chat' }))
     expect(screen.getByText('SYNTHETIC FIXTURE DATA')).toBeInTheDocument()
     expect(screen.getAllByText(/Server fixture · Prime/).length).toBeGreaterThan(0)
     fireEvent.click(screen.getByRole('button', { name: /Study notes/ }))
@@ -77,7 +79,7 @@ describe('reconstruction preview shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Server work' }))
     expect(screen.getByRole('region', { name: 'Server collections' })).toBeInTheDocument()
     expect(screen.getByText('SERVER DATA · PRIME TASKS')).toBeInTheDocument()
-    expect(screen.getByText(/browser preview is offline/i)).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Server collections' })).getByText(/browser preview is offline/i)).toBeInTheDocument()
     expect(screen.queryByText('SERVER PROJECTS')).not.toBeInTheDocument()
   })
 })

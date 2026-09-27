@@ -10,6 +10,8 @@ describe('preload bridge', () => {
     expect(Object.isFrozen(bridge)).toBe(true)
     expect(Object.isFrozen(bridge.connection)).toBe(true)
     expect(Object.isFrozen(bridge.api)).toBe(true)
+    expect(Object.isFrozen(bridge.localCodex)).toBe(true)
+    expect(Object.keys(bridge).sort()).toEqual(['api', 'connection', 'localCodex'])
     expect(Object.keys(bridge.connection).sort()).toEqual(['describe', 'disconnect', 'probe', 'save'])
     expect(Object.keys(bridge.api)).toEqual(['invoke'])
 

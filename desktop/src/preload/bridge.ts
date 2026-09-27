@@ -9,10 +9,10 @@ import type {
   OperationResult,
 } from '../shared/bridge/types'
 import { BRIDGE_CHANNELS, parseBridgeRequest } from '../shared/bridge/validation'
+import { createLocalCodexBridge } from './localCodexBridge'
+import type { LocalCodexIpcInvoker } from './localCodexBridge'
 
-export interface BridgeIpcInvoker {
-  invoke(channel: string, ...args: unknown[]): Promise<unknown>
-}
+export interface BridgeIpcInvoker extends LocalCodexIpcInvoker {}
 
 /** Build the only API surface that the preload may expose to the renderer. */
 export function createDesktopBridge(ipc: BridgeIpcInvoker): DesktopBridge {
@@ -33,5 +33,5 @@ export function createDesktopBridge(ipc: BridgeIpcInvoker): DesktopBridge {
     },
   })
 
-  return Object.freeze({ connection, api })
+  return Object.freeze({ connection, api, localCodex: createLocalCodexBridge(ipc) })
 }

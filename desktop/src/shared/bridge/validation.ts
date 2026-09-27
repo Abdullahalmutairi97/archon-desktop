@@ -7,6 +7,10 @@ import type {
   EmptyPayload,
   JsonRecord,
   JsonValue,
+  LocalCodexApprovalDto,
+  LocalCodexEvent,
+  LocalCodexProjectDto,
+  LocalCodexTurnDto,
   OperationMap,
   OperationName,
   RuntimeRecord,
@@ -26,6 +30,18 @@ export const BRIDGE_CHANNELS = Object.freeze({
   connectionProbe: 'archon:connection:probe',
   apiInvoke: 'archon:api:invoke',
 } as const)
+
+/** Separate fixed IPC surface for local Codex; never accepts a method or route from renderer input. */
+export const LOCAL_CODEX_CHANNELS = Object.freeze({
+  listProjects: 'archon:local-codex:projects:list',
+  registerProject: 'archon:local-codex:projects:register',
+  startTurn: 'archon:local-codex:turn:start',
+  cancelTurn: 'archon:local-codex:turn:cancel',
+  answerApproval: 'archon:local-codex:approval:answer',
+  event: 'archon:local-codex:event',
+} as const)
+
+export type LocalCodexInvokeChannel = Exclude<(typeof LOCAL_CODEX_CHANNELS)[keyof typeof LOCAL_CODEX_CHANNELS], typeof LOCAL_CODEX_CHANNELS.event>
 
 export type BridgeChannel = (typeof BRIDGE_CHANNELS)[keyof typeof BRIDGE_CHANNELS]
 
@@ -58,6 +74,18 @@ const MAX_RESULT_DEPTH = 16
 const MAX_RESULT_NODES = 20_000
 const MAX_RESULT_ESTIMATED_BYTES = 2 * 1024 * 1024
 const MAX_RESULT_OBJECT_KEYS = 512
+const MAX_LOCAL_PROJECTS = 100
+const MAX_LOCAL_PROJECT_ID_LENGTH = 256
+const MAX_LOCAL_TASK_ID_LENGTH = 256
+const MAX_LOCAL_APPROVAL_ID_LENGTH = 128
+const MAX_LOCAL_NAME_LENGTH = 300
+const MAX_LOCAL_PATH_LENGTH = 16_000
+const MAX_LOCAL_PROMPT_LENGTH = 8000
+const MAX_LOCAL_OUTPUT_LENGTH = 8000
+const MAX_LOCAL_COMMAND_LENGTH = 8000
+const MAX_LOCAL_REASON_LENGTH = 4096
+const MAX_LOCAL_APPROVAL_PATHS = 64
+const MAX_LOCAL_PAYLOAD_BYTES = 64 * 1024
 const SENSITIVE_RESPONSE_FIELDS = new Set([
   'token',
   'apitoken',
@@ -476,4 +504,227 @@ export function parseBridgeResponse(channel: unknown, value: unknown, operation?
 
 export function parseOperationPayload<K extends OperationName>(operation: K, payload: unknown): OperationMap[K]['payload'] {
   return parseOperationRequest(operation, payload)[1] as OperationMap[K]['payload']
+}
+
+export interface LocalCodexBridgeRequest {
+  channel: LocalCodexInvokeChannel
+  args: readonly unknown[]
+}
+
+function isLocalProjectId(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.startsWith('codex-project:')
+    && value.length <= MAX_LOCAL_PROJECT_ID_LENGTH
+    && /^[A-Za-z0-9._:-]+$/.test(value.slice('codex-project:'.length))
+    && value.length > 'codex-project:'.length
+}
+
+function isLocalTaskId(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.startsWith('codex-task:')
+    && value.length <= MAX_LOCAL_TASK_ID_LENGTH
+    && /^[A-Za-z0-9._:-]+$/.test(value.slice('codex-task:'.length))
+    && value.length > 'codex-task:'.length
+}
+
+function isLocalSessionId(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.startsWith('codex:')
+    && value.length <= MAX_LOCAL_TASK_ID_LENGTH
+    && /^[A-Za-z0-9._:-]+$/.test(value.slice('codex:'.length))
+    && value.length > 'codex:'.length
+}
+
+function isLocalApprovalId(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= MAX_LOCAL_APPROVAL_ID_LENGTH
+    && /^[A-Za-z0-9._:-]+$/.test(value)
+}
+
+/** Local Codex runs only on the Linux desktop build; require a normalized absolute path. */
+function isCanonicalAbsolutePath(value: unknown): value is string {
+  if (!boundedString(value, MAX_LOCAL_PATH_LENGTH) || !value.startsWith('/') || /[\u0001-\u001f\u007f]/.test(value)) return false
+  if (value === '/') return true
+  if (value.endsWith('/')) return false
+  const components = value.slice(1).split('/')
+  return components.every((component) => component.length > 0 && component !== '.' && component !== '..')
+}
+
+function readLocalArray(value: unknown, maxLength: number): unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maxLength) return fail()
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const keys = Reflect.ownKeys(descriptors)
+  if (keys.length !== value.length + 1 || keys.some((key) => typeof key !== 'string')) return fail()
+  const result: unknown[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return fail()
+    result.push(descriptor.value)
+  }
+  return result
+}
+
+function parseLocalProject(value: unknown): LocalCodexProjectDto {
+  const record = exactObject(value, ['id', 'name', 'rootPath'])
+  if (!isLocalProjectId(record.id)
+    || !boundedString(record.name, MAX_LOCAL_NAME_LENGTH)
+    || !isCanonicalAbsolutePath(record.rootPath)) return fail()
+  return Object.freeze({ id: record.id, name: record.name, rootPath: record.rootPath })
+}
+
+function parseLocalTurn(value: unknown): LocalCodexTurnDto {
+  const record = exactObject(value, ['taskId', 'projectId', 'sessionId', 'state'])
+  if (!isLocalTaskId(record.taskId) || !isLocalProjectId(record.projectId)
+    || !isLocalSessionId(record.sessionId) || record.state !== 'running') return fail()
+  return Object.freeze({
+    taskId: record.taskId,
+    projectId: record.projectId,
+    sessionId: record.sessionId,
+    state: 'running',
+  })
+}
+
+function parseLocalApproval(value: unknown): LocalCodexApprovalDto {
+  const record = readOwnDataRecord(value, ['approvalId', 'taskId', 'projectId', 'kind', 'reason', 'cwd', 'paths', 'command'])
+  if (!isLocalApprovalId(record.approvalId) || !isLocalTaskId(record.taskId)
+    || !isLocalProjectId(record.projectId) || (record.kind !== 'command' && record.kind !== 'file')
+    || !boundedString(record.reason, MAX_LOCAL_REASON_LENGTH, true)
+    || !isCanonicalAbsolutePath(record.cwd)) return fail()
+
+  const rawPaths = readLocalArray(record.paths, MAX_LOCAL_APPROVAL_PATHS)
+  const paths = rawPaths.map((path) => {
+    if (!isCanonicalAbsolutePath(path)) return fail()
+    return path
+  })
+  const command = record.command
+  if (record.kind === 'command') {
+    if (!boundedString(command, MAX_LOCAL_COMMAND_LENGTH) || paths.length !== 0) return fail()
+  } else if (command !== undefined || paths.length < 1) {
+    return fail()
+  }
+
+  return Object.freeze({
+    approvalId: record.approvalId,
+    taskId: record.taskId,
+    projectId: record.projectId,
+    kind: record.kind,
+    reason: record.reason,
+    cwd: record.cwd,
+    paths: Object.freeze(paths),
+    ...(command === undefined ? {} : { command }),
+  }) as LocalCodexApprovalDto
+}
+
+function parseLocalPrompt(value: unknown): { projectId: string; prompt: string } {
+  const record = exactObject(value, ['projectId', 'prompt'])
+  if (!isLocalProjectId(record.projectId) || !boundedString(record.prompt, MAX_LOCAL_PROMPT_LENGTH)
+    || !record.prompt.trim()) return fail()
+  return Object.freeze({ projectId: record.projectId, prompt: record.prompt })
+}
+
+function parseLocalTaskPayload(value: unknown): { taskId: string } {
+  const record = exactObject(value, ['taskId'])
+  if (!isLocalTaskId(record.taskId)) return fail()
+  return Object.freeze({ taskId: record.taskId })
+}
+
+function parseLocalApprovalAnswer(value: unknown): { approvalId: string; allow: boolean } {
+  const record = exactObject(value, ['approvalId', 'allow'])
+  if (!isLocalApprovalId(record.approvalId) || typeof record.allow !== 'boolean') return fail()
+  return Object.freeze({ approvalId: record.approvalId, allow: record.allow })
+}
+
+function withinLocalPayloadLimit(value: unknown): boolean {
+  try {
+    const serialized = JSON.stringify(value)
+    return typeof serialized === 'string' && new TextEncoder().encode(serialized).byteLength <= MAX_LOCAL_PAYLOAD_BYTES
+  } catch {
+    return false
+  }
+}
+
+function makeLocalCodexRequest(channel: LocalCodexInvokeChannel, args: readonly unknown[]): LocalCodexBridgeRequest {
+  if (!withinLocalPayloadLimit(args)) return fail()
+  return Object.freeze({ channel, args: Object.freeze([...args]) })
+}
+
+function boundedLocalResult<T>(value: T): T {
+  if (!withinLocalPayloadLimit(value)) return fail()
+  return value
+}
+
+/** Parse only the fixed local Codex invocation channels and canonicalize each payload. */
+export function parseLocalCodexRequest(channel: unknown, args: readonly unknown[]): LocalCodexBridgeRequest {
+  const safeArgs = readLocalArray(args, 1)
+  switch (channel) {
+    case LOCAL_CODEX_CHANNELS.listProjects:
+    case LOCAL_CODEX_CHANNELS.registerProject:
+      if (safeArgs.length !== 0) return fail()
+      return makeLocalCodexRequest(channel, [])
+    case LOCAL_CODEX_CHANNELS.startTurn:
+      if (safeArgs.length !== 1) return fail()
+      return makeLocalCodexRequest(channel, [parseLocalPrompt(safeArgs[0])])
+    case LOCAL_CODEX_CHANNELS.cancelTurn:
+      if (safeArgs.length !== 1) return fail()
+      return makeLocalCodexRequest(channel, [parseLocalTaskPayload(safeArgs[0])])
+    case LOCAL_CODEX_CHANNELS.answerApproval:
+      if (safeArgs.length !== 1) return fail()
+      return makeLocalCodexRequest(channel, [parseLocalApprovalAnswer(safeArgs[0])])
+    default:
+      return fail()
+  }
+}
+
+/** Validate and copy local Codex service results before they reach the renderer. */
+export function parseLocalCodexResponse(channel: unknown, value: unknown): unknown {
+  switch (channel) {
+    case LOCAL_CODEX_CHANNELS.listProjects: {
+      const rawProjects = readLocalArray(value, MAX_LOCAL_PROJECTS)
+      const projects = rawProjects.map((item) => {
+        return parseLocalProject(item)
+      })
+      if (new Set(projects.map((project) => project.id)).size !== projects.length) return fail()
+      return boundedLocalResult(Object.freeze(projects))
+    }
+    case LOCAL_CODEX_CHANNELS.registerProject:
+      return value === null ? null : boundedLocalResult(parseLocalProject(value))
+    case LOCAL_CODEX_CHANNELS.startTurn:
+      return boundedLocalResult(parseLocalTurn(value))
+    case LOCAL_CODEX_CHANNELS.cancelTurn:
+    case LOCAL_CODEX_CHANNELS.answerApproval:
+      if (typeof value !== 'boolean') return fail()
+      return boundedLocalResult(value)
+    default:
+      return fail()
+  }
+}
+
+/** Validate event payloads before dispatching them to any renderer listener. */
+export function parseLocalCodexEvent(value: unknown): LocalCodexEvent {
+  const envelope = readOwnDataRecord(value, ['type', 'taskId', 'text', 'message', 'approval'])
+  switch (envelope.type) {
+    case 'turn.output': {
+      const record = exactObject(value, ['type', 'taskId', 'text'])
+      if (!isLocalTaskId(record.taskId) || !boundedString(record.text, MAX_LOCAL_OUTPUT_LENGTH, true)) return fail()
+      return boundedLocalResult(Object.freeze({ type: 'turn.output', taskId: record.taskId, text: record.text }))
+    }
+    case 'turn.completed':
+    case 'turn.cancelled': {
+      const record = exactObject(value, ['type', 'taskId'])
+      if (!isLocalTaskId(record.taskId)) return fail()
+      return boundedLocalResult(Object.freeze({ type: envelope.type, taskId: record.taskId }))
+    }
+    case 'turn.failed': {
+      const record = exactObject(value, ['type', 'taskId', 'message'])
+      if (!isLocalTaskId(record.taskId) || !boundedString(record.message, 512)) return fail()
+      return boundedLocalResult(Object.freeze({ type: 'turn.failed', taskId: record.taskId, message: record.message }))
+    }
+    case 'approval.requested': {
+      const record = exactObject(value, ['type', 'approval'])
+      return boundedLocalResult(Object.freeze({ type: 'approval.requested', approval: parseLocalApproval(record.approval) }))
+    }
+    default:
+      return fail()
+  }
 }

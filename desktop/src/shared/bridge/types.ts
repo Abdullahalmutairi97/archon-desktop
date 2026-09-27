@@ -157,6 +157,53 @@ export interface DesktopBridge {
   readonly api: {
     invoke<K extends OperationName>(operation: K, payload: OperationPayload<K>): Promise<OperationResult<K>>
   }
+  readonly localCodex: LocalCodexBridge
+}
+
+/** Renderer-safe projection of a main-owned project registration. */
+export interface LocalCodexProjectDto {
+  id: string
+  name: string
+  /** Canonical workspace root selected and owned by the main process. */
+  rootPath: string
+}
+
+/** Only returned after the native app-server acknowledges `turn/start`. */
+export interface LocalCodexTurnDto {
+  taskId: string
+  projectId: string
+  sessionId: string
+  state: 'running'
+}
+
+export interface LocalCodexApprovalDto {
+  approvalId: string
+  taskId: string
+  projectId: string
+  kind: 'command' | 'file'
+  reason: string
+  /** Canonical workspace directory in which the proposed operation runs. */
+  cwd: string
+  /** Canonical absolute paths, provided for display only. */
+  paths: readonly string[]
+  /** Display-only command context for command approvals. */
+  command?: string
+}
+
+export type LocalCodexEvent =
+  | { type: 'turn.output'; taskId: string; text: string }
+  | { type: 'turn.completed' | 'turn.cancelled'; taskId: string }
+  | { type: 'turn.failed'; taskId: string; message: string }
+  | { type: 'approval.requested'; approval: LocalCodexApprovalDto }
+
+export interface LocalCodexBridge {
+  listProjects(): Promise<readonly LocalCodexProjectDto[]>
+  /** Opens a native directory picker; the renderer cannot supply a path. */
+  registerProject(): Promise<LocalCodexProjectDto | null>
+  startTurn(input: { projectId: string; prompt: string }): Promise<LocalCodexTurnDto>
+  cancelTurn(input: { taskId: string }): Promise<boolean>
+  subscribe(listener: (event: LocalCodexEvent) => void): () => void
+  answerApproval(input: { approvalId: string; allow: boolean }): Promise<boolean>
 }
 
 declare global {

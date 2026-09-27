@@ -1,5 +1,7 @@
-import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
-import { join } from 'node:path'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron'
+import { spawn } from 'node:child_process'
+import { homedir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   isAllowedReconstructionNavigation,
@@ -11,6 +13,16 @@ import { TrustedShellFrameGuard, type TrustedShellIpcEvent } from './security/Tr
 import { CredentialStore } from './storage/credentialStore'
 import { ProfileStore } from './storage/profileStore'
 import { BackendTransport } from './transport/backendTransport'
+import { OwnedCodexMetadataStore } from './adapters/codex/metadata'
+import type { CodexChildProcess } from './adapters/codex/appServer'
+import {
+  createCodexChildEnvironment,
+  createLocalCodexRuntimeFactory,
+  LocalCodexController,
+  resolveCodexExecutable,
+} from './localCodexController'
+import { registerLocalCodex } from './registerLocalCodex'
+import type { LocalCodexIpcController } from './registerLocalCodex'
 
 const RECONSTRUCTION_PROFILE = 'archon-desktop-reconstruction-dev'
 
@@ -18,6 +30,9 @@ app.setName('Archon Desktop Reconstruction')
 app.setPath('userData', join(app.getPath('appData'), RECONSTRUCTION_PROFILE))
 
 const trustedFrame = new TrustedShellFrameGuard()
+let mainWindow: BrowserWindow | undefined
+let localCodexController: LocalCodexController | undefined
+let unregisterLocalCodex: (() => void) | undefined
 
 function getRendererDevOrigin(): string | undefined {
   if (app.isPackaged) return undefined
@@ -54,6 +69,7 @@ function createMainWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
     },
   })
+  mainWindow = window
 
   const rendererFile = join(__dirname, '../renderer/index.html')
   const rendererFileUrl = pathToFileURL(rendererFile).href
@@ -80,7 +96,10 @@ function createMainWindow(): BrowserWindow {
       trustedFrame.unregister(window)
     }
   })
-  window.on('closed', () => trustedFrame.unregister(window))
+  window.on('closed', () => {
+    trustedFrame.unregister(window)
+    if (mainWindow === window) mainWindow = undefined
+  })
   window.webContents.on('will-navigate', (event, destination) => {
     if (!isAllowedReconstructionNavigation(destination, devOrigin, rendererFileUrl)) {
       event.preventDefault()
@@ -102,6 +121,58 @@ void app.whenReady().then(async () => {
     safeStorage,
   })
   const connection = await createConnectionService(new BackendTransport(), credentialStore)
+  let localCodexBridge: LocalCodexIpcController
+  try {
+    const codexMetadata = new OwnedCodexMetadataStore(profileStore.paths.codexMetadataDirectory)
+    const homeDirectory = process.env.HOME && isAbsolute(process.env.HOME) ? process.env.HOME : homedir()
+    const codexHomeDirectory = process.env.CODEX_HOME === undefined
+      ? join(homeDirectory, '.codex')
+      : process.env.CODEX_HOME
+    const codexEnvironment = createCodexChildEnvironment({ homeDirectory, codexHomeDirectory })
+    const codexCommand = await resolveCodexExecutable(process.env.ARCHON_CODEX_EXECUTABLE, app.isPackaged)
+    const codexRuntime = createLocalCodexRuntimeFactory({
+      metadata: codexMetadata,
+      command: codexCommand,
+      env: codexEnvironment,
+      spawn: (command, args, options) => spawn(command, args, {
+        ...options,
+        env: { ...options.env },
+      }) as unknown as CodexChildProcess,
+    })
+    localCodexController = new LocalCodexController({
+      metadata: codexMetadata,
+      protectedRoots: [codexEnvironment.CODEX_HOME],
+      createRuntime: codexRuntime,
+      pickProjectDirectory: async () => {
+        const owner = mainWindow
+        if (!owner || owner.isDestroyed()) return null
+        const result = await dialog.showOpenDialog(owner, { properties: ['openDirectory'] })
+        return result.canceled ? null : result.filePaths[0] ?? null
+      },
+    })
+    localCodexBridge = localCodexController
+  } catch {
+    try { localCodexController?.close() } catch { /* Keep the connection bridge available. */ }
+    localCodexController = undefined
+    localCodexBridge = {
+      listProjects: async () => [],
+      registerProject: async () => { throw new Error('Local Codex is unavailable.') },
+      startTurn: async () => { throw new Error('Local Codex is unavailable.') },
+      cancelTurn: async () => false,
+      answerApproval: () => false,
+      subscribe: () => () => undefined,
+    }
+  }
+  unregisterLocalCodex = registerLocalCodex({
+    ipc: {
+      handle: (channel, handler) => ipcMain.handle(channel, (event, ...args) => handler(event, ...args)),
+      removeHandler: (channel) => ipcMain.removeHandler(channel),
+    },
+    guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
+    trustedFrame,
+    controller: localCodexBridge,
+    getWindow: () => mainWindow,
+  })
   registerBridgeHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, (event, ...args) => handler(event, ...args)),
     removeHandler: (channel) => ipcMain.removeHandler(channel),
@@ -110,6 +181,13 @@ void app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
   })
+})
+
+app.on('before-quit', () => {
+  unregisterLocalCodex?.()
+  unregisterLocalCodex = undefined
+  localCodexController?.close()
+  localCodexController = undefined
 })
 
 app.on('window-all-closed', () => {

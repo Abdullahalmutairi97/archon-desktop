@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { BRIDGE_CHANNELS, parseBridgeRequest, parseBridgeResponse, parseOperationRequest } from './validation'
+import {
+  BRIDGE_CHANNELS,
+  LOCAL_CODEX_CHANNELS,
+  parseBridgeRequest,
+  parseBridgeResponse,
+  parseLocalCodexEvent,
+  parseLocalCodexRequest,
+  parseLocalCodexResponse,
+  parseOperationRequest,
+} from './validation'
 
 describe('finite desktop bridge validation', () => {
   it('accepts only the five frozen IPC channels', () => {
@@ -169,5 +178,141 @@ describe('finite desktop bridge validation', () => {
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { events: Array.from({ length: 1001 }, () => event) }, 'tasks.events'))
       .toThrow(TypeError)
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { ok: false }, 'tasks.cancel')).toThrow(TypeError)
+  })
+
+  it('exposes local Codex through fixed operations with bounded renderer payloads', () => {
+    expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.listProjects, [])).toEqual({
+      channel: LOCAL_CODEX_CHANNELS.listProjects,
+      args: [],
+    })
+    expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.registerProject, [])).toEqual({
+      channel: LOCAL_CODEX_CHANNELS.registerProject,
+      args: [],
+    })
+    expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.startTurn, [{
+      projectId: 'codex-project:fixture', prompt: 'Review this file',
+    }])).toEqual({
+      channel: LOCAL_CODEX_CHANNELS.startTurn,
+      args: [{ projectId: 'codex-project:fixture', prompt: 'Review this file' }],
+    })
+    expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.startTurn, [{
+      projectId: 'codex-project:fixture', prompt: 'x'.repeat(8000),
+    }]).args[0]).toEqual({ projectId: 'codex-project:fixture', prompt: 'x'.repeat(8000) })
+    expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.cancelTurn, [{ taskId: 'codex-task:fixture' }]).args)
+      .toEqual([{ taskId: 'codex-task:fixture' }])
+    expect(parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.answerApproval, [{ approvalId: 'approval-1', allow: true }]).args)
+      .toEqual([{ approvalId: 'approval-1', allow: true }])
+
+    for (const [channel, args] of [
+      [LOCAL_CODEX_CHANNELS.registerProject, [{ rootPath: '/tmp/workspace' }]],
+      [LOCAL_CODEX_CHANNELS.startTurn, [{ projectId: 'codex-project:fixture', prompt: 'work', command: '/bin/sh' }]],
+      [LOCAL_CODEX_CHANNELS.startTurn, [{ projectId: 'codex-project:fixture', prompt: '  ' }]],
+      [LOCAL_CODEX_CHANNELS.startTurn, [{ projectId: 'codex-project:fixture', prompt: 'x'.repeat(8001) }]],
+      [LOCAL_CODEX_CHANNELS.cancelTurn, [{ taskId: 'prime:task' }]],
+      [LOCAL_CODEX_CHANNELS.answerApproval, [{ approvalId: 'approval-1', allow: true, paths: ['/tmp/file'] }]],
+      [LOCAL_CODEX_CHANNELS.event, [{ type: 'turn.completed', taskId: 'codex-task:fixture' }]],
+    ] as const) {
+      expect(() => parseLocalCodexRequest(channel, args)).toThrow(TypeError)
+    }
+    expect(() => parseLocalCodexRequest(LOCAL_CODEX_CHANNELS.startTurn, new Array(1))).toThrow(TypeError)
+  })
+
+  it('validates bounded local project and acknowledged turn DTOs without leaking turn cwd', () => {
+    const project = { id: 'codex-project:fixture', name: 'Fixture', rootPath: '/tmp/workspace' }
+    expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.listProjects, [project])).toEqual([project])
+    expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.registerProject, null)).toBeNull()
+    expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.registerProject, project)).toEqual(project)
+    expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.startTurn, {
+      taskId: 'codex-task:fixture', projectId: project.id, sessionId: 'codex:thread-1', state: 'running',
+    })).toEqual({
+      taskId: 'codex-task:fixture', projectId: project.id, sessionId: 'codex:thread-1', state: 'running',
+    })
+    expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.cancelTurn, false)).toBe(false)
+
+    expect(() => parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.listProjects, [
+      { ...project, token: 'sentinel' },
+    ])).toThrow(TypeError)
+    expect(() => parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.registerProject, {
+      ...project, rootPath: '/tmp/workspace/../outside',
+    })).toThrow(TypeError)
+    expect(() => parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.startTurn, {
+      taskId: 'codex-task:fixture', projectId: project.id, sessionId: 'codex:thread-1',
+      state: 'running', cwd: '/tmp/workspace',
+    })).toThrow(TypeError)
+    expect(() => parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.startTurn, {
+      taskId: 'codex-task:fixture', projectId: project.id, sessionId: 'codex:thread-1', state: 'starting',
+    })).toThrow(TypeError)
+    expect(() => parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.listProjects, Array.from({ length: 101 }, (_, index) => ({
+      ...project, id: `codex-project:fixture-${index}`,
+    }))))
+      .toThrow(TypeError)
+    const nearLimitProjectList = Array.from({ length: 4 }, (_, index) => ({
+      ...project,
+      id: `codex-project:fixture-${index}`,
+      rootPath: `/tmp/${'p'.repeat(15_000)}`,
+    }))
+    expect(new TextEncoder().encode(JSON.stringify(nearLimitProjectList)).byteLength).toBeLessThan(64 * 1024)
+    expect(parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.listProjects, nearLimitProjectList)).toHaveLength(4)
+    const oversizedProjectList = Array.from({ length: 5 }, (_, index) => ({
+      ...project,
+      id: `codex-project:fixture-${index}`,
+      rootPath: `/tmp/${'p'.repeat(15_000)}`,
+    }))
+    expect(new TextEncoder().encode(JSON.stringify(oversizedProjectList)).byteLength).toBeGreaterThan(64 * 1024)
+    expect(() => parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.listProjects, oversizedProjectList)).toThrow(TypeError)
+  })
+
+  it('carries canonical workspace and proposed paths only in validated approval events', () => {
+    const approvalEvent = {
+      type: 'approval.requested',
+      approval: {
+        approvalId: 'approval-1',
+        taskId: 'codex-task:fixture',
+        projectId: 'codex-project:fixture',
+        kind: 'file',
+        reason: 'Update the requested source file',
+        cwd: '/tmp/workspace',
+        paths: ['/tmp/workspace/src/file.ts'],
+      },
+    }
+    expect(parseLocalCodexEvent(approvalEvent)).toEqual(approvalEvent)
+    expect(parseLocalCodexEvent({ type: 'turn.output', taskId: 'codex-task:fixture', text: 'hello' }))
+      .toEqual({ type: 'turn.output', taskId: 'codex-task:fixture', text: 'hello' })
+    expect(parseLocalCodexEvent({ type: 'turn.output', taskId: 'codex-task:fixture', text: 'x'.repeat(8000) }))
+      .toEqual({ type: 'turn.output', taskId: 'codex-task:fixture', text: 'x'.repeat(8000) })
+    expect(parseLocalCodexEvent({ type: 'turn.completed', taskId: 'codex-task:fixture' }))
+      .toEqual({ type: 'turn.completed', taskId: 'codex-task:fixture' })
+    expect(parseLocalCodexEvent({ type: 'turn.cancelled', taskId: 'codex-task:fixture' }))
+      .toEqual({ type: 'turn.cancelled', taskId: 'codex-task:fixture' })
+    expect(parseLocalCodexEvent({ type: 'turn.failed', taskId: 'codex-task:fixture', message: 'Native turn failed' }))
+      .toEqual({ type: 'turn.failed', taskId: 'codex-task:fixture', message: 'Native turn failed' })
+    expect(parseLocalCodexEvent({ type: 'approval.requested', approval: {
+      approvalId: 'approval-1', taskId: 'codex-task:fixture', projectId: 'codex-project:fixture',
+      kind: 'command', reason: 'Run build', cwd: '/tmp/workspace', paths: [], command: 'npm test',
+    } })).toEqual({ type: 'approval.requested', approval: {
+      approvalId: 'approval-1', taskId: 'codex-task:fixture', projectId: 'codex-project:fixture',
+      kind: 'command', reason: 'Run build', cwd: '/tmp/workspace', paths: [], command: 'npm test',
+    } })
+
+    expect(() => parseLocalCodexEvent({ ...approvalEvent, approval: {
+      ...approvalEvent.approval, paths: ['/tmp/workspace/../outside'],
+    } })).toThrow(TypeError)
+    expect(() => parseLocalCodexEvent({ ...approvalEvent, approval: {
+      ...approvalEvent.approval, command: '/bin/sh',
+    } })).toThrow(TypeError)
+    const sparsePaths = new Array(1)
+    expect(() => parseLocalCodexEvent({ ...approvalEvent, approval: {
+      ...approvalEvent.approval, paths: sparsePaths,
+    } })).toThrow(TypeError)
+    expect(() => parseLocalCodexEvent({
+      type: 'turn.output', taskId: 'codex-task:fixture', text: 'x'.repeat(8001),
+    })).toThrow(TypeError)
+    let invoked = false
+    const hostile = Object.defineProperty({}, 'type', {
+      enumerable: true,
+      get() { invoked = true; return 'turn.completed' },
+    })
+    expect(() => parseLocalCodexEvent(hostile)).toThrow(TypeError)
+    expect(invoked).toBe(false)
   })
 })
