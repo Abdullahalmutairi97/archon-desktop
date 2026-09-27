@@ -430,10 +430,9 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     store = TaskStore(Database(settings.database_path))
     _prepare_private_runner_journal_dir(settings.runner_journal_path.parent)
     runner_ownership = RunnerOwnershipLock(settings.runner_journal_path.parent / "server.lock")
-    local_codex_event_journal = (
-        LocalCodexEventJournal(settings.runner_journal_path.parent / "local-codex-events.sqlite3")
-        if settings.local_codex_enabled else None
-    )
+    # Open the Local Codex journal only after this process owns the runner
+    # lock. Construction may migrate or evict persisted data.
+    local_codex_event_journal: LocalCodexEventJournal | None = None
     pairing_broker = LocalPairingBroker() if settings.local_owner_mode else None
     pairing_server = (
         UnixSocketPairingServer(
@@ -442,21 +441,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         )
         if pairing_broker is not None else None
     )
-    local_codex_worker = (
-        LocalCodexWorkerClient(
-            node_executable=settings.local_codex_node_executable,
-            worker_script=settings.local_codex_worker_script,
-            metadata_root=settings.local_codex_metadata_root,
-            home_directory=settings.local_codex_home_directory,
-            codex_home_directory=settings.local_codex_home,
-            codex_executable=settings.local_codex_executable,
-            event_journal=local_codex_event_journal,
-            request_timeout_seconds=settings.local_codex_request_timeout_seconds,
-            start_timeout_seconds=settings.local_codex_start_timeout_seconds,
-        )
-        if settings.local_codex_enabled and settings.local_codex_metadata_root is not None
-        else None
-    )
+    local_codex_worker: LocalCodexWorkerClient | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
         settings.runner_journal_path.lstat()
@@ -642,8 +627,28 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         nonlocal worker_tasks, telegram_bridge, telegram_task
+        nonlocal local_codex_event_journal, local_codex_worker
         runner_ownership.acquire()
         try:
+            if settings.local_codex_enabled:
+                local_codex_event_journal = LocalCodexEventJournal(
+                    settings.runner_journal_path.parent / "local-codex-events.sqlite3"
+                )
+                if settings.local_codex_metadata_root is not None:
+                    local_codex_worker = LocalCodexWorkerClient(
+                        node_executable=settings.local_codex_node_executable,
+                        worker_script=settings.local_codex_worker_script,
+                        metadata_root=settings.local_codex_metadata_root,
+                        home_directory=settings.local_codex_home_directory,
+                        codex_home_directory=settings.local_codex_home,
+                        codex_executable=settings.local_codex_executable,
+                        event_journal=local_codex_event_journal,
+                        request_timeout_seconds=settings.local_codex_request_timeout_seconds,
+                        start_timeout_seconds=settings.local_codex_start_timeout_seconds,
+                    )
+                # Runs under exclusive ownership, before worker event delivery
+                # or owner pairing can expose this instance to a client.
+                local_codex_event_journal.reconcile_startup()
             app.state.settings = settings
             app.state.store = store
             app.state.engine = engine
@@ -854,12 +859,48 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     async def local_codex_register_workspace(payload: LocalCodexWorkspaceRegister):
         return await local_codex_call("registerWorkspaceRoot", {"rootPath": payload.root_path})
 
+    @app.get("/api/local/codex/turns", dependencies=[Depends(require_local_owner)])
+    async def local_codex_turns(limit: int = Query(1, ge=1, le=16)):
+        if local_codex_event_journal is None:
+            return JSONResponse(status_code=503, content={"detail": "Local Codex is disabled"})
+        try:
+            turns = local_codex_event_journal.read_latest_turns(limit)
+        except LocalCodexEventJournalError:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Local Codex turn status is unavailable",
+                    "code": "local_codex_event_journal_unavailable",
+                },
+            )
+        return {"turns": turns}
+
     @app.post("/api/local/codex/turns", dependencies=[Depends(require_local_owner)])
     async def local_codex_start_turn(payload: LocalCodexTurnStart):
         params: dict[str, Any] = {"projectId": payload.projectId, "prompt": payload.prompt}
         if payload.sessionId is not None:
             params["sessionId"] = payload.sessionId
         return await local_codex_call("startTurn", params)
+
+    @app.get("/api/local/codex/turns/{task_id}", dependencies=[Depends(require_local_owner)])
+    async def local_codex_turn_status(task_id: str):
+        if not LOCAL_CODEX_TASK_ID.fullmatch(task_id):
+            raise HTTPException(status_code=400, detail="Invalid local Codex task identity")
+        if local_codex_event_journal is None:
+            return JSONResponse(status_code=503, content={"detail": "Local Codex is disabled"})
+        try:
+            turn = local_codex_event_journal.read_turn(task_id)
+        except LocalCodexEventJournalError:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Local Codex turn status is unavailable",
+                    "code": "local_codex_event_journal_unavailable",
+                },
+            )
+        if turn is None:
+            raise HTTPException(status_code=404, detail="Local Codex turn status not found")
+        return turn
 
     @app.post("/api/local/codex/turns/{task_id}/cancel", dependencies=[Depends(require_local_owner)])
     async def local_codex_cancel_turn(task_id: str):

@@ -74,6 +74,25 @@ describe('backend transport', () => {
     expect(init?.body).toBe(JSON.stringify({ projectId: result.projectId, prompt: 'inspect' }))
   })
 
+  it('uses fixed read-only routes to discover and refresh the latest Local Codex turn', async () => {
+    const status = {
+      taskId: 'codex-task:fixture', projectId: 'codex-project:fixture',
+      sessionId: 'codex:session-1', state: 'outcome_unknown',
+    }
+    const fetcher = vi.fn<BackendFetch>(async () => response({ turns: [status] }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invokeLocalCodex({ operation: 'turns.list', limit: 1 })).resolves.toEqual({ turns: [status] })
+    expect(fetcher.mock.calls[0]?.[0].pathname).toBe('/api/local/codex/turns')
+    expect(fetcher.mock.calls[0]?.[0].search).toBe('?limit=1')
+    expect(fetcher.mock.calls[0]?.[1]?.method).toBe('GET')
+
+    fetcher.mockImplementationOnce(async () => response(status))
+    await expect(transport.invokeLocalCodex({ operation: 'turns.status', taskId: status.taskId })).resolves.toEqual(status)
+    expect(fetcher.mock.calls[1]?.[0].pathname).toBe(`/api/local/codex/turns/${encodeURIComponent(status.taskId)}`)
+    expect(fetcher.mock.calls[1]?.[1]?.method).toBe('GET')
+  })
+
   it('never retries a Local Codex start after an ambiguous network failure', async () => {
     const fetcher = vi.fn<BackendFetch>(async () => { throw new Error('connection lost after request') })
     const transport = new BackendTransport({ ...localConnection, fetch: fetcher })

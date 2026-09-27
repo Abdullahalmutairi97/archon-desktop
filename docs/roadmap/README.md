@@ -10,14 +10,14 @@ This backlog turns the 21 September 2026 repository audit and revised implementa
 | --- | --- | --- | --- |
 | [P1 — Trustworthy execution baseline](p1-execution-baseline.md) | Honest admission, modes, locks, recovery, credentials and readiness | Existing backend and isolated fixtures | Backend source complete through #18; native qualification remains |
 | [P2 — Maintainable source build](p2-source-build.md) | Build the actual desktop from authored source and preserve UI behavior | P1D source contract; native qualification before delivery | Authored reconstruction builds, launches, and has a portable Linux x64 package; native parity and official release qualification remain open |
-| [P3 — Workspaces and persistent runner](p3-workspaces-runner.md) | Protected solo bootstrap; one workspace identity; work outlives UI | P1; P2 before desktop delivery | In progress; paired workspaces, checkout-bound Prime tasks, and opt-in backend Codex owner are implemented; native isolation/restart recovery remain open |
+| [P3 — Workspaces and persistent runner](p3-workspaces-runner.md) | Protected solo bootstrap; one workspace identity; work outlives UI | P1; P2 before desktop delivery | In progress; paired workspaces, checkout-bound Prime tasks, and opt-in backend Codex owner with durable turn status are implemented; native isolation/restart recovery remain open |
 | [P4 — Full solo workstation](p4-solo-workstation.md) | Full IDE, persistent terminal and managed private previews | P2 and P3 | In progress; small-file browse/search/create/edit/diff and Prime activity work, full IDE, shell and preview remain open |
 | [P5 — Runtime and resource parity](p5-runtimes-resources.md) | Honest Hermes/Pi/Prime/Codex adapters; scoped MCP and skills | P3; P4 for integrated UX | Not started |
 | [P6 — Collaboration for friends](p6-collaboration.md) | Individual users, shared activity, reviews and scoped service access | P3–P5 and demonstrated enforcement | Not started |
 | [P7 — Release and recovery qualification](p7-release-recovery.md) | Reproducible install, upgrade, backup, rollback and operational evidence | P1–P6; operations work begins earlier | Not started |
 | [P8 — Optional enhancements](p8-enhancements.md) | Selected improvements with independently measured value | Relevant essential phases and an actual need | Deferred; optional |
 
-The main dependency chain is P1 → P3 → P4 → P5 → P6 → P7. P2 runs in parallel with P1 and gates delivery of new desktop UI. Adapter work can use separate branches once its contracts are stable. No essential phase depends on P8.
+The main dependency chain is P1 → P3 → P4 → P5 → P6 → P7. P2 runs in parallel with P1 and gates delivery of new desktop UI. Current increments use one review branch. No essential phase depends on P8.
 
 ## GitHub tracking
 

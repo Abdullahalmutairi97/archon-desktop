@@ -1,4 +1,4 @@
-import type { LocalCodexEvent, LocalCodexProjectDto, LocalCodexSessionDto, LocalCodexTurnDto } from '../shared/bridge/types'
+import type { LocalCodexEvent, LocalCodexProjectDto, LocalCodexSessionDto, LocalCodexTurnDto, LocalCodexTurnStatusDto } from '../shared/bridge/types'
 import {
   LOCAL_CODEX_CHANNELS,
   parseLocalCodexEvent,
@@ -23,6 +23,8 @@ export interface LocalCodexIpcController {
   registerProject(): Promise<LocalCodexProjectDto | null>
   registerWorkspaceRoot(rootPath: string): Promise<LocalCodexProjectDto>
   startTurn(input: { projectId: string; prompt: string; sessionId?: string }): Promise<LocalCodexTurnDto>
+  getLatestTurnStatus?(): Promise<LocalCodexTurnStatusDto | null>
+  getTurnStatus?(input: { taskId: string }): Promise<LocalCodexTurnStatusDto>
   cancelTurn(input: { taskId: string }): Promise<boolean>
   answerApproval(input: { approvalId: string; allow: boolean }): boolean | Promise<boolean>
   subscribe(listener: (event: LocalCodexEvent) => void): () => void
@@ -44,6 +46,8 @@ const LOCAL_CODEX_INVOKE_CHANNELS = Object.freeze([
   LOCAL_CODEX_CHANNELS.registerProject,
   LOCAL_CODEX_CHANNELS.registerWorkspace,
   LOCAL_CODEX_CHANNELS.startTurn,
+  LOCAL_CODEX_CHANNELS.latestTurnStatus,
+  LOCAL_CODEX_CHANNELS.turnStatus,
   LOCAL_CODEX_CHANNELS.cancelTurn,
   LOCAL_CODEX_CHANNELS.answerApproval,
 ] as const)
@@ -99,6 +103,12 @@ export function registerLocalCodex(options: RegisterLocalCodexOptions): () => vo
           }
           case LOCAL_CODEX_CHANNELS.startTurn:
             result = await options.controller.startTurn(request.args[0] as { projectId: string; prompt: string; sessionId?: string })
+            break
+          case LOCAL_CODEX_CHANNELS.latestTurnStatus:
+            result = await options.controller.getLatestTurnStatus?.() ?? null
+            break
+          case LOCAL_CODEX_CHANNELS.turnStatus:
+            result = await options.controller.getTurnStatus?.(request.args[0] as { taskId: string })
             break
           case LOCAL_CODEX_CHANNELS.cancelTurn:
             result = await options.controller.cancelTurn(request.args[0] as { taskId: string })

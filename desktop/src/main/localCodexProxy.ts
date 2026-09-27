@@ -5,6 +5,8 @@ export type LocalCodexProxyRequest =
   | { operation: 'workspaces.register'; rootPath: string }
   | { operation: 'turns.start'; projectId: string; prompt: string; sessionId?: string }
   | { operation: 'turns.cancel'; taskId: string }
+  | { operation: 'turns.list'; limit: number }
+  | { operation: 'turns.status'; taskId: string }
   | { operation: 'approvals.answer'; approvalId: string; allow: boolean }
   | { operation: 'events.list'; after: number; limit: number }
 

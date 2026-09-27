@@ -34,6 +34,7 @@ _SAFE_ERROR_CODE = re.compile(r"^[a-z0-9_:-]{1,64}$")
 _LOCAL_TASK_ID = re.compile(r"^codex-task:[A-Za-z0-9._:-]{1,245}$")
 _LOCAL_PROJECT_ID = re.compile(r"^codex-project:[A-Za-z0-9._:-]{1,242}$")
 _LOCAL_APPROVAL_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_TERMINAL_EVENTS = frozenset({"turn.completed", "turn.failed", "turn.cancelled"})
 
 
 class LocalCodexWorkerError(RuntimeError):
@@ -102,6 +103,7 @@ class LocalCodexWorkerClient:
         self._events: deque[dict[str, Any]] = deque(maxlen=MAX_RETAINED_EVENTS)
         self._last_worker_event_sequence = 0
         self._last_public_event_sequence = 0
+        self._active_turn_ids: set[str] = set()
 
     @property
     def pending_request_count(self) -> int:
@@ -195,6 +197,7 @@ class LocalCodexWorkerClient:
                     await reader
                 except asyncio.CancelledError:
                     pass
+        self._mark_active_turns_unknown()
         self._fail_pending(LocalCodexWorkerUnavailable())
 
     async def request(self, method: str, params: dict[str, Any]) -> Any:
@@ -278,9 +281,11 @@ class LocalCodexWorkerClient:
                     failure = exc
                     break
         except asyncio.CancelledError:
+            self._mark_active_turns_unknown()
             return
         except Exception:
             failure = LocalCodexWorkerUnavailable()
+        self._mark_active_turns_unknown()
         self._failure = failure
         self._fail_pending(failure)
 
@@ -310,7 +315,11 @@ class LocalCodexWorkerClient:
             # The durable journal owns public sequence numbers, which continue
             # across worker restarts even when a fresh worker begins at seq 1.
             # Do not retain or acknowledge the event until the append commits.
-            public_sequence = self.event_journal.append(payload)
+            pending_start = any(method == "startTurn" for method, _future in self._pending.values())
+            public_sequence = self.event_journal.append(
+                payload,
+                provisional_terminal=pending_start and payload.get("type") in _TERMINAL_EVENTS,
+            )
             if (
                 isinstance(public_sequence, bool)
                 or not isinstance(public_sequence, int)
@@ -321,6 +330,8 @@ class LocalCodexWorkerClient:
         self._last_worker_event_sequence = sequence
         self._last_public_event_sequence = public_sequence
         self._events.append({"seq": public_sequence, "event": payload})
+        if payload.get("type") in _TERMINAL_EVENTS:
+            self._active_turn_ids.discard(payload["taskId"])
         return True
 
     def _consume_reply(self, message: Any) -> None:
@@ -344,7 +355,19 @@ class LocalCodexWorkerClient:
         if future.done():
             return
         if message["ok"] is True and "result" in message:
-            future.set_result(message["result"])
+            result = message["result"]
+            if method == "startTurn" and self.event_journal is not None:
+                try:
+                    status = self.event_journal.record_accepted_start(result)
+                except (LocalCodexEventJournalError, ValueError):
+                    # The native acknowledgement may represent a started turn,
+                    # but without a durable identity we must not claim success
+                    # or invite the caller to retry it.
+                    future.set_exception(LocalCodexOutcomeUnknown())
+                    return
+                if status["state"] == "running":
+                    self._active_turn_ids.add(status["taskId"])
+            future.set_result(result)
             return
         if message["ok"] is False and "error" in message:
             error = message["error"]
@@ -367,6 +390,20 @@ class LocalCodexWorkerClient:
                 future.set_exception(LocalCodexOutcomeUnknown())
             else:
                 future.set_exception(failure)
+
+    def _mark_active_turns_unknown(self) -> None:
+        task_ids = tuple(self._active_turn_ids)
+        if not task_ids:
+            return
+        self._active_turn_ids.clear()
+        if self.event_journal is None:
+            return
+        try:
+            self.event_journal.mark_turns_outcome_unknown(task_ids)
+        except (LocalCodexEventJournalError, ValueError):
+            # Startup reconciliation retries the same one-way transition if
+            # the journal could not be updated as this worker retired.
+            pass
 
     @staticmethod
     def _encode_frame(value: dict[str, Any]) -> bytes:

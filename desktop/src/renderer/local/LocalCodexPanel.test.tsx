@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { DesktopBridge, LocalCodexApprovalDto, LocalCodexEvent, LocalCodexTurnDto } from '../../shared/bridge/types'
+import type { DesktopBridge, LocalCodexApprovalDto, LocalCodexEvent, LocalCodexTurnDto, LocalCodexTurnStatusDto } from '../../shared/bridge/types'
 import { LocalCodexPanel } from './LocalCodexPanel'
 
 afterEach(cleanup)
@@ -32,6 +32,8 @@ function fakeBridge() {
     listProjects: vi.fn(async () => [project]),
     registerProject: vi.fn(async () => ({ ...project, id: 'codex-project:two', name: 'Chosen folder', rootPath: '/work/chosen' })),
     startTurn: vi.fn(async (_input: { projectId: string; prompt: string }) => turn),
+    getLatestTurnStatus: vi.fn(async (): Promise<LocalCodexTurnStatusDto | null> => null),
+    getTurnStatus: vi.fn(async ({ taskId }: { taskId: string }): Promise<LocalCodexTurnStatusDto> => ({ ...turn, taskId })),
     cancelTurn: vi.fn(async (_input: { taskId: string }) => true),
     answerApproval: vi.fn(async (_input: { approvalId: string; allow: boolean }) => true),
     subscribe: vi.fn((callback: (event: LocalCodexEvent) => void) => { listener = callback; return unsubscribe }),
@@ -42,11 +44,43 @@ function fakeBridge() {
 
 async function start() {
   await screen.findByRole('option', { name: 'Example project' })
+  await screen.findByText('Ready for a new turn')
   fireEvent.change(screen.getByLabelText('Local prompt'), { target: { value: 'Summarize this project.' } })
   fireEvent.click(screen.getByRole('button', { name: 'Start Codex turn' }))
 }
 
 describe('LocalCodexPanel', () => {
+  it('restores an unknown backend outcome without resuming or claiming completion', async () => {
+    const fake = fakeBridge()
+    fake.localCodex.getLatestTurnStatus.mockResolvedValue({ ...turn, state: 'outcome_unknown' })
+    render(<LocalCodexPanel bridge={fake.bridge} active />)
+
+    expect(await screen.findByText('Outcome unknown after restart')).toBeInTheDocument()
+    expect(screen.getByText(/Latest accepted turn status restored from the backend/)).toBeInTheDocument()
+    expect(screen.getByText(/cannot confirm that it completed before the Codex worker stopped or restarted/)).toBeInTheDocument()
+    expect(fake.localCodex.startTurn).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Cancel turn' })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Local prompt'), { target: { value: 'Continue carefully.' } })
+    expect(screen.getByRole('button', { name: 'Start Codex turn' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Reset after checking' }))
+    expect(screen.getByRole('button', { name: 'Start Codex turn' })).toBeEnabled()
+    expect(fake.localCodex.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('keeps a pending approval visible after a running status refresh', async () => {
+    const fake = fakeBridge()
+    render(<LocalCodexPanel bridge={fake.bridge} active />)
+    await start()
+    await screen.findByText('Running')
+    fake.emit({ type: 'approval.requested', approval })
+    expect(screen.getByRole('dialog', { name: 'Approve command?' })).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh backend status' }))
+    await waitFor(() => expect(fake.localCodex.getTurnStatus).toHaveBeenCalledWith({ taskId: turn.taskId }))
+    expect(screen.getByRole('dialog', { name: 'Approve command?' })).toBeVisible()
+    expect(fake.localCodex.answerApproval).not.toHaveBeenCalled()
+  })
+
   it('subscribes before starting and displays bounded replacement output and completion', async () => {
     const fake = fakeBridge()
     render(<LocalCodexPanel bridge={fake.bridge} active />)

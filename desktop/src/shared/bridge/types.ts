@@ -339,6 +339,13 @@ export interface LocalCodexTurnDto {
   state: 'running'
 }
 
+export interface LocalCodexTurnStatusDto {
+  taskId: string
+  projectId: string
+  sessionId: string
+  state: 'running' | 'completed' | 'cancelled' | 'failed' | 'outcome_unknown'
+}
+
 export type LocalCodexFileChangeKind = 'add' | 'delete' | 'update'
 
 export interface LocalCodexFileChangeDto {
@@ -378,6 +385,9 @@ export interface LocalCodexBridge {
   /** Registers a server-provisioned workspace by its opaque identity; the renderer cannot supply a path. */
   registerWorkspace(input: WorkspaceByIdPayload): Promise<LocalCodexProjectDto>
   startTurn(input: { projectId: string; prompt: string; sessionId?: string }): Promise<LocalCodexTurnDto>
+  /** Available when the paired backend owns Local Codex; it restores the latest accepted task without its prompt or output. */
+  getLatestTurnStatus?(): Promise<LocalCodexTurnStatusDto | null>
+  getTurnStatus?(input: { taskId: string }): Promise<LocalCodexTurnStatusDto>
   cancelTurn(input: { taskId: string }): Promise<boolean>
   subscribe(listener: (event: LocalCodexEvent) => void): () => void
   answerApproval(input: { approvalId: string; allow: boolean }): Promise<boolean>

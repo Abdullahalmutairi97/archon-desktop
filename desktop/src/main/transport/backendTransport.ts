@@ -639,6 +639,12 @@ function localCodexRequestDetails(request: LocalCodexProxyRequest): {
     case 'turns.cancel':
       if (!localCodexId(request.taskId, 'codex-task:', 256)) break
       return { method: 'POST', path: `${api}/turns/${encodeURIComponent(request.taskId)}/cancel`, body: '{}' }
+    case 'turns.list':
+      if (!Number.isInteger(request.limit) || request.limit < 1 || request.limit > 16) break
+      return { method: 'GET', path: `${api}/turns?limit=${request.limit}` }
+    case 'turns.status':
+      if (!localCodexId(request.taskId, 'codex-task:', 256)) break
+      return { method: 'GET', path: `${api}/turns/${encodeURIComponent(request.taskId)}` }
     case 'approvals.answer':
       if (typeof request.approvalId !== 'string' || request.approvalId.length > 128
         || !/^[A-Za-z0-9._:-]+$/u.test(request.approvalId) || typeof request.allow !== 'boolean') break

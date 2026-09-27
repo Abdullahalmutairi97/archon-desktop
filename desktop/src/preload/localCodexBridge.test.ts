@@ -20,6 +20,8 @@ describe('local Codex preload bridge', () => {
         case LOCAL_CODEX_CHANNELS.registerProject: return null
         case LOCAL_CODEX_CHANNELS.registerWorkspace: return project
         case LOCAL_CODEX_CHANNELS.startTurn: return turn
+        case LOCAL_CODEX_CHANNELS.latestTurnStatus:
+        case LOCAL_CODEX_CHANNELS.turnStatus: return { ...turn, state: 'outcome_unknown' }
         case LOCAL_CODEX_CHANNELS.cancelTurn:
         case LOCAL_CODEX_CHANNELS.answerApproval: return true
         default: throw new Error('Unexpected IPC channel')
@@ -29,7 +31,7 @@ describe('local Codex preload bridge', () => {
 
     expect(Object.isFrozen(bridge)).toBe(true)
     expect(Object.keys(bridge).sort()).toEqual([
-      'answerApproval', 'cancelTurn', 'listProjects', 'listSessions', 'registerProject', 'registerWorkspace', 'startTurn', 'subscribe',
+      'answerApproval', 'cancelTurn', 'getLatestTurnStatus', 'getTurnStatus', 'listProjects', 'listSessions', 'registerProject', 'registerWorkspace', 'startTurn', 'subscribe',
     ])
     await expect(bridge.listProjects()).resolves.toEqual([project])
     await expect(bridge.listSessions(project.id)).resolves.toEqual([session])
@@ -37,6 +39,8 @@ describe('local Codex preload bridge', () => {
     const workspaceId = `workspace-${'d'.repeat(32)}`
     await expect(bridge.registerWorkspace({ workspaceId })).resolves.toEqual(project)
     await expect(bridge.startTurn({ projectId: project.id, prompt: 'Do the task' })).resolves.toEqual(turn)
+    await expect(bridge.getLatestTurnStatus?.()).resolves.toEqual({ ...turn, state: 'outcome_unknown' })
+    await expect(bridge.getTurnStatus?.({ taskId: turn.taskId })).resolves.toEqual({ ...turn, state: 'outcome_unknown' })
     await expect(bridge.cancelTurn({ taskId: turn.taskId })).resolves.toBe(true)
     await expect(bridge.answerApproval({ approvalId: 'approval-1', allow: false })).resolves.toBe(true)
     expect(invoke.mock.calls).toEqual([
@@ -45,9 +49,18 @@ describe('local Codex preload bridge', () => {
       [LOCAL_CODEX_CHANNELS.registerProject],
       [LOCAL_CODEX_CHANNELS.registerWorkspace, { workspaceId }],
       [LOCAL_CODEX_CHANNELS.startTurn, { projectId: project.id, prompt: 'Do the task' }],
+      [LOCAL_CODEX_CHANNELS.latestTurnStatus],
+      [LOCAL_CODEX_CHANNELS.turnStatus, { taskId: turn.taskId }],
       [LOCAL_CODEX_CHANNELS.cancelTurn, { taskId: turn.taskId }],
       [LOCAL_CODEX_CHANNELS.answerApproval, { approvalId: 'approval-1', allow: false }],
     ])
+  })
+
+  it('rejects a status whose state is not a string', async () => {
+    const bridge = createLocalCodexBridge({
+      invoke: vi.fn(async () => ({ ...turn, state: { toString: () => 'running' } })),
+    })
+    await expect(bridge.getTurnStatus?.({ taskId: turn.taskId })).rejects.toThrow(TypeError)
   })
 
   it('blocks unsafe caller payloads before IPC and rejects malformed main results', async () => {

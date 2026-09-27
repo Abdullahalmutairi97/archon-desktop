@@ -13,6 +13,7 @@ import type {
   LocalCodexProjectDto,
   LocalCodexSessionDto,
   LocalCodexTurnDto,
+  LocalCodexTurnStatusDto,
   OperationMap,
   OperationName,
   ProjectHeadPayload,
@@ -50,6 +51,8 @@ export const LOCAL_CODEX_CHANNELS = Object.freeze({
   registerProject: 'archon:local-codex:projects:register',
   registerWorkspace: 'archon:local-codex:projects:register-workspace',
   startTurn: 'archon:local-codex:turn:start',
+  latestTurnStatus: 'archon:local-codex:turn:latest-status',
+  turnStatus: 'archon:local-codex:turn:status',
   cancelTurn: 'archon:local-codex:turn:cancel',
   answerApproval: 'archon:local-codex:approval:answer',
   event: 'archon:local-codex:event',
@@ -1013,6 +1016,19 @@ function parseLocalTaskPayload(value: unknown): { taskId: string } {
   return Object.freeze({ taskId: record.taskId })
 }
 
+function parseLocalTurnStatus(value: unknown): LocalCodexTurnStatusDto {
+  const record = exactObject(value, ['taskId', 'projectId', 'sessionId', 'state'])
+  if (!isLocalTaskId(record.taskId) || !isLocalProjectId(record.projectId) || !isLocalSessionId(record.sessionId)
+    || typeof record.state !== 'string'
+    || !['running', 'completed', 'cancelled', 'failed', 'outcome_unknown'].includes(record.state)) return fail()
+  return Object.freeze({
+    taskId: record.taskId,
+    projectId: record.projectId,
+    sessionId: record.sessionId,
+    state: record.state as LocalCodexTurnStatusDto['state'],
+  })
+}
+
 function parseLocalApprovalAnswer(value: unknown): { approvalId: string; allow: boolean } {
   const record = exactObject(value, ['approvalId', 'allow'])
   if (!isLocalApprovalId(record.approvalId) || typeof record.allow !== 'boolean') return fail()
@@ -1055,6 +1071,12 @@ export function parseLocalCodexRequest(channel: unknown, args: readonly unknown[
     case LOCAL_CODEX_CHANNELS.startTurn:
       if (safeArgs.length !== 1) return fail()
       return makeLocalCodexRequest(channel, [parseLocalPrompt(safeArgs[0])])
+    case LOCAL_CODEX_CHANNELS.latestTurnStatus:
+      if (safeArgs.length !== 0) return fail()
+      return makeLocalCodexRequest(channel, [])
+    case LOCAL_CODEX_CHANNELS.turnStatus:
+      if (safeArgs.length !== 1) return fail()
+      return makeLocalCodexRequest(channel, [parseLocalTaskPayload(safeArgs[0])])
     case LOCAL_CODEX_CHANNELS.cancelTurn:
       if (safeArgs.length !== 1) return fail()
       return makeLocalCodexRequest(channel, [parseLocalTaskPayload(safeArgs[0])])
@@ -1089,6 +1111,10 @@ export function parseLocalCodexResponse(channel: unknown, value: unknown): unkno
       return boundedLocalResult(parseLocalProject(value))
     case LOCAL_CODEX_CHANNELS.startTurn:
       return boundedLocalResult(parseLocalTurn(value))
+    case LOCAL_CODEX_CHANNELS.latestTurnStatus:
+      return value === null ? null : boundedLocalResult(parseLocalTurnStatus(value))
+    case LOCAL_CODEX_CHANNELS.turnStatus:
+      return boundedLocalResult(parseLocalTurnStatus(value))
     case LOCAL_CODEX_CHANNELS.cancelTurn:
     case LOCAL_CODEX_CHANNELS.answerApproval:
       if (typeof value !== 'boolean') return fail()

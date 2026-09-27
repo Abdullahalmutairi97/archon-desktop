@@ -17,6 +17,12 @@ describe('backend-owned Local Codex adapter', () => {
           sessionId: request.sessionId ?? 'codex:session-1', state: 'running',
         }
         case 'turns.cancel': return { cancelled: true }
+        case 'turns.list': return { turns: [{
+          taskId: 'codex-task:fixture', projectId: project.id, sessionId: 'codex:session-1', state: 'outcome_unknown',
+        }] }
+        case 'turns.status': return {
+          taskId: request.taskId, projectId: project.id, sessionId: 'codex:session-1', state: 'running',
+        }
         case 'approvals.answer': return { answered: true }
         case 'events.list': return { cursor: request.after, latest: request.after, oldest: request.after + 1, reset: false, events: [] }
       }
@@ -34,10 +40,16 @@ describe('backend-owned Local Codex adapter', () => {
     await expect(adapter.startTurn({ projectId: project.id, prompt: 'inspect' })).resolves.toEqual({
       taskId: 'codex-task:fixture', projectId: project.id, sessionId: 'codex:session-1', state: 'running',
     })
+    await expect(adapter.getLatestTurnStatus()).resolves.toEqual({
+      taskId: 'codex-task:fixture', projectId: project.id, sessionId: 'codex:session-1', state: 'outcome_unknown',
+    })
+    await expect(adapter.getTurnStatus({ taskId: 'codex-task:fixture' })).resolves.toEqual({
+      taskId: 'codex-task:fixture', projectId: project.id, sessionId: 'codex:session-1', state: 'running',
+    })
     await expect(adapter.cancelTurn({ taskId: 'codex-task:fixture' })).resolves.toBe(true)
     await expect(adapter.answerApproval({ approvalId: 'approval-1', allow: true })).resolves.toBe(true)
     expect(invokePairedLocalCodex.mock.calls.map(([request]) => request.operation)).toEqual([
-      'projects.list', 'sessions.list', 'workspaces.register', 'turns.start', 'turns.cancel', 'approvals.answer',
+      'projects.list', 'sessions.list', 'workspaces.register', 'turns.start', 'turns.list', 'turns.status', 'turns.cancel', 'approvals.answer',
     ])
     adapter.close()
   })

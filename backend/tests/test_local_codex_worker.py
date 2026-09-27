@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import sys
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 from archon_server.app import create_app
 from archon_server.config import Settings
 from archon_server.local_pairing import LOCAL_PAIRING_AUDIENCE
+from archon_server.local_codex_event_journal import MAX_PROVISIONAL_TURNS
 from archon_server.services.local_codex_worker import (
     LocalCodexOutcomeUnknown,
     LocalCodexWorkerClient,
@@ -191,6 +193,8 @@ for line in sys.stdin:
         }).status_code == 401
         token = _pair(settings.local_pairing_socket_path)
         headers = {"Authorization": f"Bearer {token}"}
+        assert client.get("/api/local/codex/turns").status_code == 401
+        assert client.get("/api/local/codex/turns", headers=headers).json() == {"turns": []}
         projects = client.get("/api/local/codex/projects", headers=headers)
         assert projects.status_code == 200
         assert projects.json() == {"projects": [{
@@ -213,6 +217,13 @@ for line in sys.stdin:
         assert response.json() == {
             "taskId": "codex-task:task-1", "projectId": "codex-project:project-1",
             "sessionId": "codex:session-1", "state": "running",
+        }
+        status = client.get("/api/local/codex/turns/codex-task%3Atask-1", headers=headers)
+        assert status.status_code == 200
+        assert status.json() == response.json()
+        assert "prompt" not in status.json()
+        assert client.get("/api/local/codex/turns?limit=1", headers=headers).json() == {
+            "turns": [response.json()],
         }
         assert client.post(
             "/api/local/codex/turns/codex-task%3Atask-1/cancel", headers=headers,
@@ -278,6 +289,209 @@ for line in sys.stdin:
             }],
         }
     assert generation_marker.read_text() == "2"
+
+
+def test_fast_terminal_event_before_start_ack_is_bound_and_completed_survives_restart(tmp_path):
+    script = tmp_path / "worker.py"
+    _fake_worker(script, '''
+import json, sys
+for request_line in sys.stdin:
+    request = json.loads(request_line)
+    if request["method"] == "startTurn":
+        print(json.dumps({"event": {"seq": 1, "event": {
+            "type": "turn.completed", "taskId": "codex-task:task-fast",
+        }}}), flush=True)
+        result = {
+            "taskId": "codex-task:task-fast", "projectId": "codex-project:project-fast",
+            "sessionId": "codex:session-fast", "state": "running",
+        }
+    elif request["method"] == "listProjects":
+        result = []
+    else:
+        result = {}
+    print(json.dumps({"id": request["id"], "ok": True, "result": result}), flush=True)
+''')
+    settings = _settings(tmp_path, script)
+    with TestClient(create_app(settings)) as client:
+        token = _pair(settings.local_pairing_socket_path)
+        headers = {"Authorization": f"Bearer {token}"}
+        start = client.post("/api/local/codex/turns", headers=headers, json={
+            "projectId": "codex-project:project-fast", "prompt": "private prompt",
+        })
+        assert start.status_code == 200
+        assert start.json()["state"] == "running"
+        status = client.get("/api/local/codex/turns/codex-task%3Atask-fast", headers=headers)
+        assert status.status_code == 200
+        assert status.json() == {
+            "taskId": "codex-task:task-fast",
+            "projectId": "codex-project:project-fast",
+            "sessionId": "codex:session-fast",
+            "state": "completed",
+        }
+        assert "private prompt" not in status.text
+        events = client.get("/api/local/codex/events", headers=headers).json()
+        assert events["events"] == [{
+            "seq": 1,
+            "event": {"type": "turn.completed", "taskId": "codex-task:task-fast"},
+        }]
+
+    # A clean worker/backend restart leaves already-terminal state intact.
+    with TestClient(create_app(settings)) as client:
+        token = _pair(settings.local_pairing_socket_path)
+        status = client.get("/api/local/codex/turns/codex-task%3Atask-fast", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert status.status_code == 200
+        assert status.json()["state"] == "completed"
+
+
+def test_active_turn_becomes_outcome_unknown_on_backend_restart(tmp_path):
+    script = tmp_path / "worker.py"
+    _fake_worker(script, '''
+import json, sys
+for request_line in sys.stdin:
+    request = json.loads(request_line)
+    if request["method"] == "listProjects":
+        result = []
+    elif request["method"] == "startTurn":
+        result = {
+            "taskId": "codex-task:task-active", "projectId": "codex-project:project-active",
+            "sessionId": "codex:session-active", "state": "running",
+        }
+    else:
+        result = {}
+    print(json.dumps({"id": request["id"], "ok": True, "result": result}), flush=True)
+''')
+    settings = _settings(tmp_path, script)
+    with TestClient(create_app(settings)) as client:
+        token = _pair(settings.local_pairing_socket_path)
+        headers = {"Authorization": f"Bearer {token}"}
+        start = client.post("/api/local/codex/turns", headers=headers, json={
+            "projectId": "codex-project:project-active", "prompt": "private prompt",
+        })
+        assert start.status_code == 200
+        assert client.get(
+            "/api/local/codex/turns/codex-task%3Atask-active", headers=headers,
+        ).json()["state"] == "running"
+
+    # The new backend owns the journal before marking an accepted active turn
+    # outcome-unknown; it never claims whether a native process survived.
+    with TestClient(create_app(settings)) as client:
+        token = _pair(settings.local_pairing_socket_path)
+        status = client.get("/api/local/codex/turns/codex-task%3Atask-active", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert status.status_code == 200
+        assert status.json()["state"] == "outcome_unknown"
+        assert client.get("/api/local/codex/turns?limit=1", headers={
+            "Authorization": f"Bearer {token}",
+        }).json() == {"turns": [status.json()]}
+
+
+def test_worker_retirement_marks_only_its_active_turns_outcome_unknown(tmp_path):
+    script = tmp_path / "worker.py"
+    _fake_worker(script, '''
+import json, sys
+for request_line in sys.stdin:
+    request = json.loads(request_line)
+    if request["method"] == "listProjects":
+        result = []
+    elif request["method"] == "startTurn":
+        if request["params"].get("sessionId") == "codex:session-finished":
+            result = {
+                "taskId": "codex-task:task-finished", "projectId": "codex-project:project",
+                "sessionId": "codex:session-finished", "state": "running",
+            }
+            print(json.dumps({"id": request["id"], "ok": True, "result": result}), flush=True)
+            print(json.dumps({"event": {"seq": 1, "event": {
+                "type": "turn.completed", "taskId": "codex-task:task-finished",
+            }}}), flush=True)
+            continue
+        result = {
+            "taskId": "codex-task:task-active", "projectId": "codex-project:project",
+            "sessionId": "codex:session-active", "state": "running",
+        }
+        print(json.dumps({"id": request["id"], "ok": True, "result": result}), flush=True)
+        sys.exit(0)
+    else:
+        result = {}
+    print(json.dumps({"id": request["id"], "ok": True, "result": result}), flush=True)
+''')
+    settings = _settings(tmp_path, script)
+    with TestClient(create_app(settings)) as client:
+        token = _pair(settings.local_pairing_socket_path)
+        headers = {"Authorization": f"Bearer {token}"}
+        finished = client.post("/api/local/codex/turns", headers=headers, json={
+            "projectId": "codex-project:project", "sessionId": "codex:session-finished",
+            "prompt": "finish",
+        })
+        assert finished.status_code == 200
+        deadline = time.monotonic() + 2
+        finished_status = None
+        while time.monotonic() < deadline:
+            finished_status = client.get(
+                "/api/local/codex/turns/codex-task%3Atask-finished", headers=headers,
+            )
+            if finished_status.json().get("state") == "completed":
+                break
+            time.sleep(0.01)
+        assert finished_status is not None
+        assert finished_status.json()["state"] == "completed"
+
+        active = client.post("/api/local/codex/turns", headers=headers, json={
+            "projectId": "codex-project:project", "sessionId": "codex:session-active",
+            "prompt": "still processing",
+        })
+        assert active.status_code == 200
+        deadline = time.monotonic() + 2
+        active_status = None
+        while time.monotonic() < deadline:
+            active_status = client.get(
+                "/api/local/codex/turns/codex-task%3Atask-active", headers=headers,
+            )
+            if active_status.json().get("state") == "outcome_unknown":
+                break
+            time.sleep(0.01)
+        assert active_status is not None
+        assert active_status.json()["state"] == "outcome_unknown"
+
+
+def test_provisional_overflow_during_start_returns_unknown_without_false_running_status(tmp_path):
+    script = tmp_path / "worker.py"
+    _fake_worker(script, '''
+import json, sys
+for request_line in sys.stdin:
+    request = json.loads(request_line)
+    if request["method"] == "listProjects":
+        result = []
+    elif request["method"] == "startTurn":
+        for index in range(EVENT_LIMIT + 1):
+            task_id = "codex-task:task-fast" if index == EVENT_LIMIT else f"codex-task:orphan-{index}"
+            print(json.dumps({"event": {"seq": index + 1, "event": {
+                "type": "turn.completed", "taskId": task_id,
+            }}}), flush=True)
+        result = {
+            "taskId": "codex-task:task-fast", "projectId": "codex-project:project",
+            "sessionId": "codex:session-fast", "state": "running",
+        }
+    else:
+        result = {}
+    print(json.dumps({"id": request["id"], "ok": True, "result": result}), flush=True)
+'''.replace("EVENT_LIMIT", str(MAX_PROVISIONAL_TURNS)))
+    settings = _settings(tmp_path, script)
+    with TestClient(create_app(settings)) as client:
+        token = _pair(settings.local_pairing_socket_path)
+        headers = {"Authorization": f"Bearer {token}"}
+        response = client.post("/api/local/codex/turns", headers=headers, json={
+            "projectId": "codex-project:project", "prompt": "private prompt",
+        })
+        assert response.status_code == 504
+        assert response.json()["code"] == "local_codex_outcome_unknown"
+        assert "private prompt" not in response.text
+        assert client.get(
+            "/api/local/codex/turns/codex-task%3Atask-fast", headers=headers,
+        ).status_code == 404
+        assert client.get("/api/local/codex/events", headers=headers).json()["latest"] == MAX_PROVISIONAL_TURNS
 
 
 def test_local_codex_api_returns_unknown_outcome_on_start_turn_timeout(tmp_path):

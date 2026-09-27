@@ -3,6 +3,7 @@ import type {
   LocalCodexProjectDto,
   LocalCodexSessionDto,
   LocalCodexTurnDto,
+  LocalCodexTurnStatusDto,
 } from '../shared/bridge/types'
 import { LOCAL_CODEX_CHANNELS, parseLocalCodexEvent, parseLocalCodexResponse } from '../shared/bridge/validation'
 import type { LocalCodexIpcController } from './registerLocalCodex'
@@ -84,6 +85,7 @@ export class LocalCodexBackendAdapter implements LocalCodexIpcController {
   private cursor = 0
   private pollEpoch = 0
   private closed = false
+  private lastAcceptedTaskId: string | undefined
 
   constructor(private readonly options: LocalCodexBackendAdapterOptions) {
     this.pollIntervalMs = options.pollIntervalMs ?? 250
@@ -119,7 +121,29 @@ export class LocalCodexBackendAdapter implements LocalCodexIpcController {
     if (turn.projectId !== input.projectId || (input.sessionId !== undefined && turn.sessionId !== input.sessionId)) {
       throw new TypeError('Local Codex returned a turn for a different project or session')
     }
+    this.lastAcceptedTaskId = turn.taskId
     return turn
+  }
+
+  async getLatestTurnStatus(): Promise<LocalCodexTurnStatusDto | null> {
+    const result = await this.options.connection.invokePairedLocalCodex({ operation: 'turns.list', limit: 1 })
+    const envelope = record(result, ['turns'])
+    if (!Array.isArray(envelope.turns) || envelope.turns.length > 1) throw new TypeError('Invalid Local Codex turn list')
+    if (envelope.turns.length === 0) {
+      this.lastAcceptedTaskId = undefined
+      return null
+    }
+    const status = parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.turnStatus, envelope.turns[0]) as LocalCodexTurnStatusDto
+    this.lastAcceptedTaskId = status.taskId
+    return status
+  }
+
+  async getTurnStatus(input: { taskId: string }): Promise<LocalCodexTurnStatusDto> {
+    if (input.taskId !== this.lastAcceptedTaskId) throw new TypeError('Local Codex task status is not available')
+    const result = await this.options.connection.invokePairedLocalCodex({ operation: 'turns.status', taskId: input.taskId })
+    const status = parseLocalCodexResponse(LOCAL_CODEX_CHANNELS.turnStatus, result) as LocalCodexTurnStatusDto
+    if (status.taskId !== input.taskId) throw new TypeError('Local Codex returned status for a different task')
+    return status
   }
 
   async cancelTurn(input: { taskId: string }): Promise<boolean> {

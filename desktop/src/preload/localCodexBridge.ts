@@ -1,4 +1,4 @@
-import type { LocalCodexBridge, LocalCodexEvent } from '../shared/bridge/types'
+import type { LocalCodexBridge, LocalCodexEvent, LocalCodexTurnStatusDto } from '../shared/bridge/types'
 import {
   LOCAL_CODEX_CHANNELS,
   parseLocalCodexEvent,
@@ -39,6 +39,12 @@ export function createLocalCodexBridge(ipc: LocalCodexIpcInvoker): LocalCodexBri
     ),
     startTurn: (input: Parameters<LocalCodexBridge['startTurn']>[0]) => invokeLocalCodex<Awaited<ReturnType<LocalCodexBridge['startTurn']>>>(
       ipc, LOCAL_CODEX_CHANNELS.startTurn, [input],
+    ),
+    getLatestTurnStatus: () => invokeLocalCodex<LocalCodexTurnStatusDto | null>(
+      ipc, LOCAL_CODEX_CHANNELS.latestTurnStatus, [],
+    ),
+    getTurnStatus: (input: Parameters<NonNullable<LocalCodexBridge['getTurnStatus']>>[0]) => invokeLocalCodex<LocalCodexTurnStatusDto>(
+      ipc, LOCAL_CODEX_CHANNELS.turnStatus, [input],
     ),
     cancelTurn: (input: Parameters<LocalCodexBridge['cancelTurn']>[0]) => invokeLocalCodex<Awaited<ReturnType<LocalCodexBridge['cancelTurn']>>>(
       ipc, LOCAL_CODEX_CHANNELS.cancelTurn, [input],
