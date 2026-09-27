@@ -50,28 +50,31 @@ isolated `uv` tool from the `retired-hermes` migration backup
 `hermes-acp`. No Hermes gateway, dashboard, cron or systemd unit was installed
 or started.
 
-## Qualification attempt (2026-09-27)
+## Qualification (2026-09-27)
 
-### Hermes qualifies
+### Prime, Pi and Hermes complete a bounded turn
 
-`hermes -z "Reply with exactly the single word READY and nothing else." --cli` in a
-throwaway working directory completed with exit 0 and returned `READY`. Hermes
-uses its own `minimax-oauth` / `nous` (`z-ai/glm-5.2`) provider rather than the
-exhausted Codex quota. This is one runtime completing one bounded turn in an
-assigned workspace; it does not establish tool use, side effects, resume or
-recovery.
+- **Prime**: `prime-agent -p "...READY..."` completed with exit 0 and returned `READY` on the DeepSeek Flash provider (`deepseek` / `deepseek-flash`), including with no provider/model flags after the runtime's config key was switched to the DeepSeek key.
+- **Pi**: `pi -p --no-session "...READY..."` completed with exit 0 and returned `READY` after switching its default provider/model to `deepseek` / `deepseek-flash`.
+- **Hermes**: `hermes -z "...READY..." --cli` completed with exit 0 and returned `READY` using its own `minimax-oauth` / `nous` (`z-ai/glm-5.2`) provider.
 
-### Prime / Pi / Codex blocked
+Each is one bounded turn in a throwaway working directory. This establishes that each runtime can start headless and complete a provider turn; it does not establish tool use, side effects, resume, cancellation or recovery.
 
-- **Codex** 0.154.0 started a bounded `codex exec` turn (workdir `/tmp/rt-qual`, model `gpt-5.6-luna`, provider `openai`) but did not complete within 180s; an MCP transport error (Apify missing/invalid token) was observed during startup.
-- **Pi** 0.87.1 `pi -p --no-session` returned `Codex error: The usage limit has been reached`.
-- **Prime** was not attempted after Pi reported the shared provider usage limit reached.
+### Codex not used
 
-Conclusion: one runtime (Hermes) completed a bounded turn; the other three are blocked by unavailable provider quota on this account, not by their presence or the adapter code. Each of those three stays **unverified** until a provider turn completes.
+Codex is intentionally unused for this workstream: the account's Codex quota is exhausted and the operator dropped it. Its adapter remains unqualified.
+
+### Configuration applied
+
+- `~/.pi/agent/settings.json`: `defaultProvider`/`defaultModel` switched to `deepseek` / `deepseek-flash` (previous file kept as a backup).
+- `~/.prime/config.json`: API key switched to the DeepSeek key (previous file kept as a `0600` backup).
+- The DeepSeek key is read from Pi's auth store; it is not printed in this record.
+
+## Earlier bounded probes
 
 ## Not yet established
 
-- Any runtime completing a real provider turn in an assigned workspace.
+- Tool use with side effects, resume/steer/cancel/recovery, and conformance fixtures (a bounded provider turn is established above).
 - Adapter manifests (modalities, resume/fork/steer, approval/read-only/chat-only,
   reconnect semantics, resource formats) and conformance fixtures.
 - Machine isolation controls actually enforced around a runtime.

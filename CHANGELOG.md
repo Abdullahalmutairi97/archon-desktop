@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — Prime and Pi qualified on DeepSeek Flash
+
+- Prime and Pi both completed a bounded headless provider turn on DeepSeek Flash (`deepseek` / `deepseek-flash`), joining Hermes; Codex is intentionally unused for this workstream. Pi's defaults and Prime's key were switched to DeepSeek.
+
 ## Unreleased — runtime adapter manifests
 
 - Publish an adapter manifest per runtime: executable path, read-only SHA-256 digest, an optional declared version (never probed by executing the runtime), and honest capability flags (modalities, resume/fork/steer, approval/read-only/chat-only, reconnect, resource formats, transports — all unsupported for the print-based adapters). The digest is cached by file identity and computing it never runs the executable.
