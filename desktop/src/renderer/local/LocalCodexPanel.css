@@ -34,5 +34,10 @@
 .local-codex-approval pre, .local-codex-approval code { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
 .local-codex-approval pre { margin: 0; padding: 10px; border-radius: var(--radius, 5px); background: var(--surface-2, #292929); }
 .local-codex-approval ul { margin: 0; padding-left: 20px; }
+.local-codex-file-changes { display: grid; gap: 14px; }
+.local-codex-file-changes section { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line, #343230); border-radius: var(--radius, 5px); }
+.local-codex-file-changes section > p { overflow-wrap: anywhere; }
+.local-codex-file-changes .local-codex-diff-label { color: var(--muted, #96928c); font-size: 10px; font-weight: 600; }
+.local-codex-file-changes pre { max-height: 320px; overflow: auto; }
 .local-codex-approval footer { display: flex; justify-content: end; gap: 10px; }
 @media (max-width: 640px) { .local-codex-panel { padding: 16px; } .local-codex-panel header, .local-codex-actions, .local-codex-project-row { align-items: stretch; flex-direction: column; } .local-codex-status { align-self: start; } }

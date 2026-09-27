@@ -65,7 +65,16 @@ function ApprovalDialog({ approval, answer }: { approval: LocalCodexApprovalDto;
         <dl>
           <dt>Reason</dt><dd><pre>{approval.reason}</pre></dd>
           <dt>Working directory</dt><dd><code>{approval.cwd}</code></dd>
-          <dt>Paths</dt><dd>{approval.paths.length ? <ul>{approval.paths.map((path, index) => <li key={index}><code>{path}</code></li>)}</ul> : 'No paths supplied'}</dd>
+          {approval.kind === 'file' ? <>
+            <dt>Exact proposed changes</dt>
+            <dd className="local-codex-file-changes">{approval.changes?.map((change, index) => <section key={`${change.path}:${index}`}>
+              <p><strong>{change.kind === 'add' ? 'Add' : change.kind === 'delete' ? 'Delete' : 'Update'}</strong> <code>{change.path}</code></p>
+              {change.movePath !== undefined && <p>Move target: <code>{change.movePath}</code></p>}
+              <p className="local-codex-diff-label">Exact diff</p>
+              <pre aria-label={`Exact diff for ${change.path}`}>{change.diff}</pre>
+            </section>)}</dd>
+          </> : <dt>Paths</dt>}
+          {approval.kind === 'command' && <dd>{approval.paths.length ? <ul>{approval.paths.map((path, index) => <li key={index}><code>{path}</code></li>)}</ul> : 'No paths supplied'}</dd>}
           {approval.command !== undefined && <><dt>Command</dt><dd><pre>{approval.command}</pre></dd></>}
         </dl>
         <footer><button type="button" ref={denyButton} onClick={() => answer(false)}>Deny</button>
@@ -115,6 +124,11 @@ export function LocalCodexPanel({ bridge, active }: { bridge?: DesktopBridge; ac
   function receive(current: Session, event: LocalCodexEvent) {
     if (!isCurrent(current)) return
     const eventTaskId = event.type === 'approval.requested' ? event.approval.taskId : event.taskId
+    if (event.type === 'approval.requested' && event.approval.kind === 'file'
+      && (!event.approval.changes || event.approval.changes.length < 1)) {
+      deny(current.api, [event.approval])
+      return
+    }
     // Main may emit progress or completion before the start acknowledgement crosses IPC.
     if (current.pending && !current.turn) {
       let early = current.early.get(eventTaskId)

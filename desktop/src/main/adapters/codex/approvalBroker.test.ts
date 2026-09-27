@@ -39,7 +39,10 @@ describe('one-shot Codex native approval correlation', () => {
     const prompts: CodexApprovalPrompt[] = []
     const broker = new CodexApprovalBroker({ onPrompt: (value) => prompts.push(value), isTaskActive: () => true })
     broker.activateProcess(2)
-    const context = approval({ kind: 'file', command: undefined, cwd, paths: [join(cwd, 'a.ts')] })
+    const context = approval({
+      kind: 'file', command: undefined, cwd, paths: [join(cwd, 'a.ts')], startedAtMs: 7,
+      changes: [{ path: join(cwd, 'a.ts'), kind: 'update', diff: '-fixture\n+approved\n' }],
+    })
     const pending = broker.request(context)
     const prompt = prompts[0]
 
@@ -68,6 +71,29 @@ describe('one-shot Codex native approval correlation', () => {
       paths: [join(cwd, 'linked-directory', 'secret.txt')],
     }))).resolves.toBe(false)
     expect(prompts).toEqual([])
+    broker.close()
+  })
+
+  it('revalidates approved file scope when a path becomes a symlink while the dialog is open', async () => {
+    const cwd = await workspace()
+    const outside = await workspace()
+    const file = join(cwd, 'review.ts')
+    const external = join(outside, 'secret.ts')
+    await writeFile(file, 'original\n')
+    await writeFile(external, 'private\n')
+    const prompts: CodexApprovalPrompt[] = []
+    const broker = new CodexApprovalBroker({ onPrompt: (value) => prompts.push(value), isTaskActive: () => true })
+    broker.activateProcess(2)
+    const pending = broker.request(approval({
+      kind: 'file', command: undefined, cwd, paths: [file], startedAtMs: 101,
+      changes: [{ path: file, kind: 'update', diff: '-original\n+changed\n' }],
+    }))
+    const prompt = prompts[0]
+    await rm(file)
+    await symlink(external, file)
+
+    expect(broker.answer({ ...prompt, allow: true })).toBe(true)
+    await expect(pending).resolves.toBe(false)
     broker.close()
   })
 

@@ -9,6 +9,7 @@ import type {
   JsonValue,
   LocalCodexApprovalDto,
   LocalCodexEvent,
+  LocalCodexFileChangeDto,
   LocalCodexProjectDto,
   LocalCodexTurnDto,
   OperationMap,
@@ -85,6 +86,9 @@ const MAX_LOCAL_OUTPUT_LENGTH = 8000
 const MAX_LOCAL_COMMAND_LENGTH = 8000
 const MAX_LOCAL_REASON_LENGTH = 4096
 const MAX_LOCAL_APPROVAL_PATHS = 64
+const MAX_LOCAL_FILE_CHANGES = 16
+const MAX_LOCAL_FILE_DIFF_LENGTH = 16_000
+const MAX_LOCAL_FILE_CHANGE_BYTES = 24 * 1024
 const MAX_LOCAL_PAYLOAD_BYTES = 64 * 1024
 const SENSITIVE_RESPONSE_FIELDS = new Set([
   'token',
@@ -586,7 +590,7 @@ function parseLocalTurn(value: unknown): LocalCodexTurnDto {
 }
 
 function parseLocalApproval(value: unknown): LocalCodexApprovalDto {
-  const record = readOwnDataRecord(value, ['approvalId', 'taskId', 'projectId', 'kind', 'reason', 'cwd', 'paths', 'command'])
+  const record = readOwnDataRecord(value, ['approvalId', 'taskId', 'projectId', 'kind', 'reason', 'cwd', 'paths', 'command', 'changes'])
   if (!isLocalApprovalId(record.approvalId) || !isLocalTaskId(record.taskId)
     || !isLocalProjectId(record.projectId) || (record.kind !== 'command' && record.kind !== 'file')
     || !boundedString(record.reason, MAX_LOCAL_REASON_LENGTH, true)
@@ -598,10 +602,42 @@ function parseLocalApproval(value: unknown): LocalCodexApprovalDto {
     return path
   })
   const command = record.command
+  let changes: LocalCodexFileChangeDto[] | undefined
   if (record.kind === 'command') {
-    if (!boundedString(command, MAX_LOCAL_COMMAND_LENGTH) || paths.length !== 0) return fail()
+    if (!boundedString(command, MAX_LOCAL_COMMAND_LENGTH) || paths.length !== 0 || record.changes !== undefined) return fail()
   } else if (command !== undefined || paths.length < 1) {
     return fail()
+  } else {
+    const rawChanges = readLocalArray(record.changes, MAX_LOCAL_FILE_CHANGES)
+    if (rawChanges.length < 1) return fail()
+    changes = rawChanges.map((value) => {
+      const change = readOwnDataRecord(value, ['path', 'kind', 'diff', 'movePath'])
+      if (!isCanonicalAbsolutePath(change.path) || (change.kind !== 'add' && change.kind !== 'delete' && change.kind !== 'update')
+        || !isRepresentableLocalDiff(change.diff)) return fail()
+      const movePath = change.movePath
+      if (movePath !== undefined && (change.kind !== 'update' || !isCanonicalAbsolutePath(movePath))) return fail()
+      return Object.freeze({
+        path: change.path,
+        kind: change.kind,
+        diff: change.diff,
+        ...(movePath === undefined ? {} : { movePath }),
+      })
+    })
+    const changedPaths: string[] = []
+    const uniquePaths = new Set<string>()
+    for (const change of changes) {
+      for (const path of [change.path, ...(change.movePath === undefined ? [] : [change.movePath])]) {
+        if (uniquePaths.has(path)) return fail()
+        uniquePaths.add(path)
+        changedPaths.push(path)
+      }
+    }
+    if (paths.length !== changedPaths.length || paths.some((path, index) => path !== changedPaths[index])) return fail()
+    try {
+      if (new TextEncoder().encode(JSON.stringify(changes)).byteLength > MAX_LOCAL_FILE_CHANGE_BYTES) return fail()
+    } catch {
+      return fail()
+    }
   }
 
   return Object.freeze({
@@ -613,7 +649,29 @@ function parseLocalApproval(value: unknown): LocalCodexApprovalDto {
     cwd: record.cwd,
     paths: Object.freeze(paths),
     ...(command === undefined ? {} : { command }),
+    ...(changes === undefined ? {} : { changes: Object.freeze(changes) }),
   }) as LocalCodexApprovalDto
+}
+
+function isWellFormedLocalText(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false
+      index += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) return false
+  }
+  return true
+}
+
+function isRepresentableLocalDiff(value: unknown): value is string {
+  if (!boundedString(value, MAX_LOCAL_FILE_DIFF_LENGTH) || !isWellFormedLocalText(value)) return false
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if ((code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) || code === 0x7f) return false
+  }
+  return true
 }
 
 function parseLocalPrompt(value: unknown): { projectId: string; prompt: string } {

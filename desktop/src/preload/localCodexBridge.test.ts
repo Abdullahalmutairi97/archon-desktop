@@ -88,4 +88,26 @@ describe('local Codex preload bridge', () => {
     expect(removeListener).toHaveBeenCalledTimes(1)
     expect(listeners.has(LOCAL_CODEX_CHANNELS.event)).toBe(false)
   })
+
+  it('preserves the exact bounded file diff and drops malformed consent payloads', () => {
+    let listener: ((event: unknown, ...args: unknown[]) => void) | undefined
+    const bridge = createLocalCodexBridge({
+      invoke: vi.fn(async () => undefined),
+      on: (_channel, callback) => { listener = callback },
+      removeListener: (_channel, callback) => { if (listener === callback) listener = undefined },
+    })
+    const received: unknown[] = []
+    bridge.subscribe((event) => received.push(event))
+    const diff = '--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new\n'
+    const approval = {
+      approvalId: 'approval:diff', taskId: turn.taskId, projectId: project.id, kind: 'file',
+      reason: 'Apply the reviewed change', cwd: '/tmp/workspace', paths: ['/tmp/workspace/file.ts'],
+      changes: [{ path: '/tmp/workspace/file.ts', kind: 'update', diff }],
+    }
+    listener?.({}, { type: 'approval.requested', approval })
+    listener?.({}, { type: 'approval.requested', approval: {
+      ...approval, changes: [{ ...approval.changes[0], diff: 'x'.repeat(16_001) }],
+    } })
+    expect(received).toEqual([{ type: 'approval.requested', approval }])
+  })
 })

@@ -461,6 +461,7 @@ export class LocalCodexController {
       cwd: prompt.cwd,
       paths: Object.freeze([...prompt.paths]),
       ...(prompt.command === undefined ? {} : { command: prompt.command }),
+      ...(prompt.changes === undefined ? {} : { changes: prompt.changes }),
     })
     let event: LocalCodexEvent
     try {

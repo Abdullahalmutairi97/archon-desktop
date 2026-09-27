@@ -273,6 +273,7 @@ describe('finite desktop bridge validation', () => {
         reason: 'Update the requested source file',
         cwd: '/tmp/workspace',
         paths: ['/tmp/workspace/src/file.ts'],
+        changes: [{ path: '/tmp/workspace/src/file.ts', kind: 'update', diff: '@@ -1 +1 @@\n-old\n+new\n' }],
       },
     }
     expect(parseLocalCodexEvent(approvalEvent)).toEqual(approvalEvent)
@@ -299,6 +300,26 @@ describe('finite desktop bridge validation', () => {
     } })).toThrow(TypeError)
     expect(() => parseLocalCodexEvent({ ...approvalEvent, approval: {
       ...approvalEvent.approval, command: '/bin/sh',
+    } })).toThrow(TypeError)
+    expect(() => parseLocalCodexEvent({ ...approvalEvent, approval: {
+      ...approvalEvent.approval,
+      paths: ['/tmp/workspace/src/other.ts'],
+    } })).toThrow(TypeError)
+    expect(() => parseLocalCodexEvent({ ...approvalEvent, approval: {
+      ...approvalEvent.approval,
+      changes: [{ path: '/tmp/workspace/src/file.ts', kind: 'copy', diff: '+new' }],
+    } })).toThrow(TypeError)
+    expect(() => parseLocalCodexEvent({ ...approvalEvent, approval: {
+      ...approvalEvent.approval,
+      changes: [{ path: '/tmp/workspace/src/file.ts', kind: 'update', diff: '' }],
+    } })).toThrow(TypeError)
+    expect(() => parseLocalCodexEvent({ ...approvalEvent, approval: {
+      ...approvalEvent.approval,
+      changes: [{ path: '/tmp/workspace/src/file.ts', kind: 'update', diff: `x${String.fromCharCode(0xd800)}` }],
+    } })).toThrow(TypeError)
+    expect(() => parseLocalCodexEvent({ ...approvalEvent, approval: {
+      ...approvalEvent.approval,
+      changes: [{ path: '/tmp/workspace/src/file.ts', kind: 'update', diff: 'x'.repeat(16_001) }],
     } })).toThrow(TypeError)
     const sparsePaths = new Array(1)
     expect(() => parseLocalCodexEvent({ ...approvalEvent, approval: {

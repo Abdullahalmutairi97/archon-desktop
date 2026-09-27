@@ -12,6 +12,11 @@ const approval: LocalCodexApprovalDto = {
   reason: 'Check the requested project', cwd: '/work/example', paths: ['/work/example/a.ts', '/work/example/b.ts'],
   command: 'npm test -- --run',
 }
+const fileApproval: LocalCodexApprovalDto = {
+  approvalId: 'approval:file', taskId: turn.taskId, projectId: project.id, kind: 'file',
+  reason: 'Review this exact source change', cwd: '/work/example', paths: ['/work/example/src/file.ts'],
+  changes: [{ path: '/work/example/src/file.ts', kind: 'update', diff: '--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+<script>alert("x")</script>\n' }],
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -100,6 +105,34 @@ describe('LocalCodexPanel', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: allow ? 'Allow' : 'Deny' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(fake.localCodex.answerApproval).toHaveBeenCalledWith({ approvalId: approval.approvalId, allow })
+  })
+
+  it('shows each exact file path, change kind, and escaped diff before allowing', async () => {
+    const fake = fakeBridge()
+    render(<LocalCodexPanel bridge={fake.bridge} active />)
+    await start()
+    await screen.findByText('Running')
+    fake.emit({ type: 'approval.requested', approval: fileApproval })
+
+    const dialog = screen.getByRole('dialog')
+    const diff = within(dialog).getByLabelText('Exact diff for /work/example/src/file.ts')
+    expect(dialog).toHaveTextContent('Update')
+    expect(dialog).toHaveTextContent('/work/example/src/file.ts')
+    expect(diff.textContent).toBe(fileApproval.changes![0]!.diff)
+    expect(dialog.querySelector('script')).toBeNull()
+    expect(fake.localCodex.answerApproval).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Allow' }))
+    await waitFor(() => expect(fake.localCodex.answerApproval).toHaveBeenCalledWith({ approvalId: fileApproval.approvalId, allow: true }))
+  })
+
+  it('denies a file approval that arrives without diff context', async () => {
+    const fake = fakeBridge()
+    render(<LocalCodexPanel bridge={fake.bridge} active />)
+    await start()
+    await screen.findByText('Running')
+    fake.emit({ type: 'approval.requested', approval: { ...fileApproval, changes: undefined } })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(fake.localCodex.answerApproval).toHaveBeenCalledWith({ approvalId: fileApproval.approvalId, allow: false })
   })
 
   it('keeps state, subscription and approval portal across navigation', async () => {

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { lstatSync, realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { fromCodexSessionId, isCodexSessionId, isCodexTaskId } from './ids'
+import { fileChangePaths, validateCanonicalCodexFileChanges } from './fileChanges'
+import type { CodexFileChange } from './fileChanges'
 import { isProtectedCodexPath } from './pathAccess'
 import type { CodexServerRequest } from './appServer'
 
@@ -18,6 +20,8 @@ export interface CodexApprovalContext {
   command?: string
   cwd: string
   paths: readonly string[]
+  changes?: readonly CodexFileChange[]
+  startedAtMs?: number
   reason: string
 }
 
@@ -83,11 +87,13 @@ function freezeContext(context: CodexApprovalContext): CodexApprovalContext {
 
   const lexicalCwd = resolve(context.cwd)
   const cwd = context.kind === 'file' ? realOwnedDirectory(lexicalCwd) : lexicalCwd
+  let changes: readonly CodexFileChange[] | undefined
   if (context.kind === 'command') {
     if (typeof context.command !== 'string' || context.command.length < 1
       || context.command.length > MAX_APPROVAL_COMMAND_LENGTH || context.command.includes('\0')
-      || context.paths.length !== 0) throw new TypeError('Invalid Codex command approval context.')
-  } else if (context.command !== undefined || context.paths.length < 1) {
+      || context.paths.length !== 0 || context.changes !== undefined || context.startedAtMs !== undefined) throw new TypeError('Invalid Codex command approval context.')
+  } else if (context.command !== undefined || context.paths.length < 1 || context.changes === undefined
+    || !Number.isSafeInteger(context.startedAtMs) || context.startedAtMs! < 0) {
     throw new TypeError('Invalid Codex file approval context.')
   }
 
@@ -106,7 +112,17 @@ function freezeContext(context: CodexApprovalContext): CodexApprovalContext {
     }
     return normalized
   })
-  return Object.freeze({
+
+  if (context.kind === 'file') {
+    changes = validateCanonicalCodexFileChanges(context.changes, cwd)
+    const changedPaths = changes && fileChangePaths(changes)
+    if (!changes || !changedPaths || changedPaths.length !== paths.length
+      || changedPaths.some((path, index) => path !== paths[index])) {
+      throw new TypeError('Invalid Codex file approval diff context.')
+    }
+  }
+
+  const frozen: CodexApprovalContext = Object.freeze({
     requestId: context.requestId,
     processGeneration: context.processGeneration,
     sessionId: context.sessionId,
@@ -116,8 +132,14 @@ function freezeContext(context: CodexApprovalContext): CodexApprovalContext {
     ...(context.command === undefined ? {} : { command: context.command }),
     cwd,
     paths: Object.freeze(paths),
+    ...(changes === undefined ? {} : { changes }),
+    ...(context.startedAtMs === undefined ? {} : { startedAtMs: context.startedAtMs }),
     reason: context.reason,
   })
+  if (Buffer.byteLength(JSON.stringify(frozen), 'utf8') > 48 * 1024) {
+    throw new TypeError('Codex approval context exceeds the review limit.')
+  }
+  return frozen
 }
 
 function realOwnedDirectory(path: string): string {
@@ -134,6 +156,7 @@ function canonicalApprovalPath(lexicalCwd: string, realCwd: string, path: string
   if (!isWithin(lexicalCwd, path)) throw new TypeError('Codex approval path is outside the owned workspace.')
   const rel = relative(lexicalCwd, path)
   const parts = rel ? rel.split(sep).filter(Boolean) : []
+  if (parts.length === 0) throw new TypeError('Codex approval path must name a file.')
   let cursor = realCwd
   for (let index = 0; index < parts.length; index += 1) {
     cursor = resolve(cursor, parts[index])
@@ -144,7 +167,8 @@ function canonicalApprovalPath(lexicalCwd: string, realCwd: string, path: string
       if (index === parts.length - 1 && (error as NodeJS.ErrnoException).code === 'ENOENT') return cursor
       throw new TypeError('Codex approval path is unavailable.')
     }
-    if (details.isSymbolicLink() || (index < parts.length - 1 && !details.isDirectory())) {
+    if (details.isSymbolicLink() || (index < parts.length - 1 && !details.isDirectory())
+      || (index === parts.length - 1 && !details.isFile())) {
       throw new TypeError('Codex approval path contains an unsafe component.')
     }
     const canonical = realpathSync(cursor)
@@ -165,9 +189,20 @@ function sameBinding(expected: CodexApprovalPrompt, answer: CodexApprovalAnswer)
     && expected.kind === answer.kind
     && expected.command === answer.command
     && expected.cwd === answer.cwd
+    && expected.startedAtMs === answer.startedAtMs
     && expected.reason === answer.reason
     && expected.paths.length === answer.paths.length
     && expected.paths.every((path, index) => path === answer.paths[index])
+    && sameChanges(expected.changes, answer.changes)
+}
+
+function sameChanges(expected: readonly CodexFileChange[] | undefined, actual: readonly CodexFileChange[] | undefined): boolean {
+  if (expected === undefined || actual === undefined) return expected === actual
+  return expected.length === actual.length && expected.every((change, index) => {
+    const other = actual[index]
+    return !!other && change.path === other.path && change.kind === other.kind
+      && change.diff === other.diff && change.movePath === other.movePath
+  })
 }
 
 /** Couple app-server lifecycle and approvals so old prompts die with their process. */
@@ -258,9 +293,24 @@ export class CodexApprovalBroker {
       || !Array.isArray(answer.paths)) return false
     const pending = this.pendingById.get(answer.approvalId)
     if (!pending || !sameBinding(pending.prompt, answer)) return false
+    let currentFileScopeIsSafe = true
+    if (answer.allow && pending.prompt.kind === 'file') {
+      currentFileScopeIsSafe = false
+      try {
+        const checked = freezeContext(pending.prompt)
+        currentFileScopeIsSafe = sameBinding(pending.prompt, {
+          ...checked,
+          approvalId: pending.prompt.approvalId,
+          allow: true,
+        })
+      } catch {
+        // A path changed after the dialog opened; consume the response as a denial.
+      }
+    }
     const canAllow = answer.allow
       && answer.processGeneration === this.currentProcessGeneration
       && this.isTaskActive(pending.prompt)
+      && currentFileScopeIsSafe
     this.consume(pending, canAllow)
     return true
   }

@@ -2,6 +2,8 @@ import { lstatSync, realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { CodexAppServerClient, CodexServerRequest } from './appServer'
 import type { CodexApprovalBroker, ResolvedCodexApprovalContext } from './approvalBroker'
+import { fileChangePaths, validateCodexFileChanges } from './fileChanges'
+import type { CodexFileChange } from './fileChanges'
 import { isCodexProjectId, makeCodexTaskId, toCodexSessionId } from './ids'
 import type { OwnedCodexMetadataStore } from './metadata'
 
@@ -39,7 +41,7 @@ export interface CodexDesktopServiceOptions {
   onEvent?: (turn: Readonly<CodexDesktopTurn>) => void
   turnTimeoutMs?: number
 }
-interface CachedItem { kind: 'command' | 'file'; command?: string; cwd: string; paths: string[] }
+interface CachedItem { kind: 'command' | 'file'; command?: string; cwd: string; paths: readonly string[]; changes?: readonly CodexFileChange[]; startedAtMs?: number }
 interface Operation {
   dto: CodexDesktopTurn
   generation?: number
@@ -71,6 +73,17 @@ function directory(value: string): string {
 function within(root: string, path: string): boolean {
   const rel = relative(root, path)
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`))
+}
+function samePaths(value: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(value) && value.length === expected.length
+    && value.every((path, index) => path === expected[index])
+}
+function sameChanges(left: readonly CodexFileChange[], right: readonly CodexFileChange[]): boolean {
+  return left.length === right.length && left.every((change, index) => {
+    const other = right[index]
+    return !!other && change.path === other.path && change.kind === other.kind
+      && change.diff === other.diff && change.movePath === other.movePath
+  })
 }
 
 /** Finite main-process orchestration; neither this client nor its protocol is exposed by preload. */
@@ -187,9 +200,6 @@ export class CodexDesktopService {
   }
 
   resolveApprovalContext(request: CodexServerRequest): ResolvedCodexApprovalContext | undefined {
-    // A path list is not enough to review file content. Decline file approvals until
-    // an exact bounded diff can be shown in the trusted approval dialog.
-    if (request.method === 'item/fileChange/requestApproval') return undefined
     const op = this.current
     if (!op?.binding || !this.isTaskActive(op.dto.taskId, op.binding.sessionId, request.processGeneration)) return undefined
     const params = request.params
@@ -204,6 +214,19 @@ export class CodexDesktopService {
         || params.additionalPermissions != null || params.proposedNetworkPolicyAmendments != null || params.environmentId != null) return undefined
       try { if (!within(this.project.cwd, directory(item.cwd))) return undefined } catch { return undefined }
       return this.boundedApproval({ ...common, kind: 'command', command: item.command!, paths: [] })
+    }
+    if (request.method === 'item/fileChange/requestApproval' && item.kind === 'file' && item.changes) {
+      if (!Number.isSafeInteger(params.startedAtMs) || item.startedAtMs === undefined
+        || (params.startedAtMs as number) < item.startedAtMs
+        || (params.kind != null && params.kind !== 'file') || params.command != null || params.cwd != null && params.cwd !== item.cwd
+        || params.grantRoot != null || params.networkApprovalContext != null || params.additionalPermissions != null
+        || params.proposedNetworkPolicyAmendments != null || params.environmentId != null) return undefined
+      if (params.paths !== undefined && !samePaths(params.paths, item.paths)) return undefined
+      if (params.changes !== undefined) {
+        const requestedChanges = validateCodexFileChanges(params.changes, this.project.cwd)
+        if (!requestedChanges || !sameChanges(requestedChanges, item.changes)) return undefined
+      }
+      return this.boundedApproval({ ...common, kind: 'file', paths: item.paths, changes: item.changes, startedAtMs: params.startedAtMs as number })
     }
     return undefined
   }
@@ -284,7 +307,7 @@ export class CodexDesktopService {
     if (!op.turnId || turnId !== op.turnId) return
     if (method === 'turn/completed' && record(params.turn)) { this.complete(op, params.turn); return }
     if (method === 'item/agentMessage/delta' && nativeId(params.itemId) && typeof params.delta === 'string') this.message(op, params.itemId, params.delta, true)
-    else if (method === 'item/started' && record(params.item)) this.cacheItem(op, params.item)
+    else if (method === 'item/started' && record(params.item)) this.cacheItem(op, params.item, params.startedAtMs)
     else if (method === 'item/completed' && record(params.item)) {
       if (params.item.type === 'agentMessage' && nativeId(params.item.id) && typeof params.item.text === 'string') this.message(op, params.item.id, params.item.text, false)
       if (nativeId(params.item.id)) op.items.delete(params.item.id)
@@ -293,25 +316,20 @@ export class CodexDesktopService {
     this.publish(op)
   }
 
-  private cacheItem(op: Operation, item: Record<string, unknown>): void {
-    if (!nativeId(item.id) || op.items.size >= MAX_ITEMS || item.status !== 'inProgress') return
+  private cacheItem(op: Operation, item: Record<string, unknown>, startedAtMs: unknown): void {
+    if (!nativeId(item.id)) return
+    // A malformed replacement must invalidate an earlier entry for this item id.
+    op.items.delete(item.id)
+    if (op.items.size >= MAX_ITEMS || item.status !== 'inProgress') return
     if (item.type === 'commandExecution' && typeof item.command === 'string' && item.command.length > 0 && item.command.length <= 8000 && !item.command.includes('\0') && typeof item.cwd === 'string') {
       try { if (!within(this.project.cwd, directory(item.cwd))) return } catch { return }
       op.items.set(item.id, { kind: 'command', command: item.command, cwd: item.cwd, paths: [] })
       op.dto.progress = 'Codex is running a command'
-    } else if (item.type === 'fileChange' && Array.isArray(item.changes) && item.changes.length > 0 && item.changes.length <= 64) {
-      const paths: string[] = []
-      for (const change of item.changes) {
-        if (!record(change) || !record(change.kind) || !['add', 'delete', 'update'].includes(String(change.kind.type)) || typeof change.diff !== 'string' || typeof change.path !== 'string' || change.path.length > 4096 || /[\u0000-\u001f\u007f]/.test(change.path) || !isAbsolute(change.path) || !within(this.project.cwd, resolve(change.path))) return
-        paths.push(resolve(change.path))
-        if (record(change.kind) && change.kind.move_path != null) {
-          const target = change.kind.move_path
-          if (change.kind.type !== 'update' || typeof target !== 'string' || target.length > 4096 || /[\u0000-\u001f\u007f]/.test(target) || !isAbsolute(target) || !within(this.project.cwd, resolve(target))) return
-          paths.push(resolve(target))
-        }
-        if (paths.length > 64) return
-      }
-      op.items.set(item.id, { kind: 'file', cwd: this.project.cwd, paths })
+    } else if (item.type === 'fileChange') {
+      if (!Number.isSafeInteger(startedAtMs) || (startedAtMs as number) < 0) return
+      const changes = validateCodexFileChanges(item.changes, this.project.cwd)
+      if (!changes) return
+      op.items.set(item.id, { kind: 'file', cwd: this.project.cwd, paths: fileChangePaths(changes), changes, startedAtMs: startedAtMs as number })
       op.dto.progress = 'Codex is preparing file changes'
     }
   }

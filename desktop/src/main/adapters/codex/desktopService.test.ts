@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import { CodexApprovalBroker } from './approvalBroker'
 import type { CodexServerRequest } from './appServer'
 import type { OwnedCodexMetadataV1 } from './metadata'
 import { CodexDesktopService, MAX_CODEX_PROMPT_CHARS, MAX_CODEX_RESULT_CHARS } from './desktopService'
+import { MAX_CODEX_FILE_DIFF_CHARS } from './fileChanges'
 
 class FakeServer {
   processGeneration = 1
@@ -128,12 +129,76 @@ describe('finite main-owned Codex turns', () => {
     expect(await pending).toBe(false)
     expect(service.resolveApprovalContext(request)).toBeUndefined()
   })
-  it('declines file approvals until an exact diff can be reviewed', async () => {
-    await service.startTurn('work')
-    server.emit('item/started', { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'patch', type: 'fileChange', changes: [{ path: join(cwd, 'new.ts'), kind: { type: 'add' }, diff: '+new' }], status: 'inProgress' } })
-    const request: CodexServerRequest = { id: 5, method: 'item/fileChange/requestApproval', processGeneration: 1, params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'patch' } }
-    expect(service.resolveApprovalContext(request)).toBeUndefined()
+  it('binds file consent to the exact bounded diff and performs no hidden writes', async () => {
+    const file = join(cwd, 'review.ts')
+    await writeFile(file, 'original content\n')
+    const diff = '--- a/review.ts\n+++ b/review.ts\n@@ -1 +1 @@\n-original content\n+approved content\n'
+    const turn = await service.startTurn('work')
+    server.emit('item/started', { threadId: 'thread-1', turnId: 'turn-1', startedAtMs: 100, item: {
+      id: 'patch', type: 'fileChange', status: 'inProgress',
+      changes: [{ path: file, kind: { type: 'update', move_path: null }, diff }],
+    } })
+    const request: CodexServerRequest = { id: 5, method: 'item/fileChange/requestApproval', processGeneration: 1, params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'patch', startedAtMs: 101 } }
+    const context = service.resolveApprovalContext(request)
+    expect(context).toMatchObject({
+      kind: 'file', taskId: turn.taskId, sessionId: turn.sessionId, cwd,
+      paths: [file], changes: [{ path: file, kind: 'update', diff }], startedAtMs: 101,
+    })
+    expect(await readFile(file, 'utf8')).toBe('original content\n')
+
+    const pending = approvals.request({ ...context!, requestId: request.id, processGeneration: 1 })
+    const prompt = prompts[0] as import('./approvalBroker').CodexApprovalPrompt
+    expect(prompt.changes?.[0]?.diff).toBe(diff)
+    expect(approvals.answer({ ...prompt, changes: [{ ...prompt.changes![0]!, diff: 'different patch' }], allow: true })).toBe(false)
+    expect(approvals.answer({ ...prompt, allow: true })).toBe(true)
+    await expect(pending).resolves.toBe(true)
+    expect(await readFile(file, 'utf8')).toBe('original content\n')
+
+    server.emit('item/started', { threadId: 'thread-1', turnId: 'turn-1', startedAtMs: 102, item: {
+      id: 'patch', type: 'fileChange', status: 'inProgress',
+      changes: [{ path: file, kind: { type: 'update' }, diff }],
+    } })
+    const omittedMovePath = service.resolveApprovalContext({
+      ...request, id: 7, params: { ...request.params, startedAtMs: 103 },
+    })
+    expect(omittedMovePath?.changes).toEqual([{ path: file, kind: 'update', diff }])
+  })
+
+  it('denies oversized, protected, symlinked, unknown, or mismatched file changes', async () => {
+    const turn = await service.startTurn('work')
+    const path = join(cwd, 'candidate.ts')
+    const request: CodexServerRequest = { id: 6, method: 'item/fileChange/requestApproval', processGeneration: 1, params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'patch', startedAtMs: 101 } }
+    const start = (change: Record<string, unknown>, id = 'patch') => server.emit('item/started', {
+      threadId: 'thread-1', turnId: 'turn-1', startedAtMs: 100, item: { id, type: 'fileChange', status: 'inProgress', changes: [change] },
+    })
+
+    start({ path, kind: { type: 'add' }, diff: '+new content\n' })
     expect(service.resolveApprovalContext({ ...request, params: { ...request.params, grantRoot: cwd } })).toBeUndefined()
+    expect(service.resolveApprovalContext({ ...request, params: { ...request.params, additionalPermissions: { fullAccess: true } } })).toBeUndefined()
+    expect(service.resolveApprovalContext({ ...request, params: { ...request.params, paths: [join(cwd, 'other.ts')] } })).toBeUndefined()
+    expect(service.resolveApprovalContext({ ...request, params: { ...request.params, changes: [{ path, kind: { type: 'add' }, diff: '+tampered' }] } })).toBeUndefined()
+    expect(service.resolveApprovalContext({ ...request, params: { ...request.params, startedAtMs: 99 } })).toBeUndefined()
+    expect(service.resolveApprovalContext({ ...request, processGeneration: 2 })).toBeUndefined()
+
+    start({ path, kind: { type: 'add' }, diff: 'x'.repeat(MAX_CODEX_FILE_DIFF_CHARS + 1) })
+    expect(service.resolveApprovalContext(request)).toBeUndefined()
+    start({ path, kind: { type: 'add' }, diff: '' })
+    expect(service.resolveApprovalContext(request)).toBeUndefined()
+    start({ path, kind: { type: 'add' }, diff: `x${String.fromCharCode(0xd800)}` })
+    expect(service.resolveApprovalContext(request)).toBeUndefined()
+    start({ path: join(cwd, '.ssh', 'id_ed25519'), kind: { type: 'add' }, diff: '+secret' })
+    expect(service.resolveApprovalContext(request)).toBeUndefined()
+    start({ path, kind: { type: 'copy' }, diff: '+unknown kind' })
+    expect(service.resolveApprovalContext(request)).toBeUndefined()
+
+    const target = join(cwd, 'real-target.ts')
+    await writeFile(target, 'fixture\n')
+    const link = join(cwd, 'linked.ts')
+    await symlink(target, link)
+    start({ path: link, kind: { type: 'update' }, diff: '+symlink' })
+    expect(service.resolveApprovalContext(request)).toBeUndefined()
+    expect(service.resolveApprovalContext({ ...request, params: { ...request.params, itemId: 'missing-item' } })).toBeUndefined()
+    expect(service.snapshot()?.taskId).toBe(turn.taskId)
   })
   it('never launches a turn when metadata write fails and hides raw errors', async () => {
     metadata.replace.mockRejectedValue(new Error('private raw detail'))

@@ -176,6 +176,15 @@ export interface LocalCodexTurnDto {
   state: 'running'
 }
 
+export type LocalCodexFileChangeKind = 'add' | 'delete' | 'update'
+
+export interface LocalCodexFileChangeDto {
+  path: string
+  kind: LocalCodexFileChangeKind
+  diff: string
+  movePath?: string
+}
+
 export interface LocalCodexApprovalDto {
   approvalId: string
   taskId: string
@@ -188,6 +197,8 @@ export interface LocalCodexApprovalDto {
   paths: readonly string[]
   /** Display-only command context for command approvals. */
   command?: string
+  /** Exact bounded patch content sourced from the correlated main-owned item/started notification. */
+  changes?: readonly LocalCodexFileChangeDto[]
 }
 
 export type LocalCodexEvent =
