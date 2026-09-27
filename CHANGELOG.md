@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — fresh package builds and native frame checks
+
+- Add `desktop/scripts/native-hostile-frame-check.mjs` (`npm run native:hostile-frame`): it launches the real Electron app in an isolated fixture profile and reports, as a pass/fail JSON report, whether the trusted top frame sees the preload bridge, whether same-origin and out-of-process sandboxed frames can reach it, whether a new window or remote top-level navigation is refused and whether that attempt revokes IPC trust, whether the credential store persisted anything, and whether the run wrote outside the fixture root. Two fresh `npm ci` workspaces built byte-identical portable packages; the Chromium sandbox and native keyring gates are recorded as blocked on this host rather than worked around. Evidence: [P2D fresh builds and native checks](docs/releases/p2d-fresh-builds.md).
+
 ## Unreleased — write-lease enforcement
 
 - Require the workspace write lease in the write paths. `POST /api/workspaces/{id}/files/write`, `POST /api/workspaces/{id}/files/create`, workspace service start and the code-server handoff each take or refresh the lease for the identity the request presented (a paired owner, or the static server token), and a live lease held by another writer is refused with 409 before anything is written. Moving write access now needs an explicit handover: the holder releases and the other writer acquires. Kernels, debuggers, tmux children and other native processes are still not fenced, and the lease ledger accepts any registered workspace id shape.
