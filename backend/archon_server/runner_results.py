@@ -71,7 +71,7 @@ class RunnerResultLedger:
             raise ValueError("status must be 'ok' or 'error'")
         if output is not None and not isinstance(output, str):
             raise ValueError("output must be a string")
-        rows = self._load(runner)
+        rows = [row for row in self._load(runner) if row.get("eventKey") != event_key]
         rows.append({
             "eventKey": event_key,
             "status": status,

@@ -53,6 +53,17 @@ async def test_agent_reports_and_acknowledges_then_handles_errors():
     assert client.acked == [1, 2]
 
 
+def test_repeated_result_report_is_idempotent(tmp_path):
+    from archon_server.runner_results import RunnerResultLedger
+
+    ledger = RunnerResultLedger(tmp_path / "results")
+    runner_id = "runner-" + "b" * 32
+    ledger.record(runner_id, "task:1", "error", "first")
+    ledger.record(runner_id, "task:1", "ok", "second")
+    rows = ledger.list(runner_id)
+    assert len(rows) == 1 and rows[0]["status"] == "ok" and rows[0]["output"] == "second"
+
+
 def test_runtime_executor_rejects_escapes_and_unsupported_kinds(tmp_path):
     executor = make_runtime_executor("/bin/true", tmp_path)
     import asyncio
