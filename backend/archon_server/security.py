@@ -91,6 +91,9 @@ def validate_server_security(settings: object) -> None:
     """
     token = getattr(settings, "auth_token", None)
     fixture_mode = getattr(settings, "fixture_mode", False) is True
+    local_owner_mode = getattr(settings, "local_owner_mode", False) is True
+    remote_mode = getattr(settings, "remote_access_mode", "disabled")
+    loopback_bind = _is_loopback_bind_host(getattr(settings, "bind_host", None))
     if not isinstance(token, str):
         raise ValueError("ARCHON_DESKTOP_AUTH_TOKEN must be configured as text")
     if _has_control_character(token):
@@ -100,9 +103,12 @@ def validate_server_security(settings: object) -> None:
     except UnicodeEncodeError:
         raise ValueError("ARCHON_DESKTOP_AUTH_TOKEN must be valid UTF-8 text") from None
     if not token or not token.strip():
-        if not fixture_mode:
+        local_owner_bootstrap = (
+            local_owner_mode and remote_mode == "disabled" and loopback_bind
+        )
+        if not fixture_mode and not local_owner_bootstrap:
             raise ValueError(
-                "ARCHON_DESKTOP_AUTH_TOKEN is required; fixture_mode is only for isolated tests"
+                "ARCHON_DESKTOP_AUTH_TOKEN is required unless local owner mode is explicitly enabled"
             )
     elif token != token.strip():
         raise ValueError(
@@ -114,11 +120,14 @@ def validate_server_security(settings: object) -> None:
             "ARCHON_DESKTOP_BIND_HOST must be a literal loopback address or exact localhost"
         )
 
-    remote_mode = getattr(settings, "remote_access_mode", "disabled")
     remote_url = getattr(settings, "remote_base_url", None)
     if remote_mode not in _REMOTE_MODES:
         raise ValueError(
             "ARCHON_DESKTOP_REMOTE_ACCESS_MODE must be disabled or private_tls_proxy"
+        )
+    if local_owner_mode and remote_mode != "disabled":
+        raise ValueError(
+            "ARCHON_DESKTOP_LOCAL_OWNER_MODE requires remote access to be disabled"
         )
     if remote_mode == "disabled":
         if remote_url is not None:

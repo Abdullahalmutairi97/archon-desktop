@@ -31,6 +31,29 @@ def test_blank_token_requires_explicit_fixture_mode(token):
     validate_server_security(make_settings(auth_token=token, fixture_mode=True))
 
 
+def test_local_owner_bootstrap_allows_blank_config_but_not_blank_bearer_auth():
+    settings = make_settings(auth_token="", local_owner_mode=True)
+
+    validate_server_security(settings)
+
+    assert not token_authorized(settings, None)
+    assert not token_authorized(settings, "")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"bind_host": "0.0.0.0"},
+        {"remote_access_mode": "private_tls_proxy", "remote_base_url": "https://proxy.example.test"},
+    ],
+)
+def test_local_owner_bootstrap_requires_loopback_and_disabled_remote_access(overrides):
+    with pytest.raises(ValueError):
+        validate_server_security(
+            make_settings(auth_token="", local_owner_mode=True, **overrides)
+        )
+
+
 @pytest.mark.parametrize("token", [" token", "token ", "token\nvalue", "bad\x00token", "bad\x7ftoken"])
 def test_token_rejects_edge_whitespace_and_control_characters_without_echoing(token):
     with pytest.raises(ValueError) as error:
@@ -53,6 +76,14 @@ def test_legacy_nonblank_token_length_is_not_changed_or_rejected():
 
     assert settings.auth_token == token
     assert token not in repr(settings)
+
+
+def test_local_server_url_uses_configured_port_and_brackets_ipv6():
+    ipv4 = make_settings(bind_host="127.0.0.2", bind_port=9123)
+    ipv6 = make_settings(bind_host="::1", bind_port=9124)
+
+    assert ipv4.local_server_url == "http://127.0.0.2:9123"
+    assert ipv6.local_server_url == "http://[::1]:9124"
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "::1", "localhost"])

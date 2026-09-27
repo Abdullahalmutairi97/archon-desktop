@@ -45,6 +45,7 @@ from .services.workspace import ProjectService, SessionService, PrimeSessionServ
 from .tasks import TaskEngine, TaskStore, hash_request_payload
 from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
 from .runner_ownership import RunnerOwnershipLock
+from .local_pairing import LocalPairingBroker, UnixSocketPairingServer
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
 
@@ -312,6 +313,14 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     store = TaskStore(Database(settings.database_path))
     _prepare_private_runner_journal_dir(settings.runner_journal_path.parent)
     runner_ownership = RunnerOwnershipLock(settings.runner_journal_path.parent / "server.lock")
+    pairing_broker = LocalPairingBroker() if settings.local_owner_mode else None
+    pairing_server = (
+        UnixSocketPairingServer(
+            settings.local_pairing_socket_path, pairing_broker,
+            server_url=settings.local_server_url,
+        )
+        if pairing_broker is not None else None
+    )
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
         settings.runner_journal_path.lstat()
@@ -449,6 +458,8 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
             engine.replay_unacked()
+            if pairing_server is not None:
+                await pairing_server.start()
             if settings.start_worker:
                 # Each worker shares the engine's one-time recovery guard and
                 # claims its own row atomically.
@@ -488,6 +499,13 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             yield
         finally:
             try:
+                if pairing_server is not None:
+                    try:
+                        await pairing_server.close()
+                    except Exception:
+                        logger.exception("Local pairing server cleanup failed")
+                        if pairing_broker is not None:
+                            pairing_broker.clear()
                 # Close Telegram intake first. If it already submitted a turn, keep the
                 # engine alive until that turn completes; otherwise a queued Telegram
                 # task could be stranded while the bridge waits for it forever.
@@ -526,14 +544,25 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     )
 
-    def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
-        supplied = None
+    def supplied_bearer(authorization: str | None) -> str | None:
         if isinstance(authorization, str):
             scheme, separator, value = authorization.partition(" ")
             if separator and scheme.lower() == "bearer":
-                supplied = value
-        if not token_authorized(settings, supplied):
+                return value
+        return None
+
+    def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
+        supplied = supplied_bearer(authorization)
+        if not token_authorized(settings, supplied) and (
+            pairing_broker is None or pairing_broker.authenticate(supplied) is None
+        ):
             raise HTTPException(status_code=401, detail="Unauthorized")
+
+    def require_local_owner(authorization: Annotated[str | None, Header()] = None) -> dict[str, object]:
+        principal = pairing_broker.authenticate(supplied_bearer(authorization)) if pairing_broker else None
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        return principal
 
     protected = [Depends(authorize)]
 
@@ -566,6 +595,10 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     @app.get("/api/health")
     def health():
         return {"ok": True, "service": "archon-desktop-server", "version": app.version}
+
+    @app.get("/api/local/owner")
+    def local_owner(principal=Depends(require_local_owner)):
+        return principal
 
     @app.get("/api/readiness", dependencies=protected)
     def readiness():

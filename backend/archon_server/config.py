@@ -50,8 +50,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_allowed_user_id: int | None = None
     bind_host: str = "127.0.0.1"
-    bind_port: int = 8787
+    bind_port: int = Field(default=8787, ge=1, le=65535)
     fixture_mode: bool = False
+    # Enables same-user local owner pairing over a protected Unix socket. It
+    # never turns a blank bearer token into an HTTP credential.
+    local_owner_mode: bool = False
     remote_access_mode: str = "disabled"
     remote_base_url: str | None = None
     backup_dir: Path = Field(default_factory=lambda: _account_home() / "backups")
@@ -98,3 +101,12 @@ class Settings(BaseSettings):
     @property
     def runner_journal_path(self) -> Path:
         return self.data_dir / "runner-journal" / "runner.sqlite3"
+
+    @property
+    def local_pairing_socket_path(self) -> Path:
+        return self.runner_journal_path.parent / "pairing.sock"
+
+    @property
+    def local_server_url(self) -> str:
+        host = f"[{self.bind_host}]" if ":" in self.bind_host else self.bind_host
+        return f"http://{host}:{self.bind_port}"
