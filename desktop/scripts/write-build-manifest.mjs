@@ -69,7 +69,7 @@ const inputs = [...new Set(sourceInputs)]
   .map(recordFile)
   .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
 const outputRoot = resolve(desktopRoot, 'out')
-const outputs = ['main', 'renderer']
+const outputs = ['main', 'preload', 'renderer']
   .flatMap((name) => walkFiles(resolve(outputRoot, name)))
   .map(recordFile)
   .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))

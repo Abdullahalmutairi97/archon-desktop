@@ -13,15 +13,27 @@ describe('isolated reconstruction window', () => {
     })
   })
 
-  it('allows only the exact local file or the configured loopback dev origin', () => {
+  it('allows only the exact local file or the configured loopback shell document', () => {
     const fileUrl = 'file:///tmp/archon-desktop-reconstruction/out/renderer/index.html'
     expect(isAllowedReconstructionNavigation(fileUrl, undefined, fileUrl)).toBe(true)
+    expect(
+      isAllowedReconstructionNavigation(
+        'http://127.0.0.1:5173/',
+        'http://127.0.0.1:5173',
+      ),
+    ).toBe(true)
     expect(
       isAllowedReconstructionNavigation(
         'http://127.0.0.1:5173/projects',
         'http://127.0.0.1:5173',
       ),
-    ).toBe(true)
+    ).toBe(false)
+    expect(
+      isAllowedReconstructionNavigation(
+        'http://127.0.0.1:5173/?impersonate=1',
+        'http://127.0.0.1:5173',
+      ),
+    ).toBe(false)
     expect(
       isAllowedReconstructionNavigation('https://example.test/', 'http://127.0.0.1:5173'),
     ).toBe(false)

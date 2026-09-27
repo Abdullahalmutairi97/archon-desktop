@@ -37,6 +37,13 @@ export default defineConfig({
       emptyOutDir: true,
     },
   },
+  preload: {
+    plugins: [externalizeDepsPlugin()],
+    build: {
+      outDir: resolve(desktopRoot, 'out/preload'),
+      emptyOutDir: true,
+    },
+  },
   renderer: {
     root: resolve(desktopRoot, 'src/renderer'),
     base: './',

@@ -1,6 +1,6 @@
 {
   "name": "archon-desktop-reconstruction",
-  "version": "0.3.0-reconstruction.1",
+  "version": "0.3.0-reconstruction.2",
   "private": true,
   "description": "Isolated authored reconstruction shell; parity with the unavailable v0.3.0 source is unverified.",
   "main": "out/main/index.js",
@@ -36,7 +36,7 @@
     "jsdom": "29.1.1",
     "typescript": "5.9.3",
     "vite": "7.3.6",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "build": {
     "appId": "dev.archon.desktop.reconstruction",

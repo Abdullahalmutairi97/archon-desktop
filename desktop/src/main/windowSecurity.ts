@@ -11,7 +11,14 @@ export function isAllowedReconstructionNavigation(
 ): boolean {
   try {
     const target = new URL(destination)
-    if (rendererDevOrigin && target.origin === rendererDevOrigin) return true
+    if (
+      rendererDevOrigin &&
+      target.origin === rendererDevOrigin &&
+      target.pathname === '/' &&
+      !target.search &&
+      !target.username &&
+      !target.password
+    ) return true
     return target.protocol === 'file:' && destination === rendererFileUrl
   } catch {
     return false

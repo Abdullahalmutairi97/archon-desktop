@@ -10,6 +10,6 @@ Old desktop source trees, design snapshots, launchers, and dated operational rep
 
 ## Authored reconstruction channel
 
-The `desktop/` source build uses **0.3.0-reconstruction.1**, a separate development identity and an isolated user-data namespace. It does not replace or renumber the official v0.3.0 baseline. Build metadata records the source revision and `baselineParity: unverified`. Automatic update/install is disabled in this route.
+The `desktop/` source build uses **0.3.0-reconstruction.2**, a separate development identity and an isolated user-data namespace. It does not replace or renumber the official v0.3.0 baseline. Build metadata records the source revision and `baselineParity: unverified`. Automatic update/install is disabled in this route.
 
-P2A builds an authored synthetic reference shell without the private ASAR. P2B/C add trusted transport and complete feature integration; P2D separately qualifies native behavior, protected credential storage, packaging and recovery. A successful source build alone does not authorize a new official baseline or installer release.
+P2A builds an authored synthetic reference shell without the private ASAR. P2B.1 adds the trusted read-only bridge and memory-only backend transport under fake-service checks. Later P2B/C increments add profile storage, local Codex and complete feature integration; P2D separately qualifies native behavior, protected credential storage, packaging and recovery. A successful source build alone does not authorize a new official baseline or installer release.

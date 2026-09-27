@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 2B.1 trusted connection boundary
+
+- Add a finite, validated preload bridge and top-frame IPC binding for five read-only backend operations and explicit connection methods.
+- Keep bearer credentials in main-process memory, reject unsafe URLs and redirects, and abort stale requests when the connection changes.
+- Preserve the synthetic renderer while native profile, keyring, local Codex, remote browser and live UI integration remain later gates.
+- Advance the isolated reconstruction build to `0.3.0-reconstruction.2` and patch the Vitest development dependency.
+
 ## Unreleased — Phase 2A authored source foundation
 
 - Add a separate Electron/React reconstruction source build with pinned dependencies and build provenance, without private-ASAR or bundle-replacement inputs.

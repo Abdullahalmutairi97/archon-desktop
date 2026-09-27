@@ -36,7 +36,7 @@ npm run desktop:build
 npm run desktop:preview
 ```
 
-The P2A shell uses synthetic data and has no live backend, provider, filesystem or terminal connection. It has a separate reconstruction identity and leaves the official app/profile unchanged. See [the source-build guide](desktop/README.md) for outputs, provenance and remaining native/parity gates.
+The current renderer uses synthetic data. P2B.1 adds a validated preload bridge and a main-process read-only backend transport under fake-service checks; no live provider, filesystem or terminal is connected to the UI. The source build has a separate reconstruction identity and leaves the official app/profile unchanged. See [the source-build guide](desktop/README.md) for outputs, provenance and remaining native/parity gates.
 
 ## Frozen kit setup and checks
 
