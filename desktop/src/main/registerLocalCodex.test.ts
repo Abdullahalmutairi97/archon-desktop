@@ -20,7 +20,7 @@ function project(): LocalCodexProjectDto {
 }
 
 describe('fixed local Codex IPC registrar', () => {
-  it('registers only the five fixed invokes and rejects extra renderer path input', async () => {
+  it('registers only the fixed invokes and rejects extra renderer path input', async () => {
     const { ipc, handlers } = createIpc()
     const startTurn = vi.fn(async () => ({
       taskId: 'codex-task:test', projectId: 'codex-project:test', sessionId: 'codex:thread', state: 'running' as const,
@@ -130,6 +130,35 @@ describe('fixed local Codex IPC registrar', () => {
     })
     onEvent?.({ type: 'turn.output', taskId: 'bad task', text: 'not validated' })
     expect(send).toHaveBeenCalledTimes(1)
+    unregister()
+  })
+
+  it('waits for the backend approval acknowledgement before returning success', async () => {
+    const { ipc, handlers } = createIpc()
+    let acknowledge: ((value: boolean) => void) | undefined
+    const controller: LocalCodexIpcController = {
+      listProjects: async () => [],
+      listSessions: async () => [],
+      registerProject: async () => null,
+      registerWorkspaceRoot: async () => project(),
+      startTurn: async () => { throw new Error('unused') },
+      cancelTurn: async () => false,
+      answerApproval: () => new Promise<boolean>((resolve) => { acknowledge = resolve }),
+      subscribe: () => () => undefined,
+    }
+    const unregister = registerLocalCodex({
+      ipc,
+      guard: () => true,
+      trustedFrame: { assertTrusted: () => undefined },
+      controller,
+      getWorkspaceRoot: async () => '/tmp/server-workspace',
+      getWindow: () => undefined,
+    })
+    const result = handlers.get(LOCAL_CODEX_CHANNELS.answerApproval)!({}, {
+      approvalId: 'approval-1', allow: false,
+    })
+    acknowledge?.(true)
+    await expect(result).resolves.toBe(true)
     unregister()
   })
 })

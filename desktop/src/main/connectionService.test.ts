@@ -26,6 +26,7 @@ function fakeTransport() {
       ? ({ ok: true as const, readiness: { dispatch_ready: false } })
       : ({ ok: false as const, error: { code: 'not_connected', message: 'No connection.' } })),
     invoke: vi.fn(async () => ({ cursor: 8 })),
+    invokeLocalCodex: vi.fn(async () => ({ projects: [] })),
   }
 }
 
@@ -113,6 +114,37 @@ describe('main-process connection service', () => {
       .rejects.toThrow(/active local archon pairing/i)
     expect(localPairing.pair).not.toHaveBeenCalled()
     expect(transport.invoke).not.toHaveBeenCalled()
+  })
+
+  it('allows the local Codex proxy only through the same-user startup pairing', async () => {
+    const localTransport = fakeTransport()
+    const localPairing = { pair: vi.fn(async () => pairedLocal) }
+    const localService = await createConnectionService(localTransport, fakeCredentials(), { localPairing })
+    await expect(localService.invokePairedLocalCodex({ operation: 'projects.list' })).resolves.toEqual({ projects: [] })
+    expect(localTransport.invokeLocalCodex).toHaveBeenCalledWith({ operation: 'projects.list' })
+    expect(localPairing.pair).toHaveBeenCalledOnce()
+
+    const remoteTransport = fakeTransport()
+    const remotePairing = { pair: vi.fn(async () => pairedLocal) }
+    const remoteService = await createConnectionService(
+      remoteTransport, fakeCredentials({ saved: firstPair }), { localPairing: remotePairing },
+    )
+    await expect(remoteService.invokePairedLocalCodex({ operation: 'projects.list' }))
+      .rejects.toThrow(/active local archon pairing/i)
+    expect(remoteTransport.invokeLocalCodex).not.toHaveBeenCalled()
+    expect(remotePairing.pair).not.toHaveBeenCalled()
+  })
+
+  it('does not retry an unauthorized local Codex request or switch pairing generation', async () => {
+    const transport = fakeTransport()
+    transport.invokeLocalCodex.mockRejectedValueOnce(new BackendTransportError('unauthorized', 401))
+    const localPairing = { pair: vi.fn(async () => pairedLocal) }
+    const service = await createConnectionService(transport, fakeCredentials(), { localPairing })
+
+    await expect(service.invokePairedLocalCodex({ operation: 'projects.list' }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    expect(transport.invokeLocalCodex).toHaveBeenCalledOnce()
+    expect(localPairing.pair).toHaveBeenCalledOnce()
   })
 
   it('uses the active same-user pairing for a workspace GET and rejects a mismatched identity', async () => {

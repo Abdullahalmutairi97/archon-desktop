@@ -57,6 +57,12 @@ from .tasks import TaskEngine, TaskStore, hash_request_payload
 from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
 from .runner_ownership import RunnerOwnershipLock
 from .local_pairing import LocalPairingBroker, UnixSocketPairingServer
+from .services.local_codex_worker import (
+    LocalCodexOutcomeUnknown,
+    LocalCodexRequestRejected,
+    LocalCodexWorkerClient,
+    LocalCodexWorkerError,
+)
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
 
@@ -64,6 +70,10 @@ from .readiness import WorkerTracker, build_readiness_snapshot
 logger = logging.getLogger(__name__)
 WEBSOCKET_AUTH_TIMEOUT_SECONDS = 5.0
 LOCAL_TASK_RUNNER_ID = "archon-desktop-local"
+LOCAL_CODEX_PROJECT_ID = re.compile(r"^codex-project:[A-Za-z0-9._:-]{1,242}$")
+LOCAL_CODEX_TASK_ID = re.compile(r"^codex-task:[A-Za-z0-9._:-]{1,245}$")
+LOCAL_CODEX_SESSION_ID = re.compile(r"^codex:[A-Za-z0-9._:-]{1,250}$")
+LOCAL_CODEX_APPROVAL_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 def _prepare_private_runner_journal_dir(path: Path) -> None:
@@ -199,6 +209,40 @@ class EchoRequest(BaseModel):
         if len(normalized) > 200:
             raise ValueError("message must be 200 characters or fewer")
         return normalized
+
+
+class LocalCodexWorkspaceRegister(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root_path: str = Field(alias="rootPath", min_length=1, max_length=16_000)
+
+    @field_validator("root_path")
+    @classmethod
+    def validate_root_path(cls, value: str) -> str:
+        if not value.startswith("/") or "\x00" in value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("rootPath must be an absolute path without control characters")
+        return value
+
+
+class LocalCodexTurnStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    projectId: str = Field(min_length=15, max_length=256, pattern=r"^codex-project:[A-Za-z0-9._:-]+$")
+    prompt: str = Field(min_length=1, max_length=8_000)
+    sessionId: str | None = Field(default=None, min_length=7, max_length=256, pattern=r"^codex:[A-Za-z0-9._:-]+$")
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, value: str) -> str:
+        if not value.strip() or "\x00" in value:
+            raise ValueError("prompt must not be empty")
+        return value
+
+
+class LocalCodexApprovalAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allow: bool
 
 
 class CollaborationStatus(BaseModel):
@@ -358,6 +402,20 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             server_url=settings.local_server_url,
         )
         if pairing_broker is not None else None
+    )
+    local_codex_worker = (
+        LocalCodexWorkerClient(
+            node_executable=settings.local_codex_node_executable,
+            worker_script=settings.local_codex_worker_script,
+            metadata_root=settings.local_codex_metadata_root,
+            home_directory=settings.local_codex_home_directory,
+            codex_home_directory=settings.local_codex_home,
+            codex_executable=settings.local_codex_executable,
+            request_timeout_seconds=settings.local_codex_request_timeout_seconds,
+            start_timeout_seconds=settings.local_codex_start_timeout_seconds,
+        )
+        if settings.local_codex_enabled and settings.local_codex_metadata_root is not None
+        else None
     )
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
@@ -530,10 +588,19 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             app.state.engine = engine
             app.state.runtimes = registry
             app.state.worker_tracker = worker_tracker
+            app.state.local_codex_worker = local_codex_worker
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
             engine.replay_unacked()
+            if local_codex_worker is not None:
+                await local_codex_worker.start()
+                # Force the worker to finish opening and validating the
+                # explicitly selected metadata root before owner pairing is
+                # made available to desktop clients.
+                worker_projects = await local_codex_worker.request("listProjects", {})
+                if not isinstance(worker_projects, list):
+                    raise RuntimeError("Local Codex worker startup validation failed")
             if pairing_server is not None:
                 await pairing_server.start()
             if settings.start_worker:
@@ -596,6 +663,12 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                         # Cleanup must continue even if the optional Telegram transport
                         # failed before shutdown began.
                         logger.exception("Telegram bridge stopped unexpectedly")
+                if local_codex_worker is not None:
+                    try:
+                        await local_codex_worker.close()
+                    except Exception:
+                        # Shutdown should still release the backend's owner lock.
+                        logger.error("Local Codex worker cleanup failed")
                 # Stop claiming new work, but let every active Prime turn finish before
                 # Uvicorn exits. Cancelling workers here used to kill the child process
                 # mid-session and leave Prime's session lock behind after a restart.
@@ -677,6 +750,82 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     @app.get("/api/local/owner")
     def local_owner(principal=Depends(require_local_owner)):
         return principal
+
+    async def local_codex_call(method: str, params: dict[str, Any]):
+        if local_codex_worker is None:
+            raise HTTPException(status_code=503, detail="Local Codex is disabled")
+        try:
+            return await local_codex_worker.request(method, params)
+        except LocalCodexOutcomeUnknown as exc:
+            return JSONResponse(
+                status_code=504,
+                content={"detail": exc.public_message, "code": exc.code},
+            )
+        except LocalCodexRequestRejected as exc:
+            return JSONResponse(
+                status_code=409,
+                content={"detail": exc.public_message, "code": exc.worker_code},
+            )
+        except LocalCodexWorkerError as exc:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": exc.public_message, "code": exc.code},
+            )
+
+    @app.get("/api/local/codex/projects", dependencies=[Depends(require_local_owner)])
+    async def local_codex_projects():
+        projects = await local_codex_call("listProjects", {})
+        if isinstance(projects, JSONResponse):
+            return projects
+        return {"projects": projects}
+
+    @app.get("/api/local/codex/projects/{project_id}/sessions", dependencies=[Depends(require_local_owner)])
+    async def local_codex_sessions(project_id: str):
+        if not LOCAL_CODEX_PROJECT_ID.fullmatch(project_id):
+            raise HTTPException(status_code=400, detail="Invalid local Codex project identity")
+        sessions_result = await local_codex_call("listSessions", {"projectId": project_id})
+        if isinstance(sessions_result, JSONResponse):
+            return sessions_result
+        return {"sessions": sessions_result}
+
+    @app.post("/api/local/codex/workspaces/register", dependencies=[Depends(require_local_owner)])
+    async def local_codex_register_workspace(payload: LocalCodexWorkspaceRegister):
+        return await local_codex_call("registerWorkspaceRoot", {"rootPath": payload.root_path})
+
+    @app.post("/api/local/codex/turns", dependencies=[Depends(require_local_owner)])
+    async def local_codex_start_turn(payload: LocalCodexTurnStart):
+        params: dict[str, Any] = {"projectId": payload.projectId, "prompt": payload.prompt}
+        if payload.sessionId is not None:
+            params["sessionId"] = payload.sessionId
+        return await local_codex_call("startTurn", params)
+
+    @app.post("/api/local/codex/turns/{task_id}/cancel", dependencies=[Depends(require_local_owner)])
+    async def local_codex_cancel_turn(task_id: str):
+        if not LOCAL_CODEX_TASK_ID.fullmatch(task_id):
+            raise HTTPException(status_code=400, detail="Invalid local Codex task identity")
+        cancelled = await local_codex_call("cancelTurn", {"taskId": task_id})
+        if isinstance(cancelled, JSONResponse):
+            return cancelled
+        return {"cancelled": cancelled}
+
+    @app.post("/api/local/codex/approvals/{approval_id}", dependencies=[Depends(require_local_owner)])
+    async def local_codex_answer_approval(approval_id: str, payload: LocalCodexApprovalAnswer):
+        if not LOCAL_CODEX_APPROVAL_ID.fullmatch(approval_id):
+            raise HTTPException(status_code=400, detail="Invalid local Codex approval identity")
+        answered = await local_codex_call("answerApproval", {
+            "approvalId": approval_id,
+            "allow": payload.allow,
+        })
+        if isinstance(answered, JSONResponse):
+            return answered
+        return {"answered": answered}
+
+    @app.get("/api/local/codex/events", dependencies=[Depends(require_local_owner)])
+    async def local_codex_events(
+        after: int = Query(0, ge=0, le=9_007_199_254_740_991),
+        limit: int = Query(32, ge=1, le=64),
+    ):
+        return await local_codex_call("events", {"after": after, "limit": limit})
 
     @app.get("/api/readiness", dependencies=protected)
     def readiness():

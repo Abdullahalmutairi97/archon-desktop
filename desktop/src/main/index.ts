@@ -15,6 +15,7 @@ import { ProfileStore } from './storage/profileStore'
 import { BackendTransport } from './transport/backendTransport'
 import { LocalPairingClient, resolveLocalPairingSocketPath } from './localPairingClient'
 import { OwnedCodexMetadataStore } from './adapters/codex/metadata'
+import { acquireCodexOwnerLease, type CodexOwnerLease } from './adapters/codex/ownerLease'
 import type { CodexChildProcess } from './adapters/codex/appServer'
 import {
   createCodexChildEnvironment,
@@ -24,6 +25,7 @@ import {
 } from './localCodexController'
 import { registerLocalCodex } from './registerLocalCodex'
 import type { LocalCodexIpcController } from './registerLocalCodex'
+import { LocalCodexBackendAdapter } from './localCodexBackendAdapter'
 import { minimizeInsteadOfClosingForActiveWork } from './windowLifecycle'
 
 const RECONSTRUCTION_PROFILE = 'archon-desktop-reconstruction-dev'
@@ -34,6 +36,8 @@ app.setPath('userData', join(app.getPath('appData'), RECONSTRUCTION_PROFILE))
 const trustedFrame = new TrustedShellFrameGuard()
 let mainWindow: BrowserWindow | undefined
 let localCodexController: LocalCodexController | undefined
+let localCodexBackendAdapter: LocalCodexBackendAdapter | undefined
+let localCodexOwnerLease: CodexOwnerLease | undefined
 let unregisterLocalCodex: (() => void) | undefined
 let quitRequested = false
 
@@ -140,38 +144,51 @@ void app.whenReady().then(async () => {
   }
   const connection = await createConnectionService(new BackendTransport(), credentialStore, { localPairing })
   let localCodexBridge: LocalCodexIpcController
+  const pickProjectDirectory = async (): Promise<string | null> => {
+    const owner = mainWindow
+    if (!owner || owner.isDestroyed()) return null
+    const result = await dialog.showOpenDialog(owner, { properties: ['openDirectory'] })
+    return result.canceled ? null : result.filePaths[0] ?? null
+  }
   try {
-    const codexMetadata = new OwnedCodexMetadataStore(profileStore.paths.codexMetadataDirectory)
-    const homeDirectory = process.env.HOME && isAbsolute(process.env.HOME) ? process.env.HOME : homedir()
-    const codexHomeDirectory = process.env.CODEX_HOME === undefined
-      ? join(homeDirectory, '.codex')
-      : process.env.CODEX_HOME
-    const codexEnvironment = createCodexChildEnvironment({ homeDirectory, codexHomeDirectory })
-    const codexCommand = await resolveCodexExecutable(process.env.ARCHON_CODEX_EXECUTABLE, app.isPackaged)
-    const codexRuntime = createLocalCodexRuntimeFactory({
-      metadata: codexMetadata,
-      command: codexCommand,
-      env: codexEnvironment,
-      spawn: (command, args, options) => spawn(command, args, {
-        ...options,
-        env: { ...options.env },
-      }) as unknown as CodexChildProcess,
-    })
-    localCodexController = new LocalCodexController({
-      metadata: codexMetadata,
-      protectedRoots: [codexEnvironment.CODEX_HOME],
-      createRuntime: codexRuntime,
-      pickProjectDirectory: async () => {
-        const owner = mainWindow
-        if (!owner || owner.isDestroyed()) return null
-        const result = await dialog.showOpenDialog(owner, { properties: ['openDirectory'] })
-        return result.canceled ? null : result.filePaths[0] ?? null
-      },
-    })
-    localCodexBridge = localCodexController
+    if (process.env.ARCHON_DESKTOP_CODEX_OWNER === 'backend') {
+      // The backend worker owns the same metadata profile in this explicit mode.
+      // Never construct an Electron owner or fall back to one after proxy failure.
+      localCodexBackendAdapter = new LocalCodexBackendAdapter({ connection, pickProjectDirectory })
+      localCodexBridge = localCodexBackendAdapter
+    } else {
+      localCodexOwnerLease = await acquireCodexOwnerLease(profileStore.paths.codexMetadataDirectory, 'electron-main')
+      const codexMetadata = new OwnedCodexMetadataStore(profileStore.paths.codexMetadataDirectory)
+      const homeDirectory = process.env.HOME && isAbsolute(process.env.HOME) ? process.env.HOME : homedir()
+      const codexHomeDirectory = process.env.CODEX_HOME === undefined
+        ? join(homeDirectory, '.codex')
+        : process.env.CODEX_HOME
+      const codexEnvironment = createCodexChildEnvironment({ homeDirectory, codexHomeDirectory })
+      const codexCommand = await resolveCodexExecutable(process.env.ARCHON_CODEX_EXECUTABLE, app.isPackaged)
+      const codexRuntime = createLocalCodexRuntimeFactory({
+        metadata: codexMetadata,
+        command: codexCommand,
+        env: codexEnvironment,
+        spawn: (command, args, options) => spawn(command, args, {
+          ...options,
+          env: { ...options.env },
+        }) as unknown as CodexChildProcess,
+      })
+      localCodexController = new LocalCodexController({
+        metadata: codexMetadata,
+        protectedRoots: [codexEnvironment.CODEX_HOME],
+        createRuntime: codexRuntime,
+        pickProjectDirectory,
+      })
+      localCodexBridge = localCodexController
+    }
   } catch {
     try { localCodexController?.close() } catch { /* Keep the connection bridge available. */ }
     localCodexController = undefined
+    localCodexOwnerLease?.releaseSync()
+    localCodexOwnerLease = undefined
+    localCodexBackendAdapter?.close()
+    localCodexBackendAdapter = undefined
     localCodexBridge = {
       listProjects: async () => [],
       listSessions: async () => [],
@@ -214,8 +231,12 @@ app.on('before-quit', () => {
   quitRequested = true
   unregisterLocalCodex?.()
   unregisterLocalCodex = undefined
+  localCodexBackendAdapter?.close()
+  localCodexBackendAdapter = undefined
   localCodexController?.close()
   localCodexController = undefined
+  localCodexOwnerLease?.releaseSync()
+  localCodexOwnerLease = undefined
 })
 
 app.on('window-all-closed', () => {

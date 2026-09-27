@@ -6,6 +6,7 @@ import type {
   OperationMap,
   OperationName,
 } from '../../shared/bridge/types'
+import type { LocalCodexProxyRequest } from '../localCodexProxy'
 import { BRIDGE_CHANNELS, isOperationName, parseBridgeResponse, parseOperationPayload } from '../../shared/bridge/validation'
 import {
   isBoundedIpcPayload,
@@ -510,6 +511,67 @@ function parseJsonResponse(bytes: Uint8Array, contentType: string | null): unkno
   }
 }
 
+const LOCAL_CODEX_REQUEST_LIMITS: BoundedPayloadLimits = Object.freeze({
+  maxBytes: 64 * 1024,
+  maxDepth: 16,
+  maxNodes: 2_000,
+  maxStringLength: 32 * 1024,
+  maxArrayLength: 256,
+  maxObjectKeys: 64,
+})
+
+function localCodexId(value: unknown, prefix: string, maxLength: number): value is string {
+  return typeof value === 'string' && value.startsWith(prefix) && value.length > prefix.length
+    && value.length <= maxLength && /^[A-Za-z0-9._:-]+$/u.test(value.slice(prefix.length))
+}
+
+function localCodexRequestDetails(request: LocalCodexProxyRequest): {
+  method: 'GET' | 'POST'
+  path: string
+  body?: string
+} {
+  const api = '/api/local/codex'
+  switch (request.operation) {
+    case 'projects.list':
+      return { method: 'GET', path: `${api}/projects` }
+    case 'sessions.list':
+      if (!localCodexId(request.projectId, 'codex-project:', 256)) break
+      return { method: 'GET', path: `${api}/projects/${encodeURIComponent(request.projectId)}/sessions` }
+    case 'workspaces.register':
+      if (typeof request.rootPath !== 'string' || !request.rootPath.startsWith('/') || request.rootPath.length > 16_000) break
+      return { method: 'POST', path: `${api}/workspaces/register`, body: JSON.stringify({ rootPath: request.rootPath }) }
+    case 'turns.start':
+      if (!localCodexId(request.projectId, 'codex-project:', 256)
+        || typeof request.prompt !== 'string' || request.prompt.length > 8_000 || !request.prompt.trim()
+        || (request.sessionId !== undefined && !localCodexId(request.sessionId, 'codex:', 256))) break
+      return {
+        method: 'POST', path: `${api}/turns`,
+        body: JSON.stringify({
+          projectId: request.projectId,
+          prompt: request.prompt,
+          ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+        }),
+      }
+    case 'turns.cancel':
+      if (!localCodexId(request.taskId, 'codex-task:', 256)) break
+      return { method: 'POST', path: `${api}/turns/${encodeURIComponent(request.taskId)}/cancel`, body: '{}' }
+    case 'approvals.answer':
+      if (typeof request.approvalId !== 'string' || request.approvalId.length > 128
+        || !/^[A-Za-z0-9._:-]+$/u.test(request.approvalId) || typeof request.allow !== 'boolean') break
+      return {
+        method: 'POST', path: `${api}/approvals/${encodeURIComponent(request.approvalId)}`,
+        body: JSON.stringify({ allow: request.allow }),
+      }
+    case 'events.list': {
+      if (!Number.isSafeInteger(request.after) || request.after < 0
+        || !Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 64) break
+      const params = new URLSearchParams({ after: String(request.after), limit: String(request.limit) })
+      return { method: 'GET', path: `${api}/events?${params.toString()}` }
+    }
+  }
+  throw new BackendTransportError('invalid_payload')
+}
+
 function generationChanged(transport: BackendTransport, generation: number): boolean {
   return transport.generation !== generation
 }
@@ -628,6 +690,56 @@ export class BackendTransport {
         throw new BackendTransportError('invalid_response')
       }
       return result as OperationMap[K]['result']
+    } catch (error) {
+      if (generationChanged(this, connection.generation)) {
+        throw new BackendTransportError('connection_changed')
+      }
+      if (error instanceof BackendTransportError) throw error
+      throw new BackendTransportError('network_error')
+    } finally {
+      this.pending.delete(controller)
+    }
+  }
+
+  /** Main-process-only local owner routes; retries are left to no caller, especially for startTurn. */
+  async invokeLocalCodex(request: LocalCodexProxyRequest): Promise<unknown> {
+    if (!isBoundedIpcPayload(request, LOCAL_CODEX_REQUEST_LIMITS)) {
+      throw new BackendTransportError('invalid_payload')
+    }
+    const details = localCodexRequestDetails(request)
+    const connection = this.activeConnection
+    if (!connection) throw new BackendTransportError('not_connected')
+
+    const controller = new AbortController()
+    this.pending.add(controller)
+    try {
+      const url = new URL(`${connection.basePath}${details.path}`, connection.origin)
+      const response = await this.fetchImpl(url, {
+        method: details.method,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${connection.token}`,
+          ...(details.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        ...(details.body === undefined ? {} : { body: details.body }),
+        redirect: 'manual',
+        signal: controller.signal,
+      })
+      if (generationChanged(this, connection.generation)) {
+        throw new BackendTransportError('connection_changed')
+      }
+      if (response.redirected || response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+        throw new BackendTransportError('redirect_rejected')
+      }
+      if (response.status === 401 || response.status === 403) {
+        throw new BackendTransportError('unauthorized', response.status)
+      }
+      if (response.status !== 200) throw new BackendTransportError('http_error')
+      const bytes = await readBoundedBody(response)
+      if (generationChanged(this, connection.generation)) {
+        throw new BackendTransportError('connection_changed')
+      }
+      return parseJsonResponse(bytes, response.headers.get('content-type'))
     } catch (error) {
       if (generationChanged(this, connection.generation)) {
         throw new BackendTransportError('connection_changed')

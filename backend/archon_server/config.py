@@ -5,7 +5,7 @@ import pwd
 import ipaddress
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -56,6 +56,20 @@ class Settings(BaseSettings):
     # Enables same-user local owner pairing over a protected Unix socket. It
     # never turns a blank bearer token into an HTTP credential.
     local_owner_mode: bool = False
+    # The native local Codex runner shares its metadata directory with the
+    # user's desktop process. Keep it opt-in and require an explicitly chosen
+    # metadata root so the server never guesses or migrates Codex state.
+    local_codex_enabled: bool = False
+    local_codex_metadata_root: Path | None = None
+    local_codex_worker_script: Path = Field(
+        default_factory=lambda: Path(__file__).resolve().parents[2] / "desktop" / "out" / "runner" / "runner" / "worker.js"
+    )
+    local_codex_node_executable: str = "node"
+    local_codex_home_directory: Path = Field(default_factory=_account_home)
+    local_codex_home: Path = Field(default_factory=lambda: _account_home() / ".codex")
+    local_codex_executable: Path | None = None
+    local_codex_request_timeout_seconds: float = Field(default=15.0, ge=0.05, le=120.0)
+    local_codex_start_timeout_seconds: float = Field(default=60.0, ge=0.05, le=300.0)
     remote_access_mode: str = "disabled"
     remote_base_url: str | None = None
     backup_dir: Path = Field(default_factory=lambda: _account_home() / "backups")
@@ -74,6 +88,19 @@ class Settings(BaseSettings):
     worker_poll_seconds: float = 0.5
     # Compatibility setting only: started tasks are never automatically replayed.
     quota_retry_seconds: float = Field(default=18000, ge=1)
+
+    @model_validator(mode="after")
+    def validate_local_codex_settings(self) -> "Settings":
+        if self.local_codex_enabled:
+            if not self.local_owner_mode:
+                raise ValueError("ARCHON_DESKTOP_LOCAL_CODEX_ENABLED requires ARCHON_DESKTOP_LOCAL_OWNER_MODE")
+            if self.remote_access_mode != "disabled":
+                raise ValueError("ARCHON_DESKTOP_LOCAL_CODEX_ENABLED requires remote access to be disabled")
+            if self.local_codex_metadata_root is None:
+                raise ValueError("ARCHON_DESKTOP_LOCAL_CODEX_METADATA_ROOT must be explicitly configured")
+            if not self.local_codex_metadata_root.is_absolute():
+                raise ValueError("ARCHON_DESKTOP_LOCAL_CODEX_METADATA_ROOT must be an absolute path")
+        return self
 
     @property
     def telegram_enabled(self) -> bool:

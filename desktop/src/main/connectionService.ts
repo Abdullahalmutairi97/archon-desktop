@@ -9,6 +9,7 @@ import type {
 } from '../shared/bridge/types'
 import type { CredentialDescription, CredentialStore } from './storage/credentialStore'
 import { BackendTransportError, validateBackendConnectionInput } from './transport/backendTransport'
+import type { LocalCodexProxyRequest } from './localCodexProxy'
 
 /** The transport and its credential remain exclusively in the main process. */
 export interface ConnectionTransportPort {
@@ -17,6 +18,8 @@ export interface ConnectionTransportPort {
   disconnect(): number
   probe(): Promise<ConnectionProbeResult>
   invoke(operation: OperationName, payload: OperationMap[OperationName]['payload']): Promise<unknown>
+  /** Fixed local Codex routes; absent on transports that do not expose the owner API. */
+  invokeLocalCodex?(request: LocalCodexProxyRequest): Promise<unknown>
 }
 
 export type ConnectionCredentialPort = Pick<CredentialStore,
@@ -264,6 +267,22 @@ export async function createConnectionService(
       }
       if (result.workspace.workspace_id !== workspaceId) throw new BackendTransportError('invalid_response')
       return result.workspace
+    },
+    /**
+     * Invoke the main-only Codex owner API using only the active same-user Unix-socket
+     * pairing. This deliberately performs no unauthorized retry: POST start outcomes
+     * can be ambiguous, and even reads must not silently switch connection generations.
+     */
+    invokePairedLocalCodex: async (request: LocalCodexProxyRequest): Promise<unknown> => {
+      await ensureLocalPairing(true)
+      const requestGeneration = activeLocalPairingGeneration()
+      if (requestGeneration === undefined) throw new Error('An active local Archon pairing is required.')
+      if (!transport.invokeLocalCodex) throw new BackendTransportError('unsupported_operation')
+      const result = await transport.invokeLocalCodex(request)
+      if (transport.generation !== requestGeneration || activeLocalPairingGeneration() !== requestGeneration) {
+        throw new BackendTransportError('connection_changed')
+      }
+      return result
     },
   }
 }

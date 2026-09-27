@@ -24,7 +24,7 @@ export interface LocalCodexIpcController {
   registerWorkspaceRoot(rootPath: string): Promise<LocalCodexProjectDto>
   startTurn(input: { projectId: string; prompt: string; sessionId?: string }): Promise<LocalCodexTurnDto>
   cancelTurn(input: { taskId: string }): Promise<boolean>
-  answerApproval(input: { approvalId: string; allow: boolean }): boolean
+  answerApproval(input: { approvalId: string; allow: boolean }): boolean | Promise<boolean>
   subscribe(listener: (event: LocalCodexEvent) => void): () => void
 }
 
@@ -104,13 +104,13 @@ export function registerLocalCodex(options: RegisterLocalCodexOptions): () => vo
             result = await options.controller.cancelTurn(request.args[0] as { taskId: string })
             break
           case LOCAL_CODEX_CHANNELS.answerApproval:
-            result = options.controller.answerApproval(request.args[0] as { approvalId: string; allow: boolean })
+            result = await options.controller.answerApproval(request.args[0] as { approvalId: string; allow: boolean })
             break
         }
       } catch {
         assertTrusted(options.guard, event)
         throw new Error(request.channel === LOCAL_CODEX_CHANNELS.startTurn
-          ? 'Local Codex could not start. Check that Codex is installed and signed in, then try again.'
+          ? 'Local Codex could not confirm the turn start. Check the conversation list before starting another turn.'
           : 'Local Codex request failed.')
       }
       assertTrusted(options.guard, event)

@@ -55,6 +55,34 @@ function fetchStub(implementation: BackendFetch = vi.fn(async () => response({ o
 }
 
 describe('backend transport', () => {
+  it('maps the main-only Local Codex route to a fixed authenticated owner endpoint', async () => {
+    const result = {
+      taskId: 'codex-task:fixture', projectId: 'codex-project:fixture',
+      sessionId: 'codex:session-1', state: 'running',
+    }
+    const fetcher = vi.fn<BackendFetch>(async () => response(result))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invokeLocalCodex({
+      operation: 'turns.start', projectId: result.projectId, prompt: 'inspect',
+    })).resolves.toEqual(result)
+    const [url, init] = fetcher.mock.calls[0]
+    expect(url.pathname).toBe('/api/local/codex/turns')
+    expect(init?.method).toBe('POST')
+    expect(init?.headers).toMatchObject({ Authorization: `Bearer ${localConnection.token}` })
+    expect(init?.body).toBe(JSON.stringify({ projectId: result.projectId, prompt: 'inspect' }))
+  })
+
+  it('never retries a Local Codex start after an ambiguous network failure', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => { throw new Error('connection lost after request') })
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invokeLocalCodex({
+      operation: 'turns.start', projectId: 'codex-project:fixture', prompt: 'run once',
+    })).rejects.toMatchObject({ code: 'network_error' })
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
+
   it('exposes only the reviewed read-only operation set', () => {
     expect(READ_ONLY_OPERATIONS).toEqual([
       'readiness',
