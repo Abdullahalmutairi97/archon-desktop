@@ -216,6 +216,44 @@ class WorkspaceServiceManager:
                 raise WorkspaceServiceNotFound(name)
             await self._stop_locked(workspace_id, name, missing_ok=False)
 
+    async def preview_target(
+        self, workspace_id: str, name: str, *, expected_generation: int, port_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a registered service's declared port for a bounded preview."""
+        self._validate_name(name)
+        if (isinstance(expected_generation, bool) or not isinstance(expected_generation, int)
+                or expected_generation < 1):
+            raise ValueError("expected_generation must be a positive integer")
+        if port_name is not None and (not isinstance(port_name, str) or not _PORT_NAME.fullmatch(port_name)):
+            raise ValueError("port_name is invalid")
+        async with self._lock:
+            workspace = self._resolve_workspace(workspace_id)
+            if workspace["generation"] != expected_generation:
+                raise ValueError("Workspace generation changed; refresh before previewing")
+            record = self._load(workspace)
+            entry = next((item for item in record["services"] if item["name"] == name), None)
+            if entry is None:
+                raise WorkspaceServiceNotFound(name)
+            ports = entry["ports"]
+            if not ports:
+                raise WorkspaceServiceConflict("Service declares no port to preview")
+            if port_name is None:
+                if len(ports) != 1:
+                    raise WorkspaceServiceConflict("Service declares several ports; choose one")
+                chosen = ports[0]
+            else:
+                chosen = next((port for port in ports if port["name"] == port_name), None)
+                if chosen is None:
+                    raise WorkspaceServiceConflict("Unknown port name")
+            runtime = self._runtime.get((workspace_id, name))
+            state = runtime["state"] if runtime else "registered"
+            return {
+                "port": chosen["port"],
+                "portName": chosen["name"],
+                "generation": workspace["generation"],
+                "state": state,
+            }
+
     async def logs(self, workspace_id: str, name: str, *, lines: int = 200) -> dict[str, Any]:
         """Return a bounded tail of the captured stdout/stderr stream."""
         if isinstance(lines, bool) or not isinstance(lines, int) or not 1 <= lines <= 400:

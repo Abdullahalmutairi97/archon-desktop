@@ -16,9 +16,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .config import Settings
@@ -89,6 +89,12 @@ from .services.workspace_services import (
     WorkspaceServiceManager,
     WorkspaceServiceNotFound,
     WorkspaceServiceUnavailable,
+)
+from .services.workspace_gateway import (
+    WorkspaceGatewayError,
+    WorkspaceGatewayRequestRejected,
+    WorkspaceGatewayTicketUnavailable,
+    WorkspacePreviewGateway,
 )
 from .security import token_authorized, validate_server_security
 from .readiness import WorkerTracker, build_readiness_snapshot
@@ -296,6 +302,13 @@ class WorkspaceServiceConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     confirm: bool = Field(strict=True)
+
+
+class WorkspacePreviewOpenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    expected_generation: int = Field(alias="expectedGeneration", strict=True, ge=1)
+    port_name: str | None = Field(default=None, alias="portName", max_length=16)
 
 
 class WorkspaceFileWriteRequest(BaseModel):
@@ -542,6 +555,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     local_codex_worker: LocalCodexWorkerClient | None = None
     local_workspace_terminals: WorkspaceTerminalService | None = None
     local_workspace_services: WorkspaceServiceManager | None = None
+    local_workspace_preview: WorkspacePreviewGateway | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
         settings.runner_journal_path.lstat()
@@ -730,6 +744,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         nonlocal local_codex_event_journal, local_codex_worker
         nonlocal local_workspace_terminals
         nonlocal local_workspace_services
+        nonlocal local_workspace_preview
         runner_ownership.acquire()
         try:
             if pairing_broker is not None:
@@ -750,6 +765,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                     owner_id=f"local-uid:{os.geteuid()}",
                     state_root=data_root / "workspace-services",
                 )
+                local_workspace_preview = WorkspacePreviewGateway(local_workspace_services)
             if settings.local_codex_enabled:
                 local_codex_event_journal = LocalCodexEventJournal(
                     settings.runner_journal_path.parent / "local-codex-events.sqlite3"
@@ -778,6 +794,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             app.state.local_codex_event_journal = local_codex_event_journal
             app.state.local_workspace_terminals = local_workspace_terminals
             app.state.local_workspace_services = local_workspace_services
+            app.state.local_workspace_preview = local_workspace_preview
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -1276,6 +1293,71 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+    def workspace_preview_gateway() -> WorkspacePreviewGateway:
+        if local_workspace_preview is None:
+            raise HTTPException(status_code=503, detail="Workspace preview is unavailable")
+        return local_workspace_preview
+
+    @app.post(
+        "/api/local/workspaces/{workspace_id}/services/{name}/preview",
+        status_code=201,
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_workspace_service_preview_open(
+        workspace_id: str,
+        name: str,
+        payload: WorkspacePreviewOpenRequest,
+    ):
+        current_owner_workspace(workspace_id)
+        try:
+            preview = await workspace_preview_gateway().open(
+                workspace_id, name,
+                expected_generation=payload.expected_generation,
+                port_name=payload.port_name,
+            )
+        except WorkspaceServiceNotFound as exc:
+            raise HTTPException(status_code=404, detail="Workspace service is not registered") from exc
+        except WorkspaceServiceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkspaceGatewayError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail="Workspace identity or generation changed; refresh before previewing") from exc
+        return JSONResponse(status_code=201, content={"preview": preview}, headers={"Cache-Control": "no-store"})
+
+    @app.api_route(
+        "/api/local/preview/{ticket}",
+        methods=["GET", "HEAD", "POST", "PUT", "DELETE"],
+    )
+    @app.api_route(
+        "/api/local/preview/{ticket}/{path:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "DELETE"],
+    )
+    async def local_workspace_preview_proxy(ticket: str, request: Request, path: str = ""):
+        body = await request.body()
+        headers = {key.lower(): value for key, value in request.headers.items()}
+        try:
+            result = await workspace_preview_gateway().proxy(
+                ticket,
+                method=request.method,
+                path=path,
+                query=request.url.query,
+                headers=headers,
+                body=body,
+            )
+        except WorkspaceGatewayTicketUnavailable as exc:
+            raise HTTPException(status_code=404, detail="Preview ticket is invalid or expired") from exc
+        except WorkspaceGatewayRequestRejected as exc:
+            status_code = 413 if "too large" in str(exc) else 405
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        response = Response(content=result["body"], status_code=result["status"])
+        for key, value in result["headers"].items():
+            response.headers[key] = value
+        if result["truncated"]:
+            response.headers["x-archon-preview-truncated"] = "1"
+        response.headers["cache-control"] = "no-store"
+        return response
 
     async def local_codex_call(method: str, params: dict[str, Any]):
         if local_codex_worker is None:

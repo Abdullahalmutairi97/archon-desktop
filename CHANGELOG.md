@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — private preview gateway foundation
+
+- Add short-lived, read-only preview tickets bound to one workspace, registered service and declared port. The ticket-gated loopback proxy forwards only an allowlisted request-header set and never an Archon credential; it does not follow redirects off the preview origin, drops cross-origin redirects, strips response cookies and hop-by-hop headers, and bounds request (512 KiB) and response (2 MiB) bodies.
+- Only a port declared by a registered service can be reached; a chat URL or a log-parsed port is not a valid target. The sandboxed preview view and HTTP/HMR/WebSocket streaming follow in the next increment.
+
 ## Unreleased — frozen v0.3.0 input verified
 
 - The official frozen v0.3.0 archive is present on the target workstation with the expected SHA-256. The frozen kit ran 88 tests with 0 skipped against it, and the guarded candidate builder produced a validated payload. Visual/native parity and release qualification remain open.
