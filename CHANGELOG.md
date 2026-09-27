@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Phase 2C.2 read-only server collections
+
+- Add a separate Server data route for authenticated read-only project, session and task rows through the finite desktop bridge.
+- Label returned rows and capped list counts, clear rows on connection changes, and distinguish access rejection from other read failures.
+- Keep synthetic workspace views separate and advance the reconstruction source channel to `0.3.0-reconstruction.4`.
+
 ## Unreleased — Phase 2C.1 connection and readiness view
 
 - Add a Connection view that explicitly saves a main-process memory-only token and shows authenticated backend readiness, bounded read-only project/session/task lists and event cursor. Returned session/task lengths are not totals.

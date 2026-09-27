@@ -1,6 +1,6 @@
 # Renderer provenance
 
-This is a new, authored reconstruction preview. It is not a recovered source release, and visual or behavioral parity with the installed v0.3.0 baseline remains unverified. Chat, workspace project/session/task views, files, terminal, editor, and browser rows come from `shell/fixtures.ts`. The separate Connection view can read authenticated backend readiness and returned row counts through the finite desktop bridge in Electron; browser preview has no bridge. No workspace view connects to a provider, terminal, or native execution API.
+This is a new, authored reconstruction preview. It is not a recovered source release, and visual or behavioral parity with the installed v0.3.0 baseline remains unverified. Chat, normal workspace project/session/task views, files, terminal, editor, and browser rows come from `shell/fixtures.ts`. The separate Connection and Server data routes can read authenticated backend readiness and bounded rows through the finite desktop bridge in Electron; browser preview has no bridge. No workspace view connects to a provider, terminal, or native execution API.
 
 | Renderer area | Reference origin | Transformation in this renderer |
 | --- | --- | --- |
@@ -11,6 +11,7 @@ This is a new, authored reconstruction preview. It is not a recovered source rel
 | Queue, file and editor panels | P2 shared models in `../shared/domain/queue.ts`, `identity.ts`, and `ide.ts` | Queue counts are derived from typed synthetic tasks. File/editor previews key their document surface by the complete scoped `DocumentKey`; sample text is hard-coded and read-only. No `IdeWorkspace` file port is instantiated. |
 | Browser and terminal panels | No live endpoint or native source is used | Authored disconnected mock panels; there is no navigation, request, command execution, or bridge call. |
 | Connection view | New P2C.1 `connection/ConnectionPanel.tsx` against the P2B.1 typed bridge | Explicit server/token form and authenticated readiness plus bounded read-only project/session/task lists and cursor. Token input clears on submit; the bridge retains it only in main-process memory. Browser preview controls stay disabled. Returned list lengths are not total row counts. |
+| Server data route | New P2C.2 `server/ServerCollections.tsx` against the P2B.1 typed bridge | Separate read-only SERVER rows for projects, sessions and tasks. Lists may be capped, so counts are labeled shown. Connection generation fences late rows; browser preview remains offline. |
 | Brand and icons | New authored SVG paths in `shell/BrandMark.tsx` and `shell/Icon.tsx` | Small source-authored line graphics; no recovered bitmap, logo asset, or external font is included. |
 | Renderer entry and policy | New P2A `index.html` and `main.tsx` | React entry and strict local-only CSP. Loopback HTTP/WebSocket sources are permitted for Vite preview/HMR only; no remote origins are allowed. |
 

@@ -9,7 +9,7 @@ This backlog turns the 21 September 2026 repository audit and revised implementa
 | Phase | Outcome | Dependencies | Status |
 | --- | --- | --- | --- |
 | [P1 — Trustworthy execution baseline](p1-execution-baseline.md) | Honest admission, modes, locks, recovery, credentials and readiness | Existing backend and isolated fixtures | Backend source complete through #18; native qualification remains |
-| [P2 — Maintainable source build](p2-source-build.md) | Build the actual desktop from authored source and preserve UI behavior | P1D source contract; native qualification before delivery | P2A in #19 and P2B.1 in #20 published; P2C.1 Connection view in review |
+| [P2 — Maintainable source build](p2-source-build.md) | Build the actual desktop from authored source and preserve UI behavior | P1D source contract; native qualification before delivery | P2A #19, P2B.1 #20, P2C.1 #21 and P2B.2 #22 published; P2C.2 Server data route in review |
 | [P3 — Workspaces and persistent runner](p3-workspaces-runner.md) | Protected solo bootstrap; one workspace identity; work outlives UI | P1; P2 before desktop delivery | Not started |
 | [P4 — Full solo workstation](p4-solo-workstation.md) | Full IDE, persistent terminal and managed private previews | P2 and P3 | Not started |
 | [P5 — Runtime and resource parity](p5-runtimes-resources.md) | Honest Hermes/Pi/Prime/Codex adapters; scoped MCP and skills | P3; P4 for integrated UX | Not started |
@@ -30,7 +30,7 @@ The main dependency chain is P1 → P3 → P4 → P5 → P6 → P7. P2 runs in p
 - [P7 — Release, operations and recovery qualification](https://github.com/Abdullahalmutairi97/archon-desktop/issues/12)
 - [P8 — Optional enhancements](https://github.com/Abdullahalmutairi97/archon-desktop/issues/13)
 
-The roadmap is published in [PR #5](https://github.com/Abdullahalmutairi97/archon-desktop/pull/5). P1 backend source increments are published in [PRs #14–#18](https://github.com/Abdullahalmutairi97/archon-desktop/pull/18); native qualification remains open. P2A's authored desktop source foundation is published in [PR #19](https://github.com/Abdullahalmutairi97/archon-desktop/pull/19), and P2B.1's trusted read-only bridge is published in [PR #20](https://github.com/Abdullahalmutairi97/archon-desktop/pull/20). P2C.1 exposes an explicit Connection view for review. Other P2B/C increments and P2D native/package gates remain open; each PR records its own fresh checks and limitations.
+The roadmap is published in [PR #5](https://github.com/Abdullahalmutairi97/archon-desktop/pull/5). P1 backend source increments are published in [PRs #14–#18](https://github.com/Abdullahalmutairi97/archon-desktop/pull/18); native qualification remains open. P2A's authored desktop source foundation is published in [PR #19](https://github.com/Abdullahalmutairi97/archon-desktop/pull/19), and P2B.1's trusted read-only bridge is published in [PR #20](https://github.com/Abdullahalmutairi97/archon-desktop/pull/20). P2C.1 exposes an explicit Connection view in PR #21, and the isolated P2B.2 storage core is in PR #22. P2C.2 Server data is in review. Other P2B/C increments and P2D native/package gates remain open; each PR records its own fresh checks and limitations.
 
 ## How work is published
 

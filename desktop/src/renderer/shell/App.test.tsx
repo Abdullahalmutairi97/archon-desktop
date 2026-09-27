@@ -71,4 +71,13 @@ describe('reconstruction preview shell', () => {
     expect(screen.getByText(/requires the desktop bridge/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled()
   })
+
+  it('keeps server collections offline in the browser preview', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Server data' }))
+    expect(screen.getByRole('region', { name: 'Server collections' })).toBeInTheDocument()
+    expect(screen.getByText('READ-ONLY SERVER COLLECTIONS')).toBeInTheDocument()
+    expect(screen.getByText(/browser preview is offline/i)).toBeInTheDocument()
+    expect(screen.queryByText('SERVER PROJECTS')).not.toBeInTheDocument()
+  })
 })

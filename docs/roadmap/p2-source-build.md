@@ -1,14 +1,14 @@
 # P2 — Maintainable source build and UI parity
 
-**Status:** Source inventory and bounded reconstruction planning are complete. P2A is published in [PR #19](https://github.com/Abdullahalmutairi97/archon-desktop/pull/19); the P2B.1 trusted connection boundary is published in [PR #20](https://github.com/Abdullahalmutairi97/archon-desktop/pull/20). P2C.1 exposes a read-only Connection view for review. Profile storage, local Codex, remaining renderer behavior, native qualification and package builds are still open. Historical authored source and design assets are recovered as references; matching v0.3.0 input remains unavailable. See the [26 September inventory](p2-source-inventory.md) and [bounded reconstruction plan](p2-reconstruction-plan.md). **Dependencies:** P2B uses the reviewed P1D source contract; P2 gates new P3/P4 desktop delivery.
+**Status:** Source inventory and bounded reconstruction planning are complete. P2A is published in [PR #19](https://github.com/Abdullahalmutairi97/archon-desktop/pull/19); the P2B.1 trusted connection boundary is published in [PR #20](https://github.com/Abdullahalmutairi97/archon-desktop/pull/20). P2B.2 storage core is published in [PR #22](https://github.com/Abdullahalmutairi97/archon-desktop/pull/22), and P2C.1 Connection view is published in [PR #21](https://github.com/Abdullahalmutairi97/archon-desktop/pull/21). P2C.2 adds a separate read-only Server data route for review. Main-process storage wiring, local Codex, remaining renderer behavior, native qualification and package builds are still open. Historical authored source and design assets are recovered as references; matching v0.3.0 input remains unavailable. See the [26 September inventory](p2-source-inventory.md) and [bounded reconstruction plan](p2-reconstruction-plan.md). **Dependencies:** P2B uses the reviewed P1D source contract; P2 gates new P3/P4 desktop delivery.
 
 ## Source increments
 
 | Increment | Deliverable | Status |
 | --- | --- | --- |
 | P2A | Authored build, isolated reference shell, pure IDE/queue/snapshot/identity models | Published in PR #19 at the source/fixture boundary |
-| P2B | Validated main/preload boundary, protected transport/storage and local Codex adapter | B.1 published in PR #20; storage and local Codex increments in review |
-| P2C | Full renderer behavior and fixture parity | C.1 read-only Connection view in review; full behavior open |
+| P2B | Validated main/preload boundary, protected transport/storage and local Codex adapter | B.1 in PR #20 and B.2 storage core in PR #22; live wiring and local Codex open |
+| P2C | Full renderer behavior and fixture parity | C.1 Connection view in PR #21; C.2 Server data route in review; full behavior open |
 | P2D | Isolated native checks, fresh package builds and release qualification evidence | Planned; baseline parity remains an explicit gate |
 
 ## Scope and preservation contract

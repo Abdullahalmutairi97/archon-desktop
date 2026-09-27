@@ -2,7 +2,7 @@
 
 This is the maintained Electron/React source route introduced in P2A. It builds without the private v0.3.0 ASAR. The official baseline and guarded `current/` recovery kit are unchanged.
 
-The development version is **0.3.0-reconstruction.3**, with a separate app identity and user-data namespace. Build metadata labels baseline parity **unverified**. There is no automatic updater or installation over the official app.
+The development version is **0.3.0-reconstruction.4**, with a separate app identity and user-data namespace. Build metadata labels baseline parity **unverified**. There is no automatic updater or installation over the official app.
 
 ## Build and preview
 
@@ -23,6 +23,8 @@ P2A provides a synthetic reference shell and pure typed models for runtime ident
 P2B.1 adds a finite preload bridge and main-process backend transport for five read-only operations. The token stays in main-process memory, and the current renderer still shows synthetic data. The bridge is exercised with fake services; no real backend or local Codex agent is started. See [the P2B.1 scope](../docs/releases/phase-2b1-trusted-connection.md).
 
 P2C.1 adds an explicit Connection view. In Electron it can show authenticated backend readiness, returned read-only project/session/task rows and event cursor; session/task lists are capped and do not represent totals. The rest of the workspace remains synthetic. In the browser preview the bridge is absent, so connection controls are disabled. The token input clears after submission and is not written to renderer preferences or local storage. The native security and keyring gates are still unverified. See [the P2C.1 scope](../docs/releases/phase-2c1-connection-view.md).
+
+P2C.2 adds a separate Server data route for bounded read-only project, session and task rows. It resolves the current connection on entry and clears old results on disconnect or generation change. Browser preview stays offline, and the regular workspace views still use fixtures. See [the P2C.2 scope](../docs/releases/phase-2c2-server-collections.md).
 
 ## Source boundaries
 
