@@ -103,7 +103,7 @@ describe('reconstruction preview shell', () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Server work' }))
     expect(screen.getByRole('region', { name: 'Server collections' })).toBeInTheDocument()
-    expect(screen.getByText('SERVER DATA · PRIME TASKS')).toBeInTheDocument()
+    expect(screen.getByText('SERVER CHECKOUTS · LINE CONSOLE')).toBeInTheDocument()
     expect(within(screen.getByRole('region', { name: 'Server collections' })).getByText(/browser preview is offline/i)).toBeInTheDocument()
     expect(screen.queryByText('SERVER PROJECTS')).not.toBeInTheDocument()
     expect(screen.queryByRole('complementary', { name: 'Workspace tools' })).not.toBeInTheDocument()
