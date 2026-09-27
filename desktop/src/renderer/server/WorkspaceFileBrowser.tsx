@@ -22,6 +22,11 @@ export interface WorkspaceFileRead {
   binary?: boolean
 }
 
+export interface WorkspaceFileWrite {
+  path: string
+  content: string
+}
+
 export interface WorkspaceFileSearchHit {
   path: string
   line: number
@@ -34,16 +39,19 @@ export interface WorkspaceFileSearchResult {
   truncated: boolean
 }
 
-/** Read-only, bounded transport contract for a server-owned workspace. */
+/** Bounded transport contract for a server-owned workspace. */
 export interface WorkspaceReadOnlyFilePort {
   list(workspaceId: string, path: string, limit: number): Promise<WorkspaceFileListing>
   read(workspaceId: string, path: string, maxBytes: number): Promise<WorkspaceFileRead>
   search(workspaceId: string, query: string): Promise<WorkspaceFileSearchResult>
+  write?(workspaceId: string, path: string, expectedContent: string, content: string): Promise<WorkspaceFileWrite>
 }
 
 const LIST_LIMIT = 100
 const READ_LIMIT_BYTES = 64 * 1024
 const DISPLAY_LIMIT_CHARS = 24_000
+const EDIT_LIMIT_CHARS = 12_000
+const EDIT_LIMIT_BYTES = 16 * 1024
 const MAX_PATH_LENGTH = 1_000
 const MAX_PATH_DEPTH = 64
 
@@ -62,6 +70,8 @@ type SearchState =
   | { workspaceId: string; query: string; status: 'loading' }
   | { workspaceId: string; query: string; status: 'ready'; result: WorkspaceFileSearchResult }
   | { workspaceId: string; query: string; status: 'error' }
+
+type SaveFeedback = { workspaceId: string; path: string; kind: 'conflict' | 'uncertain' }
 
 function canonicalPath(path: string): string | null {
   if (path === '') return ''
@@ -121,6 +131,23 @@ function isBinaryReadError(error: unknown): boolean {
   const record = error as Record<string, unknown>
   if (record.status === 415 || record.statusCode === 415 || record.httpStatus === 415) return true
   return typeof record.code === 'string' && /binary|unsupported_media_type/u.test(record.code)
+}
+
+function isWriteConflict(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  for (const key of ['status', 'statusCode', 'httpStatus', 'code']) {
+    try {
+      const field = Object.getOwnPropertyDescriptor(error, key)
+      if (field && 'value' in field && (field.value === 409 || field.value === 'write_conflict')) return true
+    } catch {
+      // Treat malformed transport errors as uncertain saves.
+    }
+  }
+  return false
+}
+
+function canEditContent(content: string, truncated: boolean): boolean {
+  return !truncated && !content.includes('\0') && content.length <= EDIT_LIMIT_CHARS && new TextEncoder().encode(content).byteLength <= EDIT_LIMIT_BYTES
 }
 
 function byteLabel(bytes: number): string {
@@ -184,15 +211,23 @@ export function WorkspaceFileBrowser({
     ? selectedSearchHitState : null
   const [listingState, setListingState] = useState<ListingState | null>(null)
   const [readState, setReadState] = useState<ReadState | null>(null)
+  const [editingState, setEditingState] = useState<{ workspaceId: string; path: string; draft: string } | null>(null)
+  const [saveFeedbackState, setSaveFeedbackState] = useState<SaveFeedback | null>(null)
+  const [savePending, setSavePending] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchState, setSearchState] = useState<SearchState | null>(null)
   const [listingReload, setListingReload] = useState(0)
   const listingGeneration = useRef(0)
   const readGeneration = useRef(0)
   const searchGeneration = useRef(0)
+  const saveLock = useRef(false)
   const currentListing = listingState?.workspaceId === workspaceId && listingState.path === path ? listingState : null
   const currentRead = readState?.workspaceId === workspaceId && readState.path === selectedPath ? readState : null
+  const currentEditing = editingState?.workspaceId === workspaceId && editingState.path === selectedPath ? editingState : null
+  const currentSaveFeedback = saveFeedbackState?.workspaceId === workspaceId && saveFeedbackState.path === selectedPath ? saveFeedbackState : null
   const currentSearch = searchState?.workspaceId === workspaceId ? searchState : null
+  const currentEditByteLength = currentEditing ? new TextEncoder().encode(currentEditing.draft).byteLength : 0
+  const currentEditIsDirty = currentEditing !== null && currentRead?.status === 'ready' && currentEditing.draft !== currentRead.content
 
   useEffect(() => {
     const generation = ++listingGeneration.current
@@ -219,6 +254,8 @@ export function WorkspaceFileBrowser({
   useEffect(() => {
     readGeneration.current += 1
     setReadState(null)
+    setEditingState(null)
+    setSaveFeedbackState(null)
   }, [workspaceId, path])
 
   useEffect(() => () => {
@@ -234,6 +271,8 @@ export function WorkspaceFileBrowser({
     setSelectedState(null)
     setSelectedSearchHitState(null)
     setReadState(null)
+    setEditingState(null)
+    setSaveFeedbackState(null)
   }
 
   function retryListing(): void {
@@ -247,6 +286,8 @@ export function WorkspaceFileBrowser({
     setSelectedState({ workspaceId, path: safePath })
     setSelectedSearchHitState(searchLine === undefined ? null : { workspaceId, path: safePath, line: searchLine })
     setReadState({ workspaceId, path: safePath, status: 'loading' })
+    setEditingState(null)
+    setSaveFeedbackState(null)
     void readOnlyFilePort.read(workspaceId, safePath, READ_LIMIT_BYTES).then((result) => {
       if (readGeneration.current !== generation) return
       if (result?.binary === true) {
@@ -268,6 +309,53 @@ export function WorkspaceFileBrowser({
       if (readGeneration.current !== generation) return
       setReadState({ workspaceId, path: safePath, status: isBinaryReadError(error) ? 'binary' : 'error' })
     })
+  }
+
+  function beginEdit(): void {
+    if (savePending || !selectedPath || currentRead?.status !== 'ready' || !readOnlyFilePort.write || !canEditContent(currentRead.content, currentRead.truncated)) return
+    setSaveFeedbackState(null)
+    setEditingState({ workspaceId, path: selectedPath, draft: currentRead.content })
+  }
+
+  async function saveEdit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    if (saveLock.current || !selectedPath || currentRead?.status !== 'ready' || !currentEditing ||
+        !readOnlyFilePort.write || currentSaveFeedback || currentEditing.draft === currentRead.content ||
+        !canEditContent(currentEditing.draft, false)) return
+
+    saveLock.current = true
+    setSavePending(true)
+    setSaveFeedbackState(null)
+    const expectedContent = currentRead.content
+    const draft = currentEditing.draft
+    const filePath = selectedPath
+    const generation = readGeneration.current
+    try {
+      const result = await readOnlyFilePort.write(workspaceId, filePath, expectedContent, draft)
+      if (!result || result.path !== filePath || typeof result.content !== 'string' ||
+          result.content !== draft || !canEditContent(result.content, false)) {
+        throw new Error('Invalid file write response')
+      }
+      if (readGeneration.current === generation && selectedState?.workspaceId === workspaceId && selectedState.path === filePath) {
+        setReadState({ workspaceId, path: filePath, status: 'ready', content: result.content, truncated: false })
+        setEditingState(null)
+        setSaveFeedbackState(null)
+      }
+      retryListing()
+    } catch (error) {
+      if (readGeneration.current === generation && selectedState?.workspaceId === workspaceId && selectedState.path === filePath) {
+        setSaveFeedbackState({ workspaceId, path: filePath, kind: isWriteConflict(error) ? 'conflict' : 'uncertain' })
+      }
+    } finally {
+      saveLock.current = false
+      setSavePending(false)
+    }
+  }
+
+  function cancelEdit(): void {
+    if (savePending) return
+    setEditingState(null)
+    setSaveFeedbackState(null)
   }
 
   function searchWorkspace(event: FormEvent<HTMLFormElement>): void {
@@ -297,9 +385,9 @@ export function WorkspaceFileBrowser({
     <header className="workspace-file-browser-header">
       <div>
         <h3>WORKSPACE FILES</h3>
-        <p>Read-only preview · server-owned checkout</p>
+        <p>{readOnlyFilePort.write ? 'Edit small text files · server-owned checkout' : 'Read-only preview · server-owned checkout'}</p>
       </div>
-      <span className="workspace-file-readonly-badge">READ ONLY</span>
+      <span className="workspace-file-readonly-badge">{readOnlyFilePort.write ? 'SMALL FILE EDIT' : 'READ ONLY'}</span>
     </header>
 
     <nav className="workspace-file-breadcrumbs" aria-label="Workspace file path">
@@ -376,7 +464,7 @@ export function WorkspaceFileBrowser({
         </>}
       </section>
 
-      <section className="workspace-file-preview-pane" aria-label="Read-only file preview">
+      <section className="workspace-file-preview-pane" aria-label={readOnlyFilePort.write ? 'Workspace file preview and editor' : 'Read-only file preview'}>
         <div className="workspace-file-preview-heading">
           <strong>{selectedPath?.split('/').at(-1) ?? 'Preview'}</strong>
           <span>TEXT ONLY</span>
@@ -391,7 +479,39 @@ export function WorkspaceFileBrowser({
         </div>}
         {currentRead?.status === 'ready' && <>
           {currentRead.truncated && <p className="workspace-file-truncated" role="status">Showing a partial preview. The server or display limit stopped the text here.</p>}
-          <pre className="workspace-file-preview-content">{currentRead.content || '(empty file)'}</pre>
+          {currentEditing
+            ? <form className="workspace-file-editor" onSubmit={(event) => { void saveEdit(event) }}>
+              <label htmlFor="workspace-file-editor-content">Edit {selectedPath}</label>
+              <textarea
+                id="workspace-file-editor-content"
+                aria-label={`Edit ${selectedPath}`}
+                value={currentEditing.draft}
+                maxLength={EDIT_LIMIT_CHARS}
+                spellCheck={false}
+                disabled={savePending}
+                onChange={(event) => setEditingState({ ...currentEditing, draft: event.currentTarget.value })}
+              />
+              <div className="workspace-file-editor-actions">
+                <span>{currentEditIsDirty ? 'Unsaved changes' : 'No changes'} · {currentEditing.draft.length} / {EDIT_LIMIT_CHARS} characters · {byteLabel(currentEditByteLength)} / 16 KiB</span>
+                <button type="button" onClick={cancelEdit} disabled={savePending}>Cancel</button>
+                <button type="submit" disabled={savePending || currentSaveFeedback !== null || !currentEditIsDirty || !canEditContent(currentEditing.draft, false)}>
+                  {savePending ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              {currentEditByteLength > EDIT_LIMIT_BYTES && <p className="workspace-file-message" role="alert">This edit exceeds the 16 KiB save limit.</p>}
+              {currentSaveFeedback && <div className="workspace-file-message workspace-file-save-error" role="alert">
+                <span>{currentSaveFeedback.kind === 'conflict'
+                  ? 'This file changed on the server. Reload it before saving your changes.'
+                  : 'Could not confirm whether this file was saved. Reload it before editing or retrying.'}</span>
+                <button type="button" onClick={() => { if (selectedPath) openFile(selectedPath) }}>Reload file</button>
+              </div>}
+            </form>
+            : <>
+              {readOnlyFilePort.write && canEditContent(currentRead.content, currentRead.truncated) && <div className="workspace-file-edit-toolbar">
+                <button type="button" onClick={beginEdit} disabled={savePending}>Edit</button>
+              </div>}
+              <pre className="workspace-file-preview-content">{currentRead.content || '(empty file)'}</pre>
+            </>}
         </>}
       </section>
     </div>

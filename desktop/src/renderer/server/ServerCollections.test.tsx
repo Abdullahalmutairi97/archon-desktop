@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConnectionDescription, DesktopBridge } from '../../shared/bridge/types'
 import { ServerCollections } from './ServerCollections'
@@ -205,7 +205,7 @@ describe('ServerCollections', () => {
     expect(startTurn).not.toHaveBeenCalled()
   })
 
-  it('opens a read-only file preview through the fixed workspace bridge operations', async () => {
+  it('opens and saves a small workspace file through the fixed bridge operations', async () => {
     const workspaceId = `workspace-${'a'.repeat(32)}`
     const workspace = {
       workspace_id: workspaceId, root: `/srv/archon/workspaces/${workspaceId}`,
@@ -216,6 +216,7 @@ describe('ServerCollections', () => {
         path: '', entries: [{ name: 'README.md', path: 'README.md', kind: 'file', size: 5 }], truncated: false,
       })
       if (operation === 'workspaces.files.read') return Promise.resolve({ path: 'README.md', content: 'hello', truncated: false })
+      if (operation === 'workspaces.files.write') return Promise.resolve({ path: 'README.md', content: 'updated' })
       return collections([], [], [], [workspace])(operation)
     })
     render(<ServerCollections bridge={bridge} connection={connection()} />)
@@ -229,6 +230,17 @@ describe('ServerCollections', () => {
       .toEqual({ workspaceId, path: '', limit: 100 })
     expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.files.read')[0][1])
       .toEqual({ workspaceId, path: 'README.md', maxBytes: 65_536 })
+    fireEvent.click(within(browser).getByRole('button', { name: 'Edit' }))
+    fireEvent.change(within(browser).getByRole('textbox', { name: 'Edit README.md' }), { target: { value: 'updated' } })
+    await act(async () => {
+      fireEvent.click(within(browser).getByRole('button', { name: 'Save' }))
+      await Promise.resolve()
+    })
+    expect(await within(browser).findByText('updated')).toBeInTheDocument()
+    expect(apiInvoke.mock.calls.find(([operation]) => operation === 'workspaces.files.write')?.[1]).toEqual({
+      workspaceId, path: 'README.md', expectedContent: 'hello', content: 'updated',
+    })
+    await waitFor(() => expect(apiInvoke.mock.calls.filter(([operation]) => operation === 'workspaces.files.list')).toHaveLength(2))
   })
 
   it('creates one checkout from a registered project and refreshes the list after success', async () => {

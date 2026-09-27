@@ -65,11 +65,22 @@ def test_workspace_file_endpoints_require_auth_and_registered_owner(tmp_path):
         unknown = client.get("/api/workspaces/not-registered/files", headers=HEADERS)
         foreign = client.get("/api/workspaces/workspace-foreign/files", headers=HEADERS)
         valid = client.get("/api/workspaces/workspace-files-test/files/read?path=readme.txt", headers=HEADERS)
+        anonymous_write = client.post(
+            "/api/workspaces/workspace-files-test/files/write",
+            json={"path": "readme.txt", "expected_content": "registered checkout", "content": "changed"},
+        )
+        foreign_write = client.post(
+            "/api/workspaces/workspace-foreign/files/write",
+            headers=HEADERS,
+            json={"path": "readme.txt", "expected_content": "", "content": "changed"},
+        )
 
     assert anonymous.status_code == 401
     assert unknown.status_code == 404
     assert foreign.status_code == 404
     assert valid.status_code == 200
+    assert anonymous_write.status_code == 401
+    assert foreign_write.status_code == 404
     assert valid.json() == {
         "path": "readme.txt",
         "content": "registered checkout",
@@ -213,6 +224,58 @@ def test_workspace_file_api_never_follows_tree_or_root_symlinks(tmp_path):
     assert linked_file.status_code == 404
     assert replaced_root.status_code == 404
     assert "must not be returned" not in replaced_root.text
+
+
+def test_workspace_file_write_replaces_existing_text_and_rejects_stale_or_unsafe_targets(tmp_path):
+    settings = _settings(tmp_path)
+    root = _register_workspace(settings)
+    visible = root / "visible.txt"
+    visible.write_text("before\n", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("external", encoding="utf-8")
+    (root / "linked.txt").symlink_to(outside)
+    (root / ".env").write_text("TOKEN=private", encoding="utf-8")
+    (root / "linked-hard.txt").write_text("shared", encoding="utf-8")
+    os.link(root / "linked-hard.txt", root / "another-link.txt")
+
+    with TestClient(create_app(settings)) as client:
+        saved = client.post(
+            "/api/workspaces/workspace-files-test/files/write",
+            headers=HEADERS,
+            json={"path": "visible.txt", "expected_content": "before\n", "content": "after\n"},
+        )
+        stale = client.post(
+            "/api/workspaces/workspace-files-test/files/write",
+            headers=HEADERS,
+            json={"path": "visible.txt", "expected_content": "before\n", "content": "stale\n"},
+        )
+        symlink = client.post(
+            "/api/workspaces/workspace-files-test/files/write",
+            headers=HEADERS,
+            json={"path": "linked.txt", "expected_content": "external", "content": "changed"},
+        )
+        protected = client.post(
+            "/api/workspaces/workspace-files-test/files/write",
+            headers=HEADERS,
+            json={"path": ".env", "expected_content": "TOKEN=private", "content": "changed"},
+        )
+        hardlink = client.post(
+            "/api/workspaces/workspace-files-test/files/write",
+            headers=HEADERS,
+            json={"path": "linked-hard.txt", "expected_content": "shared", "content": "changed"},
+        )
+
+    assert saved.status_code == 200
+    assert saved.json() == {"path": "visible.txt", "content": "after\n"}
+    assert visible.read_text(encoding="utf-8") == "after\n"
+    assert stale.status_code == 409
+    assert visible.read_text(encoding="utf-8") == "after\n"
+    assert symlink.status_code == 404
+    assert outside.read_text(encoding="utf-8") == "external"
+    assert protected.status_code == 404
+    assert hardlink.status_code == 404
+    assert (root / "linked-hard.txt").read_text(encoding="utf-8") == "shared"
+    assert not list(root.glob(".archon-workspace-write-*.tmp"))
 
 
 def test_workspace_search_is_owner_scoped_text_only_and_hides_protected_entries(tmp_path):

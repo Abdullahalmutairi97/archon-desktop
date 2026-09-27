@@ -37,7 +37,7 @@ npm run desktop:start
 npm run desktop:preview
 ```
 
-The normal workspace views use synthetic data. P2B.1 adds a validated preload bridge and main-process read-only backend transport; P2C.1 exposes explicit readiness and returned list lengths in a Connection view, and P2C.2 adds a separate read-only Server data route. Capped session/task lists are not totals. No live provider, filesystem or terminal is connected to the workspace UI. The source build has a separate reconstruction identity and leaves the official app/profile unchanged. See [the source-build guide](desktop/README.md) for outputs, provenance and remaining native/parity gates.
+The authored reconstruction still uses synthetic reference views for its main IDE, Terminal, and Browser tabs. Its Local Codex view can use the installed local Codex app-server, with an opt-in same-user backend owner for work that continues after the Electron window quits. The live Server data view shows authenticated backend state and supports revision-pinned checkouts, bounded file browsing/search, small existing-text-file saves, and handoff of a checkout to Local Codex. It does not yet provide a full IDE, workspace terminal, or service preview. The source build has a separate reconstruction identity and leaves the official app/profile unchanged. See [the source-build guide](desktop/README.md) for setup and remaining native/parity gates.
 
 ## Frozen kit setup and checks
 

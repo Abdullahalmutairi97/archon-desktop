@@ -144,6 +144,13 @@ export interface WorkspaceFileSearchPayload {
   query: string
 }
 
+export interface WorkspaceFileWritePayload {
+  workspaceId: string
+  path: string
+  expectedContent: string
+  content: string
+}
+
 export interface WorkspaceFileEntry {
   name: string
   path: string
@@ -173,6 +180,11 @@ export interface WorkspaceFileSearchResult {
   files_scanned: number
   bytes_scanned: number
   truncated: boolean
+}
+
+export interface WorkspaceFileWriteResult {
+  path: string
+  content: string
 }
 
 export interface OperationMap {
@@ -223,6 +235,10 @@ export interface OperationMap {
   'workspaces.files.search': {
     payload: WorkspaceFileSearchPayload
     result: WorkspaceFileSearchResult
+  }
+  'workspaces.files.write': {
+    payload: WorkspaceFileWritePayload
+    result: WorkspaceFileWriteResult
   }
   'runtimes.list': {
     payload: EmptyPayload

@@ -103,7 +103,7 @@ describe('backend transport', () => {
   })
 
   it('keeps checkout creation in its own narrow operation set', () => {
-    expect(WORKSPACE_OPERATIONS).toEqual(['workspaces.provision'])
+    expect(WORKSPACE_OPERATIONS).toEqual(['workspaces.provision', 'workspaces.files.write'])
   })
 
   it('maps the bounded Prime task flow to fixed routes and main-owned POST policy', async () => {
@@ -465,6 +465,65 @@ describe('backend transport', () => {
     })
     await expect(unsafeResponse.invoke('workspaces.files.search', { workspaceId, query: 'agent' }))
       .rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('maps compare-and-write to a fixed owner-scoped POST and validates the returned file', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const payload = { workspaceId, path: 'src/main.ts', expectedContent: 'before', content: 'after' }
+    const fetcher = vi.fn<BackendFetch>(async () => response({ path: payload.path, content: payload.content }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('workspaces.files.write', payload)).resolves.toEqual({
+      path: payload.path, content: payload.content,
+    })
+    const [url, init] = fetcher.mock.calls[0]
+    expect(String(url)).toBe(`http://127.0.0.1:8000/api/workspaces/${workspaceId}/files/write`)
+    expect(init?.method).toBe('POST')
+    expect(init?.redirect).toBe('manual')
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+    expect(new Headers(init?.headers).get('content-type')).toBe('application/json')
+    expect(JSON.parse(String(init?.body))).toEqual({
+      path: payload.path, expected_content: payload.expectedContent, content: payload.content,
+    })
+
+    const mismatchedResult = new BackendTransport({
+      ...localConnection,
+      fetch: vi.fn(async () => response({ path: payload.path, content: 'different' })),
+    })
+    await expect(mismatchedResult.invoke('workspaces.files.write', payload))
+      .rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('returns a distinct stale-file conflict and never retries an ambiguous write', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const payload = { workspaceId, path: 'src/main.ts', expectedContent: 'before', content: 'after' }
+    const conflictFetch = vi.fn<BackendFetch>(async () => response({ detail: 'private server detail' }, 409))
+    const conflictTransport = new BackendTransport({ ...localConnection, fetch: conflictFetch })
+    const conflict = await conflictTransport.invoke('workspaces.files.write', payload).catch((error: unknown) => error)
+    expect(conflict).toMatchObject({ code: 'write_conflict' })
+    expect(String(conflict)).not.toContain('private server detail')
+    expect(conflictFetch).toHaveBeenCalledOnce()
+
+    const failedFetch = vi.fn<BackendFetch>(async () => { throw new Error('connection lost after request') })
+    const failedTransport = new BackendTransport({ ...localConnection, fetch: failedFetch })
+    await expect(failedTransport.invoke('workspaces.files.write', payload))
+      .rejects.toMatchObject({ code: 'network_error' })
+    expect(failedFetch).toHaveBeenCalledOnce()
+  })
+
+  it('rejects oversized or unsafe file writes before network access', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => response({ path: 'src/main.ts', content: 'after' }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    for (const payload of [
+      { workspaceId, path: '../outside', expectedContent: 'before', content: 'after' },
+      { workspaceId, path: 'src/main.ts', expectedContent: 'before', content: 'bad\0text' },
+      { workspaceId, path: 'src/main.ts', expectedContent: '', content: '😀'.repeat(4_097) },
+    ]) {
+      await expect(transport.invoke('workspaces.files.write', payload as never))
+        .rejects.toMatchObject({ code: 'invalid_payload' })
+    }
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('blocks workspace path escape and mismatched file responses', async () => {

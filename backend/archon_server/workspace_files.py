@@ -13,6 +13,7 @@ from __future__ import annotations
 import errno
 import os
 import re
+import secrets
 import stat
 from dataclasses import dataclass
 from typing import Any
@@ -32,6 +33,9 @@ MAX_SEARCH_ENTRIES = 5_000
 MAX_SEARCH_BYTES = 1024 * 1024
 MAX_SEARCH_FILE_BYTES = 64 * 1024
 MAX_SEARCH_HITS = 100
+MAX_WRITE_CHARACTERS = 12_000
+MAX_WRITE_BYTES = 16 * 1024
+_WRITE_TEMP_PREFIX = ".archon-workspace-write-"
 
 _SECRET_EXACT_NAMES = frozenset({
     ".netrc", ".npmrc", ".pypirc", ".ssh", ".aws", ".gnupg", ".docker", ".kube",
@@ -67,6 +71,8 @@ def _same_version(first: os.stat_result, second: os.stat_result) -> bool:
 
 def _protected_name(name: str) -> bool:
     lowered = name.casefold()
+    if lowered.startswith(_WRITE_TEMP_PREFIX):
+        return True
     if lowered == ".git":
         return True
     if lowered.startswith(".env"):
@@ -225,7 +231,148 @@ class _WorkspaceTraversal:
 
 
 class WorkspaceFileService:
-    """List directories and read bounded UTF-8 text under registered roots."""
+    """List, read, search, and safely replace bounded text under registered roots."""
+
+    @staticmethod
+    def _encode_write_text(value: str) -> bytes:
+        if not isinstance(value, str) or len(value) > MAX_WRITE_CHARACTERS or "\x00" in value:
+            raise WorkspaceFilesError(400, "Workspace text is invalid or too large")
+        try:
+            encoded = value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            raise WorkspaceFilesError(400, "Workspace text is invalid or too large") from None
+        if len(encoded) > MAX_WRITE_BYTES:
+            raise WorkspaceFilesError(400, "Workspace text is invalid or too large")
+        return encoded
+
+    def write_text(self, root: str, path: str, expected_content: str, content: str) -> dict[str, str]:
+        """Replace an existing visible UTF-8 file after checking its current version."""
+        expected_bytes = self._encode_write_text(expected_content)
+        content_bytes = self._encode_write_text(content)
+        parts = _parse_relative_path(path, allow_root=False)
+        _validate_total_depth(root, parts)
+
+        with _WorkspaceTraversal(root) as traversal:
+            parent_fd = traversal.open_relative_directory(parts[:-1])
+            name = parts[-1]
+            descriptor: int | None = None
+            temporary_descriptor: int | None = None
+            temporary_name: str | None = None
+            try:
+                try:
+                    before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                        raise WorkspaceFilesError(404, "Workspace file not found")
+                    if before.st_size > MAX_WRITE_BYTES:
+                        raise WorkspaceFilesError(413, "Workspace file is too large to edit")
+                    descriptor = os.open(name, traversal.regular_flags, dir_fd=parent_fd)
+                except WorkspaceFilesError:
+                    raise
+                except OSError as exc:
+                    raise _WorkspaceTraversal._path_error(exc) from None
+
+                opened = os.fstat(descriptor)
+                if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                        or _identity(before) != _identity(opened)):
+                    raise WorkspaceFilesError(404, "Workspace file not found")
+                if opened.st_size > MAX_WRITE_BYTES:
+                    raise WorkspaceFilesError(413, "Workspace file is too large to edit")
+
+                data = bytearray()
+                while len(data) <= MAX_WRITE_BYTES:
+                    chunk = os.read(descriptor, min(4096, MAX_WRITE_BYTES + 1 - len(data)))
+                    if not chunk:
+                        break
+                    data.extend(chunk)
+                after_read = os.fstat(descriptor)
+                if not _same_version(opened, after_read):
+                    raise WorkspaceFilesError(409, "Workspace file changed during the request")
+                if len(data) > MAX_WRITE_BYTES:
+                    raise WorkspaceFilesError(413, "Workspace file is too large to edit")
+                if b"\x00" in data:
+                    raise WorkspaceFilesError(415, "Binary files are not supported")
+                try:
+                    existing_content = bytes(data).decode("utf-8", errors="strict")
+                except UnicodeDecodeError:
+                    raise WorkspaceFilesError(415, "File is not valid UTF-8 text") from None
+
+                try:
+                    linked = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                except OSError as exc:
+                    raise WorkspaceFilesError(409, "Workspace file changed during the request") from exc
+                if not _same_version(opened, linked):
+                    raise WorkspaceFilesError(409, "Workspace file changed during the request")
+                if bytes(data) != expected_bytes or existing_content != expected_content:
+                    raise WorkspaceFilesError(409, "Workspace file changed; reload before saving")
+
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+                for _attempt in range(8):
+                    candidate = f"{_WRITE_TEMP_PREFIX}{secrets.token_hex(12)}.tmp"
+                    try:
+                        temporary_descriptor = os.open(candidate, flags, 0o600, dir_fd=parent_fd)
+                        temporary_name = candidate
+                        break
+                    except FileExistsError:
+                        continue
+                    except OSError as exc:
+                        raise _WorkspaceTraversal._path_error(exc) from None
+                if temporary_descriptor is None or temporary_name is None:
+                    raise WorkspaceFilesError(503, "Workspace file service is temporarily unavailable")
+
+                remaining = memoryview(content_bytes)
+                while remaining:
+                    try:
+                        written = os.write(temporary_descriptor, remaining)
+                    except OSError as exc:
+                        raise _WorkspaceTraversal._path_error(exc) from None
+                    if written <= 0:
+                        raise WorkspaceFilesError(503, "Workspace file service is temporarily unavailable")
+                    remaining = remaining[written:]
+                try:
+                    os.fchmod(temporary_descriptor, stat.S_IMODE(opened.st_mode) & 0o777)
+                    os.fsync(temporary_descriptor)
+                    os.close(temporary_descriptor)
+                    temporary_descriptor = None
+                except OSError as exc:
+                    raise _WorkspaceTraversal._path_error(exc) from None
+
+                # API saves share a process lock. This final descriptor-relative
+                # check catches outside replacements observed before atomic rename;
+                # native writers can still race between this check and replace.
+                try:
+                    current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                    current_opened = os.fstat(descriptor)
+                except OSError as exc:
+                    raise WorkspaceFilesError(409, "Workspace file changed during the request") from exc
+                if (current.st_nlink != 1 or not stat.S_ISREG(current.st_mode)
+                        or not _same_version(opened, current_opened)
+                        or not _same_version(opened, current)):
+                    raise WorkspaceFilesError(409, "Workspace file changed during the request")
+                traversal.verify_links()
+                try:
+                    os.replace(temporary_name, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                    temporary_name = None
+                    os.fsync(parent_fd)
+                except OSError as exc:
+                    raise _WorkspaceTraversal._path_error(exc) from None
+                traversal.verify_links()
+                return {"path": path, "content": content}
+            finally:
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+                if temporary_descriptor is not None:
+                    try:
+                        os.close(temporary_descriptor)
+                    except OSError:
+                        pass
+                if temporary_name is not None:
+                    try:
+                        os.unlink(temporary_name, dir_fd=parent_fd)
+                    except OSError:
+                        pass
 
     def search_text(self, root: str, query: str) -> dict[str, Any]:
         """Search a bounded prefix of visible text files under one workspace."""

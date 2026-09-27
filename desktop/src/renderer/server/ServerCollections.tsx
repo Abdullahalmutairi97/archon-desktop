@@ -158,6 +158,9 @@ function WorkspaceSection({
     list: (workspaceId, path, limit) => bridge.api.invoke('workspaces.files.list', { workspaceId, path, limit }),
     read: (workspaceId, path, maxBytes) => bridge.api.invoke('workspaces.files.read', { workspaceId, path, maxBytes }),
     search: (workspaceId, query) => bridge.api.invoke('workspaces.files.search', { workspaceId, query }),
+    write: (workspaceId, path, expectedContent, content) => bridge.api.invoke('workspaces.files.write', {
+      workspaceId, path, expectedContent, content,
+    }),
   }), [bridge])
   const selectedProjectId = choices.some((choice) => choice.id === projectId) ? projectId : choices[0]?.id ?? ''
   const revisionIsCommit = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(revision)

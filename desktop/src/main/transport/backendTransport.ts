@@ -37,6 +37,7 @@ export const TASK_OPERATIONS: readonly OperationName[] = Object.freeze([
 
 export const WORKSPACE_OPERATIONS: readonly OperationName[] = Object.freeze([
   'workspaces.provision',
+  'workspaces.files.write',
 ])
 
 const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Object.freeze({
@@ -57,6 +58,7 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'workspaces.files.list': 'GET',
   'workspaces.files.read': 'GET',
   'workspaces.files.search': 'GET',
+  'workspaces.files.write': 'POST',
 })
 
 export const MAX_BACKEND_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -88,6 +90,7 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'workspaces.files.list': '/api/workspaces',
   'workspaces.files.read': '/api/workspaces',
   'workspaces.files.search': '/api/workspaces',
+  'workspaces.files.write': '/api/workspaces',
 })
 
 const SAFE_MESSAGES = Object.freeze({
@@ -103,6 +106,7 @@ const SAFE_MESSAGES = Object.freeze({
   invalid_response: 'The server returned an invalid response.',
   connection_changed: 'The server connection changed while this request was running.',
   binary_file: 'Binary files cannot be previewed as text.',
+  write_conflict: 'The file changed on the server. Reload it before saving again.',
 } as const)
 
 export type BackendTransportErrorCode = keyof typeof SAFE_MESSAGES
@@ -327,6 +331,9 @@ function operationUrl(
   } else if (operation === 'workspaces.files.search') {
     const workspacePayload = payload as OperationMap['workspaces.files.search']['payload']
     path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files/search`
+  } else if (operation === 'workspaces.files.write') {
+    const workspacePayload = payload as OperationMap['workspaces.files.write']['payload']
+    path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files/write`
   }
   const url = new URL(path, origin)
   if (operation === 'sessions.list') {
@@ -397,6 +404,13 @@ function isSupportedResult(
           typeof result.bytes_scanned !== 'number') return false
       return result.hits.length <= 100 && result.files_scanned <= 200 && result.bytes_scanned <= 1024 * 1024
     }
+    if (operation === 'workspaces.files.write') {
+      const requested = payload as OperationMap['workspaces.files.write']['payload']
+      return value.path === requested.path && value.content === requested.content &&
+        typeof value.content === 'string' &&
+        value.content.length <= 12_000 && !value.content.includes('\0') &&
+        new TextEncoder().encode(value.content).byteLength <= 16 * 1024
+    }
     return true
   } catch {
     return false
@@ -413,6 +427,9 @@ function checkResponseStatus(operation: OperationName, response: Response): void
   if (operation === 'workspaces.files.read' && response.status === 415) {
     throw new BackendTransportError('binary_file')
   }
+  if (operation === 'workspaces.files.write' && response.status === 409) {
+    throw new BackendTransportError('write_conflict')
+  }
   if (operation === 'readiness' && (response.status === 200 || response.status === 503)) return
   if (operation === 'tasks.submit') {
     if (response.status === 202) return
@@ -422,6 +439,10 @@ function checkResponseStatus(operation: OperationName, response: Response): void
     if (response.status === 404 || response.status === 405) {
       throw new BackendTransportError('unsupported_operation')
     }
+    if (response.status === 200) return
+    throw new BackendTransportError('http_error')
+  }
+  if (operation === 'workspaces.files.write') {
     if (response.status === 200) return
     throw new BackendTransportError('http_error')
   }
@@ -443,6 +464,10 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
   if (operation === 'workspaces.provision') {
     const provisionPayload = payload as OperationMap['workspaces.provision']['payload']
     return JSON.stringify({ project_id: provisionPayload.projectId, revision: provisionPayload.revision })
+  }
+  if (operation === 'workspaces.files.write') {
+    const writePayload = payload as OperationMap['workspaces.files.write']['payload']
+    return JSON.stringify({ path: writePayload.path, expected_content: writePayload.expectedContent, content: writePayload.content })
   }
   return undefined
 }
@@ -654,7 +679,7 @@ export class BackendTransport {
         Accept: 'application/json',
         Authorization: `Bearer ${connection.token}`,
       }
-      if (operation === 'tasks.submit' || operation === 'workspaces.provision') {
+      if (operation === 'tasks.submit' || operation === 'workspaces.provision' || operation === 'workspaces.files.write') {
         headers['Content-Type'] = 'application/json'
       }
       if (operation === 'tasks.submit') {

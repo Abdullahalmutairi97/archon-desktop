@@ -30,6 +30,7 @@ import type {
   WorkspaceFileListPayload,
   WorkspaceFileReadPayload,
   WorkspaceFileSearchPayload,
+  WorkspaceFileWritePayload,
 } from './types'
 
 export const BRIDGE_CHANNELS = Object.freeze({
@@ -74,6 +75,7 @@ const operationNames = Object.freeze([
   'workspaces.files.list',
   'workspaces.files.read',
   'workspaces.files.search',
+  'workspaces.files.write',
 ] as const satisfies readonly OperationName[])
 
 const channels = new Set<string>(Object.values(BRIDGE_CHANNELS))
@@ -115,6 +117,8 @@ const MAX_WORKSPACE_SEARCH_QUERY_BYTES = 128
 const MAX_WORKSPACE_SEARCH_FILES = 200
 const MAX_WORKSPACE_SEARCH_BYTES = 1024 * 1024
 const MAX_WORKSPACE_SEARCH_HITS = 100
+const MAX_WORKSPACE_FILE_WRITE_LENGTH = 12_000
+const MAX_WORKSPACE_FILE_WRITE_BYTES = 16 * 1024
 const SENSITIVE_RESPONSE_FIELDS = new Set([
   'token',
   'apitoken',
@@ -305,6 +309,23 @@ function parseWorkspaceFileSearchPayload(value: unknown): WorkspaceFileSearchPay
   return Object.freeze({ workspaceId: record.workspaceId, query: record.query })
 }
 
+function workspaceFileWriteText(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_WORKSPACE_FILE_WRITE_LENGTH &&
+    !value.includes('\0') && new TextEncoder().encode(value).byteLength <= MAX_WORKSPACE_FILE_WRITE_BYTES
+}
+
+function parseWorkspaceFileWritePayload(value: unknown): WorkspaceFileWritePayload {
+  const record = exactObject(value, ['workspaceId', 'path', 'expectedContent', 'content'])
+  if (!workspaceFileId(record.workspaceId) || !workspaceFilePath(record.path, false) ||
+      !workspaceFileWriteText(record.expectedContent) || !workspaceFileWriteText(record.content)) return fail()
+  return Object.freeze({
+    workspaceId: record.workspaceId,
+    path: record.path,
+    expectedContent: record.expectedContent,
+    content: record.content,
+  })
+}
+
 function validTaskId(value: unknown): value is string {
   return typeof value === 'string'
     && value.length <= MAX_TASK_ID_LENGTH
@@ -363,6 +384,8 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseWorkspaceFileReadPayload(payload)])
     case 'workspaces.files.search':
       return Object.freeze([operation, parseWorkspaceFileSearchPayload(payload)])
+    case 'workspaces.files.write':
+      return Object.freeze([operation, parseWorkspaceFileWritePayload(payload)])
     case 'sessions.list':
       return Object.freeze([operation, parseSessionsPayload(payload)])
     case 'tasks.list':
@@ -670,6 +693,11 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
         bytes_scanned: record.bytes_scanned as number,
         truncated: record.truncated,
       })
+    }
+    case 'workspaces.files.write': {
+      const record = exactObject(value, ['path', 'content'])
+      if (!workspaceFilePath(record.path, false) || !workspaceFileWriteText(record.content)) return fail()
+      return Object.freeze({ path: record.path, content: record.content })
     }
     case 'events.cursor': {
       const record = exactObject(value, ['cursor'])

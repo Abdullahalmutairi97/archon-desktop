@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import stat
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from collections.abc import Mapping
@@ -50,6 +51,7 @@ from .workspace_files import (
     MAX_READ_BYTES as MAX_WORKSPACE_READ_BYTES,
     MAX_RELATIVE_PATH_LENGTH,
     MAX_SEARCH_QUERY_BYTES,
+    MAX_WRITE_CHARACTERS as MAX_WORKSPACE_WRITE_CHARACTERS,
     WorkspaceFileService,
     WorkspaceFilesError,
 )
@@ -68,6 +70,7 @@ from .readiness import WorkerTracker, build_readiness_snapshot
 
 
 logger = logging.getLogger(__name__)
+workspace_file_write_lock = threading.Lock()
 WEBSOCKET_AUTH_TIMEOUT_SECONDS = 5.0
 LOCAL_TASK_RUNNER_ID = "archon-desktop-local"
 LOCAL_CODEX_PROJECT_ID = re.compile(r"^codex-project:[A-Za-z0-9._:-]{1,242}$")
@@ -178,6 +181,14 @@ class WorkspaceProvisionRequest(BaseModel):
 
     project_id: str = Field(min_length=1, max_length=200)
     revision: str = Field(pattern=r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
+
+
+class WorkspaceFileWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=MAX_RELATIVE_PATH_LENGTH)
+    expected_content: str = Field(max_length=MAX_WORKSPACE_WRITE_CHARACTERS)
+    content: str = Field(max_length=MAX_WORKSPACE_WRITE_CHARACTERS)
 
 
 class SessionProjectUpdate(BaseModel):
@@ -1148,6 +1159,41 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             return workspace_file_service.search_text(workspace["root"], q)
         except WorkspaceFilesError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    @app.post("/api/workspaces/{workspace_id}/files/write", dependencies=protected)
+    def write_workspace_file(workspace_id: str, payload: WorkspaceFileWriteRequest):
+        """Save existing text using observed-content conflict detection.
+
+        Expected text detects changes observed before atomic replacement; it
+        does not fence native or other out-of-process writers.
+        """
+        workspace = current_owner_workspace(workspace_id)
+        root = workspace["root"]
+        try:
+            with workspace_file_write_lock:
+                # Task cwd is canonicalized at admission, so this directory
+                # boundary query refuses edits while known task work is active.
+                with store.db.connect() as conn:
+                    active_task = conn.execute(
+                        """SELECT 1 FROM tasks
+                           WHERE status IN ('queued','running','cancelling')
+                             AND (cwd=? OR substr(cwd,1,length(?)+1)=? || '/')
+                           LIMIT 1""",
+                        (root, root, root),
+                    ).fetchone()
+                if active_task is not None:
+                    raise HTTPException(status_code=409, detail="Workspace has an active task")
+                return workspace_file_service.write_text(
+                    root, payload.path, payload.expected_content, payload.content,
+                )
+        except WorkspaceFilesError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except HTTPException:
+            raise
+        except Exception:
+            # Avoid returning filesystem/database internals or request text.
+            logger.exception("Workspace file save failed")
+            raise HTTPException(status_code=503, detail="Workspace file service is temporarily unavailable") from None
 
     @app.post("/api/workspaces", dependencies=protected)
     def provision_workspace(payload: WorkspaceProvisionRequest):

@@ -55,6 +55,13 @@ describe('finite desktop bridge validation', () => {
     expect(parseOperationRequest('workspaces.files.search', {
       workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent',
     })).toEqual(['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent' }])
+    expect(parseOperationRequest('workspaces.files.write', {
+      workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts',
+      expectedContent: 'before', content: 'after',
+    })).toEqual(['workspaces.files.write', {
+      workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts',
+      expectedContent: 'before', content: 'after',
+    }])
     for (const [operation, payload] of [
       ['not-an-operation', {}],
       ['readiness', { url: 'http://localhost' }],
@@ -72,6 +79,10 @@ describe('finite desktop bridge validation', () => {
       ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: '  ' }],
       ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'q'.repeat(129) }],
       ['workspaces.files.search', { workspaceId: `workspace-${'a'.repeat(32)}`, query: 'agent\nsecret' }],
+      ['workspaces.files.write', { workspaceId: `workspace-${'a'.repeat(32)}`, path: '../outside', expectedContent: '', content: '' }],
+      ['workspaces.files.write', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts', expectedContent: 'x'.repeat(12_001), content: '' }],
+      ['workspaces.files.write', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts', expectedContent: '', content: '😀'.repeat(4_097) }],
+      ['workspaces.files.write', { workspaceId: `workspace-${'a'.repeat(32)}`, path: 'src/main.ts', expectedContent: '', content: 'bad\0text' }],
     ] as const) {
       expect(() => parseOperationRequest(operation, payload)).toThrow(TypeError)
     }
@@ -96,6 +107,19 @@ describe('finite desktop bridge validation', () => {
     expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, {
       ...result, bytes_scanned: 1024 * 1024 + 1,
     }, 'workspaces.files.search')).toThrow(TypeError)
+  })
+
+  it('validates the narrow workspace file write response', () => {
+    const result = { path: 'src/main.ts', content: 'updated' }
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, result, 'workspaces.files.write')).toEqual(result)
+    for (const unsafe of [
+      { path: '../outside', content: 'updated' },
+      { path: 'src/main.ts', content: 'bad\0text' },
+      { path: 'src/main.ts', content: '😀'.repeat(4_097) },
+      { path: 'src/main.ts', content: 'x'.repeat(12_001) },
+    ]) {
+      expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, unsafe, 'workspaces.files.write')).toThrow(TypeError)
+    }
   })
 
   it('rejects accessors and non-plain objects instead of invoking caller code', () => {

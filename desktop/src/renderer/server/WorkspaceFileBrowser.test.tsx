@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WorkspaceFileBrowser, type WorkspaceFileListing, type WorkspaceFileRead, type WorkspaceReadOnlyFilePort } from './WorkspaceFileBrowser'
 
@@ -16,12 +16,14 @@ function port({
   list = vi.fn(async (_workspaceId: string, path: string) => ({ path, entries: [], truncated: false })),
   read = vi.fn(async (_workspaceId: string, path: string) => ({ path, content: '', truncated: false })),
   search = vi.fn(async () => ({ hits: [], files_scanned: 0, bytes_scanned: 0, truncated: false })),
+  write,
 }: {
   list?: WorkspaceReadOnlyFilePort['list']
   read?: WorkspaceReadOnlyFilePort['read']
   search?: WorkspaceReadOnlyFilePort['search']
+  write?: WorkspaceReadOnlyFilePort['write']
 } = {}) {
-  return { list, read, search }
+  return { list, read, search, ...(write ? { write } : {}) }
 }
 
 function deferred<T>() {
@@ -162,5 +164,134 @@ describe('WorkspaceFileBrowser', () => {
     expect(await screen.findByText(/function makeAgent\(\)/u)).toBeInTheDocument()
     expect(screen.getByText(/Search match on line 3/u)).toBeInTheDocument()
     expect(filePort.read).toHaveBeenCalledWith('workspace-search', 'src/agent.ts', 64 * 1024)
+  })
+
+  it('saves a small complete text file with its original content and updates the preview', async () => {
+    const pendingWrite = deferred<{ path: string; content: string }>()
+    const filePort = port({
+      list: vi.fn(async (_workspaceId, path) => ({ path, entries: [file('README.md', 5)], truncated: false })),
+      read: vi.fn(async (_workspaceId, path) => ({ path, content: 'hello', truncated: false })),
+      write: vi.fn(() => pendingWrite.promise),
+    })
+    render(<WorkspaceFileBrowser workspaceId="workspace-edit" readOnlyFilePort={filePort} />)
+
+    const section = screen.getByRole('region', { name: 'Workspace directory entries' })
+    fireEvent.click(await within(section).findByRole('button', { name: 'README.md 5 B' }))
+    expect(await screen.findByText('hello')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+
+    const editor = screen.getByRole('textbox', { name: 'Edit README.md' })
+    expect(screen.getByText(/no changes/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    fireEvent.change(editor, { target: { value: 'updated text' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(filePort.write).toHaveBeenCalledTimes(1)
+    expect(filePort.write).toHaveBeenCalledWith('workspace-edit', 'README.md', 'hello', 'updated text')
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled()
+    await act(async () => {
+      pendingWrite.resolve({ path: 'README.md', content: 'updated text' })
+      await pendingWrite.promise
+    })
+    expect(await screen.findByText('updated text')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Edit README.md' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument()
+  })
+
+  it('shows a stale-content conflict and reloads the latest file without retrying the write', async () => {
+    const read = vi.fn(async (_workspaceId: string, path: string) => ({
+      path,
+      content: read.mock.calls.length === 1 ? 'original' : 'changed on server',
+      truncated: false,
+    }))
+    const write = vi.fn(async () => { throw Object.assign(new Error('stale content'), { code: 'write_conflict' }) })
+    const filePort = port({
+      list: vi.fn(async (_workspaceId, path) => ({ path, entries: [file('notes.txt')], truncated: false })),
+      read,
+      write,
+    })
+    render(<WorkspaceFileBrowser workspaceId="workspace-conflict" readOnlyFilePort={filePort} />)
+
+    const section = screen.getByRole('region', { name: 'Workspace directory entries' })
+    fireEvent.click(await within(section).findByRole('button', { name: 'notes.txt 12 B' }))
+    expect(await screen.findByText('original')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Edit notes.txt' }), { target: { value: 'my changes' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('This file changed on the server. Reload it before saving your changes.')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(write).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Reload file' }))
+    expect(await screen.findByText('changed on server')).toBeInTheDocument()
+    expect(write).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats an uncertain save as requiring a reload and never retries automatically', async () => {
+    const read = vi.fn(async (_workspaceId: string, path: string) => ({
+      path,
+      content: read.mock.calls.length === 1 ? 'original' : 'saved remotely',
+      truncated: false,
+    }))
+    const write = vi.fn(async () => { throw Object.assign(new Error('connection lost'), { code: 'network_error' }) })
+    const filePort = port({
+      list: vi.fn(async (_workspaceId, path) => ({ path, entries: [file('notes.txt')], truncated: false })),
+      read,
+      write,
+    })
+    render(<WorkspaceFileBrowser workspaceId="workspace-uncertain" readOnlyFilePort={filePort} />)
+
+    const section = screen.getByRole('region', { name: 'Workspace directory entries' })
+    fireEvent.click(await within(section).findByRole('button', { name: 'notes.txt 12 B' }))
+    expect(await screen.findByText('original')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Edit notes.txt' }), { target: { value: 'maybe saved' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not confirm whether this file was saved. Reload it before editing or retrying.')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(write).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Reload file' }))
+    expect(await screen.findByText('saved remotely')).toBeInTheDocument()
+    expect(write).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not let a late save response replace the newer file selection', async () => {
+    const pendingWrite = deferred<{ path: string; content: string }>()
+    const filePort = port({
+      list: vi.fn(async (_workspaceId, path) => ({ path, entries: [file('first.txt'), file('second.txt')], truncated: false })),
+      read: vi.fn(async (_workspaceId, path) => ({ path, content: `contents of ${path}`, truncated: false })),
+      write: vi.fn(() => pendingWrite.promise),
+    })
+    render(<WorkspaceFileBrowser workspaceId="workspace-race" readOnlyFilePort={filePort} />)
+
+    const section = screen.getByRole('region', { name: 'Workspace directory entries' })
+    fireEvent.click(await within(section).findByRole('button', { name: 'first.txt 12 B' }))
+    expect(await screen.findByText('contents of first.txt')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    fireEvent.click(within(section).getByRole('button', { name: 'second.txt 12 B' }))
+    expect(await screen.findByText('contents of second.txt')).toBeInTheDocument()
+    pendingWrite.resolve({ path: 'first.txt', content: 'contents of first.txt' })
+
+    expect(await screen.findByText('contents of second.txt')).toBeInTheDocument()
+    expect(screen.queryByText('contents of first.txt')).not.toBeInTheDocument()
+  })
+
+  it('keeps a bounded preview read-only when the server reports a truncated file', async () => {
+    const filePort = port({
+      list: vi.fn(async (_workspaceId, path) => ({ path, entries: [file('large.txt')], truncated: false })),
+      read: vi.fn(async (_workspaceId, path) => ({ path, content: 'first part', truncated: true })),
+      write: vi.fn(async (_workspaceId, path, _expectedContent, content) => ({ path, content })),
+    })
+    render(<WorkspaceFileBrowser workspaceId="workspace-large" readOnlyFilePort={filePort} />)
+
+    const section = screen.getByRole('region', { name: 'Workspace directory entries' })
+    fireEvent.click(await within(section).findByRole('button', { name: 'large.txt 12 B' }))
+
+    expect(await screen.findByText('first part')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument()
+    expect(filePort.write).not.toHaveBeenCalled()
   })
 })
