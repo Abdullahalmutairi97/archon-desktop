@@ -483,7 +483,7 @@ describe('backend transport', () => {
     await expect(transport.invoke('workspaces.list', {})).resolves.toEqual({ workspaces: [workspace] })
     expect(fetcher).toHaveBeenCalledTimes(1)
     const [url, init] = fetcher.mock.calls[0]
-    expect(String(url)).toBe('http://127.0.0.1:8000/api/workspaces')
+    expect(String(url)).toBe('http://127.0.0.1:8000/api/workspaces?include=checkout')
     expect(init?.method).toBe('GET')
     expect(init?.body).toBeUndefined()
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
@@ -500,13 +500,43 @@ describe('backend transport', () => {
 
     await expect(transport.invoke('workspaces.get', { workspaceId })).resolves.toEqual({ workspace })
     const [url, init] = fetcher.mock.calls[0]
-    expect(String(url)).toBe(`http://127.0.0.1:8000/api/workspaces/${workspaceId}`)
+    expect(String(url)).toBe(`http://127.0.0.1:8000/api/workspaces/${workspaceId}?include=checkout`)
     expect(init?.method).toBe('GET')
     expect(init?.body).toBeUndefined()
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
     await expect(transport.invoke('workspaces.get', { workspaceId: `${workspaceId}/files` } as never))
       .rejects.toMatchObject({ code: 'invalid_payload' })
     expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts the recorded owner and checkout state, and refuses a malformed one', async () => {
+    const base = {
+      workspace_id: 'workspace-123', root: '/srv/archon/workspaces/workspace-123',
+      project_id: 'project-1', base_revision: 'a'.repeat(40), head_revision: 'a'.repeat(40), generation: 1,
+    }
+    const detached = { ...base, owner_id: 'local-uid:1000', checkout: { state: 'detached', branch: null, commit: 'a'.repeat(40), at_head_revision: true } }
+    const branch = { ...base, owner_id: 'local-uid:1000', checkout: { state: 'branch', branch: 'feature/review', commit: null, at_head_revision: null } }
+    const unknown = { ...base, owner_id: 'local-uid:1000', checkout: { state: 'unknown', branch: null, commit: null, at_head_revision: null } }
+    for (const workspace of [base, detached, branch, unknown]) {
+      const transport = new BackendTransport({ ...localConnection, fetch: vi.fn<BackendFetch>(async () => response({ workspaces: [workspace] })) })
+      await expect(transport.invoke('workspaces.list', {})).resolves.toEqual({ workspaces: [workspace] })
+    }
+    const malformed = [
+      { ...base, owner_id: 'local-uid:1000' },
+      { ...base, checkout: detached.checkout },
+      { ...detached, checkout: { ...detached.checkout, at_head_revision: null } },
+      { ...detached, checkout: { ...detached.checkout, commit: 'a'.repeat(12) } },
+      { ...branch, checkout: { ...branch.checkout, branch: '../escape' } },
+      { ...branch, checkout: { ...branch.checkout, branch: '-option' } },
+      { ...branch, checkout: { ...branch.checkout, commit: 'a'.repeat(40) } },
+      { ...unknown, checkout: { ...unknown.checkout, state: 'attached' } },
+      { ...unknown, checkout: { ...unknown.checkout, extra: true } },
+      { ...unknown, owner_id: ' spaced ' },
+    ]
+    for (const workspace of malformed) {
+      const transport = new BackendTransport({ ...localConnection, fetch: vi.fn<BackendFetch>(async () => response({ workspaces: [workspace] })) })
+      await expect(transport.invoke('workspaces.list', {})).rejects.toMatchObject({ code: 'invalid_response' })
+    }
   })
 
   it('rejects a workspace response for an identity other than the requested id', async () => {

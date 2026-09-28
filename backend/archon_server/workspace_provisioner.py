@@ -26,6 +26,51 @@ _OBJECT_ID = re.compile(r"[0-9a-fA-F]+\Z")
 _CONFIG_KEY = re.compile(r"[a-z][a-z0-9.-]*(?:\.[a-z0-9-]+)*\Z")
 _MAX_CONFIG_BYTES = 64 * 1024
 
+_MAX_HEAD_BYTES = 512
+_BRANCH_REF_PREFIX = "ref: refs/heads/"
+_COMMIT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_BRANCH_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")
+
+
+def read_checkout_head(root: Path) -> dict[str, Any]:
+    """Report what a checkout's HEAD points at, without running Git.
+
+    A provisioned checkout starts detached at its pinned commit, but whoever
+    works in it can move HEAD or switch to a branch. Reading `.git/HEAD`
+    directly means no hook, configuration or filter from that writable
+    checkout runs. Anything unexpected - a linked or symlinked Git directory,
+    an oversized or non-regular HEAD, an unusual ref - is `unknown`, never a
+    guess.
+    """
+    unknown: dict[str, Any] = {"state": "unknown", "branch": None, "commit": None}
+    git_directory = Path(root) / ".git"
+    try:
+        if not stat.S_ISDIR(os.lstat(git_directory).st_mode):
+            return unknown
+        descriptor = os.open(git_directory / "HEAD", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > _MAX_HEAD_BYTES:
+                return unknown
+            data = os.read(descriptor, _MAX_HEAD_BYTES + 1)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return unknown
+    try:
+        text = data.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return unknown
+    if text.startswith(_BRANCH_REF_PREFIX):
+        name = text[len(_BRANCH_REF_PREFIX):]
+        if _BRANCH_NAME.match(name) and ".." not in name and "//" not in name and not name.endswith(("/", ".lock")):
+            return {"state": "branch", "branch": name, "commit": None}
+        return unknown
+    if _COMMIT_ID.match(text):
+        return {"state": "detached", "branch": None, "commit": text}
+    return unknown
+
+
 _SAFE_CORE_CONFIG = frozenset({
     "core.repositoryformatversion",
     "core.filemode",

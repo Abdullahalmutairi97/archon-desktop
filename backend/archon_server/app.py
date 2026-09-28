@@ -50,7 +50,7 @@ from .services.telegram import TelegramBotClient, TelegramBridge
 from .services.kanban import KanbanService
 from .services.voice import VoiceService
 from .services.workspace import ProjectService, SessionService, PrimeSessionService
-from .workspace_provisioner import WorkspaceCheckoutProvisioner
+from .workspace_provisioner import WorkspaceCheckoutProvisioner, read_checkout_head
 from .workspace_files import (
     DEFAULT_LIST_LIMIT,
     DEFAULT_READ_BYTES as DEFAULT_WORKSPACE_READ_BYTES,
@@ -899,8 +899,8 @@ def create_app(
             return None
         return generation
 
-    def workspace_identity(workspace: Mapping[str, Any]) -> dict[str, Any]:
-        return {
+    def workspace_identity(workspace: Mapping[str, Any], *, include_checkout: bool = False) -> dict[str, Any]:
+        identity = {
             "workspace_id": workspace["workspace_id"],
             "root": workspace["root"],
             "project_id": workspace["project_id"],
@@ -908,6 +908,19 @@ def create_app(
             "head_revision": workspace["head_revision"],
             "generation": workspace["generation"],
         }
+        if include_checkout:
+            # Opt-in, so a client that validates the original record exactly keeps
+            # working. The owner is the recorded one, and the checkout state is read
+            # from the checkout now: HEAD can move after provisioning.
+            head = read_checkout_head(Path(workspace["root"]))
+            identity["owner_id"] = workspace["owner_id"]
+            identity["checkout"] = {
+                **head,
+                "at_head_revision": (
+                    head["commit"] == workspace["head_revision"] if head["state"] == "detached" else None
+                ),
+            }
+        return identity
 
     def workspace_checkout_service() -> WorkspaceCheckoutProvisioner:
         nonlocal workspace_checkout_provisioner
@@ -3573,9 +3586,14 @@ def create_app(
         return {"ok": True, "files_preserved": True}
 
     @app.get("/api/workspaces", dependencies=protected)
-    def list_workspaces(limit: int = Query(100, ge=1, le=500)):
+    def list_workspaces(
+        limit: int = Query(100, ge=1, le=500),
+        include: Literal["checkout"] | None = Query(None),
+    ):
         workspaces = store.db.list_workspaces(owner_id=workspace_owner_id(), limit=limit)
-        return {"workspaces": [workspace_identity(workspace) for workspace in workspaces]}
+        return {"workspaces": [
+            workspace_identity(workspace, include_checkout=include == "checkout") for workspace in workspaces
+        ]}
 
     def current_owner_workspace(workspace_id: str) -> dict[str, Any]:
         try:
@@ -3587,9 +3605,9 @@ def create_app(
         return workspace
 
     @app.get("/api/workspaces/{workspace_id}", dependencies=protected)
-    def get_workspace(workspace_id: str):
+    def get_workspace(workspace_id: str, include: Literal["checkout"] | None = Query(None)):
         workspace = current_owner_workspace(workspace_id)
-        return {"workspace": workspace_identity(workspace)}
+        return {"workspace": workspace_identity(workspace, include_checkout=include == "checkout")}
 
     @app.get("/api/workspaces/{workspace_id}/files", dependencies=protected)
     def list_workspace_files(

@@ -202,6 +202,32 @@ describe('ServerCollections', () => {
     expect(section.textContent).not.toContain('profile-from-unvalidated-field')
   })
 
+  it('shows the recorded owner and the checkout HEAD state the server read', async () => {
+    const base = {
+      root: '/srv/archon/workspaces/workspace-1',
+      project_id: 'project-1',
+      base_revision: 'a'.repeat(40),
+      head_revision: 'a'.repeat(40),
+      generation: 1,
+      owner_id: 'local-uid:1000',
+    }
+    const workspaces = [
+      { ...base, workspace_id: 'workspace-pinned', checkout: { state: 'detached', branch: null, commit: 'a'.repeat(40), at_head_revision: true } },
+      { ...base, workspace_id: 'workspace-moved', checkout: { state: 'detached', branch: null, commit: 'c'.repeat(40), at_head_revision: false } },
+      { ...base, workspace_id: 'workspace-branch', checkout: { state: 'branch', branch: 'feature/review', commit: null, at_head_revision: null } },
+      { ...base, workspace_id: 'workspace-unknown', checkout: { state: 'unknown', branch: null, commit: null, at_head_revision: null } },
+    ]
+    const { bridge } = fakeBridge(collections([], [], [], workspaces))
+
+    render(<ServerCollections bridge={bridge} connection={connection()} />)
+
+    const section = await screen.findByRole('region', { name: 'SERVER WORKSPACES' })
+    expect(within(section).getByText(`Source project: project-1 · Owner: local-uid:1000 · Branch: detached at ${'a'.repeat(12)} (provisioned revision)`)).toBeInTheDocument()
+    expect(within(section).getByText(`Source project: project-1 · Owner: local-uid:1000 · Branch: detached at ${'c'.repeat(12)} (moved since provisioning)`)).toBeInTheDocument()
+    expect(within(section).getByText('Source project: project-1 · Owner: local-uid:1000 · Branch: on feature/review')).toBeInTheDocument()
+    expect(within(section).getByText('Source project: project-1 · Owner: local-uid:1000 · Branch: unknown (HEAD could not be read safely)')).toBeInTheDocument()
+  })
+
   it('offers local Codex registration only for valid workspaces on an active local pairing', async () => {
     const eligibleId = `workspace-${'a'.repeat(32)}`
     const { bridge } = fakeBridge(collections([], [], [], [

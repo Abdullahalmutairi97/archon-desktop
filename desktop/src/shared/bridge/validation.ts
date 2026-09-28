@@ -26,6 +26,7 @@ import type {
   TaskRecord,
   TaskSubmitPayload,
   TasksListPayload,
+  WorkspaceCheckoutState,
   WorkspaceRecord,
   WorkspaceProvisionPayload,
   WorkspaceFileEntry,
@@ -746,15 +747,45 @@ function workspaceText(value: unknown, maxLength: number): value is string {
   return boundedString(value, maxLength) && value === value.trim() && !/[\u0001-\u001f\u007f-\u009f]/u.test(value)
 }
 
+const WORKSPACE_RECORD_KEYS = ['workspace_id', 'root', 'project_id', 'base_revision', 'head_revision', 'generation'] as const
+const WORKSPACE_CHECKOUT_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/u
+const WORKSPACE_CHECKOUT_COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u
+
+function parseWorkspaceCheckout(value: unknown): WorkspaceCheckoutState {
+  const record = exactObject(value, ['state', 'branch', 'commit', 'at_head_revision'])
+  const { state, branch, commit, at_head_revision: atHeadRevision } = record
+  if (state === 'branch') {
+    if (typeof branch !== 'string' || !WORKSPACE_CHECKOUT_BRANCH.test(branch) || branch.includes('..') ||
+        commit !== null || atHeadRevision !== null) return fail()
+  } else if (state === 'detached') {
+    if (branch !== null || typeof commit !== 'string' || !WORKSPACE_CHECKOUT_COMMIT.test(commit) ||
+        typeof atHeadRevision !== 'boolean') return fail()
+  } else if (state === 'unknown') {
+    if (branch !== null || commit !== null || atHeadRevision !== null) return fail()
+  } else {
+    return fail()
+  }
+  return Object.freeze({
+    state,
+    branch: branch as string | null,
+    commit: commit as string | null,
+    at_head_revision: atHeadRevision as boolean | null,
+  })
+}
+
 function parseWorkspaceRecord(value: unknown): WorkspaceRecord {
-  const record = exactObject(value, [
-    'workspace_id', 'root', 'project_id', 'base_revision', 'head_revision', 'generation',
-  ])
+  // An older server sends only the identity; a current one may add the recorded
+  // owner and the checkout's HEAD state, and then must send both.
+  const extended = isRecord(value) && Object.hasOwn(value, 'owner_id')
+  const record = exactObject(value, extended
+    ? [...WORKSPACE_RECORD_KEYS, 'owner_id', 'checkout']
+    : WORKSPACE_RECORD_KEYS)
   if (!workspaceText(record.workspace_id, 200) || !isCanonicalWorkspaceRoot(record.root)) return fail()
   if (record.project_id !== null && !workspaceText(record.project_id, MAX_PROJECT_ID_LENGTH)) return fail()
   if (record.base_revision !== null && !workspaceText(record.base_revision, 256)) return fail()
   if (record.head_revision !== null && !workspaceText(record.head_revision, 256)) return fail()
   if (typeof record.generation !== 'number' || !Number.isSafeInteger(record.generation) || record.generation < 1) return fail()
+  if (extended && !workspaceText(record.owner_id, 200)) return fail()
   return Object.freeze({
     workspace_id: record.workspace_id,
     root: record.root,
@@ -762,6 +793,7 @@ function parseWorkspaceRecord(value: unknown): WorkspaceRecord {
     base_revision: record.base_revision,
     head_revision: record.head_revision,
     generation: record.generation,
+    ...(extended ? { owner_id: record.owner_id as string, checkout: parseWorkspaceCheckout(record.checkout) } : {}),
   })
 }
 

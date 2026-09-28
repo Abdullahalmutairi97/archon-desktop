@@ -124,6 +124,31 @@ function CollectionSection({
   </section>
 }
 
+/**
+ * Owner and HEAD labels for one workspace row. They are shown only for a record
+ * that carries both fields in the validated shape; anything else is
+ * `unavailable`, as it is for an older server that does not report them.
+ */
+function workspaceOwnership(record: JsonRecord): { owner: string; branch: string } {
+  const owner = exactTextField(record, 'owner_id')
+  const checkout = record.checkout
+  if (!owner || !isPlainRecord(checkout)) return { owner: 'unavailable', branch: 'unavailable' }
+  if (checkout.state === 'branch' && typeof checkout.branch === 'string') {
+    return { owner, branch: `on ${checkout.branch}` }
+  }
+  if (checkout.state === 'detached' && typeof checkout.commit === 'string' && typeof checkout.at_head_revision === 'boolean') {
+    const commit = checkout.commit.slice(0, 12)
+    return {
+      owner,
+      branch: checkout.at_head_revision
+        ? `detached at ${commit} (provisioned revision)`
+        : `detached at ${commit} (moved since provisioning)`,
+    }
+  }
+  if (checkout.state === 'unknown') return { owner, branch: 'unknown (HEAD could not be read safely)' }
+  return { owner: 'unavailable', branch: 'unavailable' }
+}
+
 function isAbsoluteServerPath(value: string): boolean {
   if (value.length > 1_000 || !value.startsWith('/') || /[\u0001-\u001f\u007f-\u009f]/u.test(value)) return false
   if (value === '/') return true
@@ -408,10 +433,11 @@ function WorkspaceSection({
           const generation = typeof record.generation === 'number' && Number.isSafeInteger(record.generation)
             ? String(record.generation)
             : 'Unavailable'
+          const ownership = workspaceOwnership(record)
           return <li className="server-collection-row server-workspace-row" key={id}>
             <strong>{id}</strong>
             <span>Authority: server-managed checkout · Generation: {generation}</span>
-            <span>Source project: {projectId} · Owner: unavailable · Branch: unavailable</span>
+            <span dir="auto">Source project: {projectId} · Owner: {ownership.owner} · Branch: {ownership.branch}</span>
             <span>Revisions: base {baseRevision} · head {headRevision}</span>
             <code>Authoritative root: {root}</code>
             {/^workspace-[0-9a-f]{32}$/u.test(id) && <button type="button" className="server-workspace-browse" aria-pressed={activeWorkspaceId === id} onClick={() => setSelectedWorkspaceId(activeWorkspaceId === id ? null : id)}>

@@ -361,6 +361,11 @@ function operationUrl(
     path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files/create`
   }
   const url = new URL(path, origin)
+  if (operation === 'workspaces.list' || operation === 'workspaces.get') {
+    // Ask for the recorded owner and the checkout's HEAD state; an older server
+    // ignores the parameter and returns the identity alone.
+    url.searchParams.set('include', 'checkout')
+  }
   if (operation === 'sessions.list') {
     const listPayload = payload as OperationMap['sessions.list']['payload']
     if (listPayload.projectId !== undefined) url.searchParams.set('project_id', listPayload.projectId)

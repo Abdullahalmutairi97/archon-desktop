@@ -132,6 +132,80 @@ def test_workspace_provision_api_creates_registered_revision_pinned_checkout(tmp
     assert persisted["isolation_profile"] == "git-checkout"
 
 
+def test_workspace_checkout_state_and_owner_are_reported_only_when_asked(tmp_path):
+    settings = _settings(tmp_path)
+    project, revision, _source = _registered_git_project(tmp_path, settings)
+    headers = {"Authorization": "Bearer workspace-api-token"}
+
+    with TestClient(create_app(settings)) as client:
+        workspace = client.post(
+            "/api/workspaces", headers=headers,
+            json={"project_id": project["id"], "revision": revision},
+        ).json()["workspace"]
+        workspace_id = workspace["workspace_id"]
+        root = Path(workspace["root"])
+        plain = client.get("/api/workspaces", headers=headers).json()["workspaces"][0]
+        pinned = client.get("/api/workspaces?include=checkout", headers=headers).json()["workspaces"][0]
+        _git(root, "switch", "--quiet", "-c", "feature/review")
+        branch = client.get(f"/api/workspaces/{workspace_id}?include=checkout", headers=headers).json()["workspace"]
+        (root / "NOTES.md").write_text("moved\n", encoding="utf-8")
+        _git(root, "add", "NOTES.md")
+        _git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+             "commit", "--quiet", "-m", "move")
+        _git(root, "switch", "--quiet", "--detach", "HEAD")
+        moved = client.get(f"/api/workspaces/{workspace_id}?include=checkout", headers=headers).json()["workspace"]
+        unsupported = client.get("/api/workspaces?include=secrets", headers=headers)
+
+    # The original record is unchanged unless the caller asks for more.
+    assert set(plain) == {"workspace_id", "root", "project_id", "base_revision", "head_revision", "generation"}
+    assert pinned["owner_id"] == f"local-uid:{os.geteuid()}"
+    assert pinned["checkout"] == {
+        "state": "detached", "branch": None, "commit": revision, "at_head_revision": True,
+    }
+    assert branch["checkout"] == {
+        "state": "branch", "branch": "feature/review", "commit": None, "at_head_revision": None,
+    }
+    assert moved["checkout"]["state"] == "detached"
+    assert moved["checkout"]["commit"] != revision and moved["checkout"]["at_head_revision"] is False
+    assert unsupported.status_code == 422
+
+
+def test_checkout_head_is_unknown_for_anything_unexpected(tmp_path):
+    from archon_server.workspace_provisioner import read_checkout_head
+
+    root = tmp_path / "checkout"
+    git_directory = root / ".git"
+    git_directory.mkdir(parents=True)
+    head = git_directory / "HEAD"
+    unknown = {"state": "unknown", "branch": None, "commit": None}
+    for text in (
+        "ref: refs/remotes/origin/main\n",   # not a local branch
+        "ref: refs/heads/../escape\n",       # traversal-shaped name
+        "ref: refs/heads/-option\n",          # option-shaped name
+        "ref: refs/heads/topic.lock\n",       # a lock file, not a branch
+        "a" * 39 + "\n",                       # abbreviated commit
+        "not a head\n",
+    ):
+        head.write_text(text, encoding="ascii")
+        assert read_checkout_head(root) == unknown, text
+    head.write_bytes(b"ref: refs/heads/" + b"x" * 600)
+    assert read_checkout_head(root) == unknown
+    head.write_bytes(b"ref: refs/heads/caf\xc3\xa9\n")
+    assert read_checkout_head(root) == unknown
+    # A symlinked HEAD is never followed.
+    target = tmp_path / "elsewhere"
+    target.write_text("ref: refs/heads/main\n", encoding="ascii")
+    head.unlink()
+    head.symlink_to(target)
+    assert read_checkout_head(root) == unknown
+    # A linked worktree (".git" is a file) or no Git directory at all is unknown.
+    head.unlink()
+    git_directory.rmdir()
+    (root / ".git").write_text("gitdir: /elsewhere\n", encoding="ascii")
+    assert read_checkout_head(root) == unknown
+    assert read_checkout_head(tmp_path / "missing") == unknown
+
+
 def test_workspace_provision_api_rejects_abbreviated_revision_and_client_owned_fields(tmp_path):
     settings = _settings(tmp_path)
     headers = {"Authorization": "Bearer workspace-api-token"}

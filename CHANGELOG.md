@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — workspaces report their owner and where HEAD points
+
+- `GET /api/workspaces` and `GET /api/workspaces/{id}` accept `?include=checkout` and then add the recorded `owner_id` and a `checkout` record: `branch` (with its name), `detached` (with the full commit and whether it is still the provisioned revision), or `unknown`. HEAD is read from `.git/HEAD` directly — no Git process, hook or configuration from the writable checkout runs — and a linked or symlinked Git directory, an oversized or non-regular HEAD, or an unusual ref is `unknown`, never a guess. Without the parameter the record is unchanged, so an older desktop keeps validating it.
+- The desktop requests the new fields and its Server work view now shows, per checkout, `Owner: local-uid:1000 · Branch: detached at ec95c608eba8 (provisioned revision)`, `on feature/review`, `moved since provisioning` or `unknown`, instead of `unavailable`. It accepts either record shape from the server and refuses a malformed checkout record.
+
 ## Unreleased — confined services and runtimes can no longer reach the host through IPC
 
 - **Security fix.** A service with `filesystemIsolation: "workspace-only"` (and a runtime under `ARCHON_DESKTOP_RUNTIME_ISOLATION_PROFILE=workspace-only`) ran with the host bound read-only, but a read-only mount does not stop `connect()` on a unix socket. From inside the sandbox, `systemd-run --user` over the session bus wrote a file outside it (reproduced on the target workstation), and the docker socket (root-equivalent for this account), libvirt, the system bus, tmux and runtime-daemon sockets in `/tmp`, the code-server IDE socket under the data directory, `~/.ssh` keys and the running server's own environment file were all reachable. A process that daemonized (Prime 0.9.6 starts one) also outlived the run in the sandbox's mount namespace.

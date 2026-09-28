@@ -91,6 +91,15 @@ export type TaskEventRecord = JsonRecord & {
   attempt_id: string | null
 }
 
+/** What a checkout's HEAD points at, read by the server from the checkout now. */
+export type WorkspaceCheckoutState = JsonRecord & {
+  state: 'branch' | 'detached' | 'unknown'
+  branch: string | null
+  commit: string | null
+  /** Detached HEAD still at the provisioned revision; null when not detached. */
+  at_head_revision: boolean | null
+}
+
 /** Server-owned Git checkout identity. Paths are authoritative server paths, for display only. */
 export type WorkspaceRecord = JsonRecord & {
   workspace_id: string
@@ -99,6 +108,9 @@ export type WorkspaceRecord = JsonRecord & {
   base_revision: string | null
   head_revision: string | null
   generation: number
+  /** Present only when the server reports it; an older server omits both. */
+  owner_id?: string
+  checkout?: WorkspaceCheckoutState
 }
 
 export interface TaskSubmitPayload {
