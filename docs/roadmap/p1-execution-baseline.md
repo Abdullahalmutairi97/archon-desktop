@@ -84,7 +84,7 @@ Likely files: `prime_runner.py` and its regression tests. Any native-lock compat
 - [x] Add durable runtime/session ownership and explicit task-attempt states (Phase 1C.2).
 - [x] Preserve Phase 1B atomic task/event/project binding; add durable ownership reconciliation for legacy cross-store imports.
 - [x] Identical idempotent requests return one task; reuse with a changed payload returns 409 (Phase 1C.1).
-- [ ] Test migration and snapshot/import/rollback with duplicate project names, native Prime/Pi IDs, tombstoned sessions, and queued/running tasks.
+- [ ] Test migration and snapshot/import/rollback with duplicate project names, native Prime/Pi IDs, tombstoned sessions, and queued/running tasks. A legacy database holding two sessions that share one project id beside a third on another project, native Prime and Pi session ids, two tombstoned sessions and queued/running/completed tasks now migrates with every row, status, session id and mapping unchanged, exactly one pre-migration copy (pre-migration `user_version`, pre-migration rows, `integrity_check` ok) and idempotent reopening, from both version 0 and version 1 (`backend/tests/test_migration_evidence.py`). Project *names* live in the separate Hermes projects database, which this migration never reads, so duplicate-name handling there is not covered by this item.
 - [ ] Restore the pre-migration copy under a tested compatibility procedure; never open an incompatible newer schema with an older binary.
 
 Likely files: `db.py`, `tasks.py`; proposed `migrations/` and `attempts.py`.
@@ -94,7 +94,7 @@ Likely files: `db.py`, `tasks.py`; proposed `migrations/` and `attempts.py`.
 - [x] Preserve unstarted queued tasks. Started attempts enter reconciliation/interruption unless live evidence supports continuation.
 - [x] Never automatically repeat a started attempt with unknown side effects; record an actionable review state.
 - [x] Bind events/results to attempt identity so a late old-attempt completion cannot complete its replacement (requires 1C).
-- [ ] Test failure after a side effect and before result commit, restart, explicit resume as a new attempt, and stale completion.
+- [ ] Test failure after a side effect and before result commit, restart, explicit resume as a new attempt, and stale completion. Already covered by existing evidence: `test_restart_after_side_effect_never_replays_started_task` and the error-after-silent-side-effect cases (failure before result commit), `test_recovery_preserves_unstarted_queue_and_is_idempotent` (restart), `test_attempt_ordinals_survive_replacement_and_delete_with_task` and `test_stale_and_missing_attempt_tokens_cannot_mutate_replacement` (resume as a new attempt, stale completion). This box stays open until an explicit resume path is exercised end to end through the API rather than through store-level tokens.
 - [x] Keep native history intact and document existing-client status translation.
 
 Likely files: `TaskStore.recover_inflight`, `TaskEngine`, attempt records and existing process identity helpers.

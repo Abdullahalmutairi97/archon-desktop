@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — migration evidence for the legacy data shapes
+
+- Add migration evidence tests for one legacy database holding every shape the P1 checklist names: two sessions sharing a project id beside a third on another project, native Prime and Pi session ids, two tombstoned sessions, and queued, running and completed tasks. The migration keeps every row, status, session id and mapping unchanged, writes exactly one pre-migration copy whose version and rows are pre-migration and whose integrity check passes, and reopening is idempotent.
+
 ## Unreleased — pinned language profiles
 
 - Add pinned language profiles for the workspace IDE (`GET /api/local/workspaces/{id}/language-profiles`). Each pin records the marketplace, version, declared licence, licence-file digest, VSIX digest and the digest of the installed extension directory for `ms-python.python` 2026.4.0, `ms-python.debugpy` 2026.6.0 (linux-x64), `redhat.vscode-yaml` 1.25.2026092308 and `dbaeumer.vscode-eslint` 3.0.34, all installed on this host from Open VSX. The report is artefact-based and honest about gaps: Pylance is unsupported because it is proprietary and absent from this marketplace, no JavaScript debugger adapter is pinned, and an automatically installed dependency without a licence field is reported as unpinned. Evidence: [P4 language profiles](docs/releases/p4-language-profiles.md).
