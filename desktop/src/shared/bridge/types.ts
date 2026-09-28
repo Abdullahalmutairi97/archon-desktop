@@ -147,6 +147,15 @@ export interface SessionMessagesPayload {
   limit: number
 }
 
+/**
+ * Permanently remove server conversations and their Archon task history. The
+ * ids are unique; the server refuses the whole batch when any is unknown or has
+ * a queued or running task.
+ */
+export interface SessionsDeletePayload {
+  sessionIds: readonly string[]
+}
+
 /** One server transcript row. `content` is display text and is never markup. */
 export interface SessionMessageRecord {
   id: string
@@ -523,6 +532,10 @@ export interface OperationMap {
   'sessions.messages': {
     payload: SessionMessagesPayload
     result: { messages: readonly SessionMessageRecord[] }
+  }
+  'sessions.delete': {
+    payload: SessionsDeletePayload
+    result: { ok: true; deleted: readonly string[] }
   }
   'tasks.list': {
     payload: TasksListPayload

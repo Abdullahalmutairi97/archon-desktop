@@ -478,6 +478,66 @@ describe('finite desktop bridge validation', () => {
     }
   })
 
+  it('accepts only a bounded batch of unique conversation ids to remove', () => {
+    const longId = 's'.repeat(206)
+    const parsed = parseOperationRequest('sessions.delete', { sessionIds: ['prime-session-1', longId] })
+    expect(parsed).toEqual(['sessions.delete', { sessionIds: ['prime-session-1', longId] }])
+    expect(Object.isFrozen((parsed[1] as { sessionIds: readonly string[] }).sessionIds)).toBe(true)
+    const maximum = Array.from({ length: 200 }, (_, index) => `prime-${index}`)
+    expect(parseOperationRequest('sessions.delete', { sessionIds: maximum })[1]).toEqual({ sessionIds: maximum })
+
+    let invoked = false
+    const hostile = Object.defineProperty({}, 'sessionIds', {
+      enumerable: true,
+      get() {
+        invoked = true
+        return ['prime-session-1']
+      },
+    })
+    const sparse: string[] = []
+    sparse[1] = 'prime-session-1'
+    for (const payload of [
+      hostile,
+      {},
+      { sessionIds: [] },
+      { sessionIds: 'prime-session-1' },
+      { sessionIds: [...maximum, 'prime-200'] },
+      { sessionIds: ['prime-session-1', 'prime-session-1'] },
+      { sessionIds: [''] },
+      { sessionIds: ['../tasks'] },
+      { sessionIds: ['a/b'] },
+      { sessionIds: ['a%2Fb'] },
+      { sessionIds: ['a b'] },
+      { sessionIds: ['s'.repeat(207)] },
+      { sessionIds: [7] },
+      { sessionIds: [null] },
+      { sessionIds: sparse },
+      { sessionIds: ['prime-session-1'], confirm: true },
+      { session_ids: ['prime-session-1'] },
+      null,
+    ]) {
+      expect(() => parseOperationRequest('sessions.delete', payload)).toThrow(TypeError)
+    }
+    expect(invoked).toBe(false)
+  })
+
+  it('validates the exact removal acknowledgement', () => {
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { ok: true, deleted: ['prime-session-1'] }, 'sessions.delete'))
+      .toEqual({ ok: true, deleted: ['prime-session-1'] })
+    for (const bad of [
+      { ok: true },
+      { ok: false, deleted: ['prime-session-1'] },
+      { ok: true, deleted: [] },
+      { ok: true, deleted: ['../escape'] },
+      { ok: true, deleted: ['a', 'a'] },
+      { ok: true, deleted: ['prime-session-1'], token: 'sentinel' },
+      { deleted: ['prime-session-1'] },
+      null,
+    ]) {
+      expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, bad, 'sessions.delete')).toThrow(TypeError)
+    }
+  })
+
   it('validates bounded runtime, task and event responses', () => {
     const taskId = 'a'.repeat(32)
     const runtime = {

@@ -177,6 +177,23 @@ export function continuationBlocker(session: LiveSession): string | null {
   return null
 }
 
+/** Why a conversation cannot be removed from this client; the server rechecks running work. */
+export function deletionBlocker(session: LiveSession): string | null {
+  if (session.active) return 'A task is running in this conversation. Cancel its task first.'
+  if (session.id.startsWith('pi-native-')) return 'Native Pi history is read-only here and cannot be removed.'
+  return null
+}
+
+/**
+ * Transcript rows a read-only snapshot may carry: user and assistant text only.
+ * Reasoning, tool and native records never leave the machine.
+ */
+export function snapshotSourceMessages(messages: readonly SessionMessageRecord[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return messages.flatMap((message) => message.kind === 'text' && (message.role === 'user' || message.role === 'assistant')
+    ? [{ role: message.role, content: message.content }]
+    : [])
+}
+
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
 export function formatEpochSeconds(seconds: number | null): string {
@@ -373,4 +390,17 @@ export function operationErrorCode(error: unknown): string | null {
   } catch {
     return null
   }
+}
+
+/** Honest text for a failed removal. Electron IPC keeps only the message, so it is matched as a fallback. */
+export function deletionFailureMessage(error: unknown): string {
+  const code = operationErrorCode(error)
+  const message = error instanceof Error ? error.message : ''
+  if (code === 'session_busy' || message.includes('Cancel its task first')) {
+    return 'A conversation has a queued or running task. Cancel its task first, then remove it.'
+  }
+  if (code === 'session_not_found' || message.includes('no longer exists on the server')) {
+    return 'A selected conversation no longer exists on the server. Nothing was removed; the list has been refreshed.'
+  }
+  return 'The server did not confirm the removal. The list has been refreshed to show what remains.'
 }
