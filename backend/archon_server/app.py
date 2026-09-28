@@ -78,6 +78,7 @@ from .resource_definitions import (
     ResourceDefinitionError,
     ResourceDefinitionLedger,
     ResourceDefinitionUnavailable,
+    ResourceInstallRequestLedger,
 )
 from .resource_snapshots import (
     ResourcePinLedger,
@@ -467,6 +468,22 @@ class ResourceDefinitionRequest(BaseModel):
     note: str | None = Field(default=None, max_length=256)
 
 
+class ResourceInstallRequestCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    definition: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9._-]{0,63}$")
+    reason: str = Field(min_length=1, max_length=512)
+    scope: str | None = Field(default=None, pattern=r"^(agent|workspace|project)$")
+    scope_id: str | None = Field(default=None, alias="scopeId", max_length=128)
+
+
+class ResourceInstallDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: str = Field(pattern=r"^(approved|rejected)$")
+    note: str | None = Field(default=None, max_length=256)
+
+
 class ResourceAssignmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -758,6 +775,7 @@ def create_app(
     resource_snapshots: ResourceSnapshotStore | None = None
     resource_pins: ResourcePinLedger | None = None
     resource_definitions: ResourceDefinitionLedger | None = None
+    resource_install_requests: ResourceInstallRequestLedger | None = None
     secret_broker: SecretBroker | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
@@ -938,6 +956,9 @@ def create_app(
     # Declarative resource definitions and their scope assignments. Metadata only:
     # nothing here installs or downloads an artefact.
     resource_definitions = ResourceDefinitionLedger(snapshot_root / "definitions")
+    # Install requests record what an operator asked for and decided. Nothing here
+    # installs, downloads or executes an artefact, and no state claims otherwise.
+    resource_install_requests = ResourceInstallRequestLedger(snapshot_root / "install-requests")
 
     def observed_definition_digests() -> dict[str, str | None]:
         """Digest this host reports for each recorded definition, where it can be measured."""
@@ -1110,6 +1131,7 @@ def create_app(
             app.state.resource_snapshots = resource_snapshots
             app.state.resource_pins = resource_pins
             app.state.resource_definitions = resource_definitions
+            app.state.resource_install_requests = resource_install_requests
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -1811,6 +1833,57 @@ def create_app(
             name: (manifests.get(name) or measured.get(name) or measured.get(row.get("source") or ""))
             for name, row in rows.items()
         }
+
+    def resource_install_request_service() -> ResourceInstallRequestLedger:
+        if resource_install_requests is None:
+            raise HTTPException(status_code=503, detail="Resource install requests are unavailable")
+        return resource_install_requests
+
+    @app.get("/api/local/resources/install-requests", dependencies=[Depends(require_local_owner)])
+    async def local_resource_install_requests(limit: int = Query(32, ge=1, le=128)):
+        try:
+            ledger = resource_install_request_service()
+            return JSONResponse(
+                content={**ledger.status(), "requests": ledger.list(limit)},
+                headers={"Cache-Control": "no-store"},
+            )
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/local/resources/install-requests", status_code=201,
+              dependencies=[Depends(require_local_owner)])
+    async def local_resource_install_request(payload: ResourceInstallRequestCreate, principal=Depends(require_local_owner)):
+        try:
+            ledger = resource_install_request_service()
+            recorded = {row["name"] for row in resource_definition_service().definitions()}
+            row = ledger.request(
+                definition=payload.definition, reason=payload.reason,
+                requested_by=str(principal["principal_id"]), definitions=recorded,
+                scope=payload.scope, scope_id=payload.scope_id,
+            )
+            return JSONResponse(status_code=201, content={"request": row, "installationPerformed": False},
+                                headers={"Cache-Control": "no-store"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/local/resources/install-requests/{request_id}/decision",
+              dependencies=[Depends(require_local_owner)])
+    async def local_resource_install_decision(request_id: str, payload: ResourceInstallDecisionRequest,
+                                              principal=Depends(require_local_owner)):
+        """Record the operator's decision. This server still installs nothing."""
+        try:
+            row = resource_install_request_service().decide(
+                request_id=request_id, decision=payload.decision,
+                decided_by=str(principal["principal_id"]), note=payload.note,
+            )
+            return JSONResponse(content={"request": row, "installationPerformed": False},
+                                headers={"Cache-Control": "no-store"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/local/resources/definitions", dependencies=[Depends(require_local_owner)])
     async def local_resource_definitions():

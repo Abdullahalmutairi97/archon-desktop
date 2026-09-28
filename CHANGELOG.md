@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — install requests recorded, never performed
+
+- Add owner-only `GET/POST /api/local/resources/install-requests` and `POST /api/local/resources/install-requests/{id}/decision`. An install request names a recorded definition, a reason, an optional scope and the requesting principal; the decision records `approved` or `rejected` once, and a second decision is refused. The ledger has no `installed` state at all: every row reports `installationPerformed: false` and `installedBy: null`, so no code path here can claim an installation this server never performs.
+
 ## Unreleased — declarative resource definitions, assignments and effective configuration
 
 - Add `PUT/GET/DELETE /api/local/resources/definitions` (owner credential) for declarative resource records: a name, a kind (`runtime`, `extension`, `tool`, `mcp`), a version, and for an artefact kind a sha256 digest, with optional source, licence and note. A definition is metadata: nothing is installed, downloaded or executed, and updating a digest keeps the previous one as history. A definition that is still assigned cannot be removed.

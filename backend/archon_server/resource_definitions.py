@@ -286,3 +286,138 @@ class ResourceDefinitionLedger:
                 "here installs or downloads an artefact."
             ),
         }
+
+
+class ResourceInstallRequestLedger:
+    """Requests to provision a recorded definition, and the operator's decision.
+
+    This server does not install, download or execute an artefact, and the ledger has
+    no `installed` state at all: a request ends at `approved` or `rejected`, so no code
+    path here can report an installation that never happened. An approval is the
+    operator's instruction to provision the recorded identity out of band, and the
+    record says so.
+    """
+
+    _DECISIONS = ("approved", "rejected")
+    _ID = re.compile(r"req-[0-9a-f]{16}\Z")
+
+    def __init__(self, root: str | os.PathLike[str], *, max_requests: int = 256,
+                 now: Callable[[], datetime] | None = None):
+        if isinstance(max_requests, bool) or not isinstance(max_requests, int) or not 1 <= max_requests <= 4096:
+            raise ValueError("max_requests must be between 1 and 4096")
+        self.root = _private_directory(root, "resource install request root")
+        self.path = self.root / "install-requests.json"
+        self.max_requests = max_requests
+        self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def _load(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {"version": 1, "epoch": 0, "requests": {}}
+        try:
+            document = json.loads(_read_private(self.path))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+            raise ResourceDefinitionUnavailable("The request ledger is not readable JSON") from exc
+        if (not isinstance(document, dict) or document.get("version") != 1
+                or not isinstance(document.get("requests"), dict)):
+            raise ResourceDefinitionUnavailable("The request ledger has an unsupported schema")
+        if len(document["requests"]) > self.max_requests:
+            raise ResourceDefinitionUnavailable("The request ledger holds more rows than permitted")
+        return document
+
+    def _save(self, document: dict[str, Any]) -> None:
+        payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        if len(payload) > _LEDGER_BYTES:
+            raise ResourceDefinitionUnavailable("The request ledger would be larger than permitted")
+        _write_private(self.path, payload)
+
+    def request(
+        self,
+        *,
+        definition: Any,
+        reason: Any,
+        requested_by: Any,
+        definitions: Iterable[str] = (),
+        scope: Any = None,
+        scope_id: Any = None,
+    ) -> dict[str, Any]:
+        key = _text(definition, _NAME, "definition name")
+        recorded = set(definitions)
+        if key not in recorded:
+            raise ResourceDefinitionUnavailable("That definition is not recorded")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 512:
+            raise ValueError("reason is invalid")
+        if not isinstance(requested_by, str) or not _SCOPE_ID.fullmatch(requested_by):
+            raise ValueError("requested_by is invalid")
+        if scope is None and scope_id is not None:
+            raise ValueError("scopeId requires a scope")
+        if scope is not None:
+            if scope not in _SCOPES:
+                raise ValueError("scope must be agent, workspace or project")
+            _text(scope_id, _SCOPE_ID, "scopeId")
+        document = self._load()
+        if len(document["requests"]) >= self.max_requests:
+            raise ResourceDefinitionUnavailable("The request ledger is full")
+        request_id = "req-" + os.urandom(8).hex()
+        document["requests"][request_id] = {
+            "id": request_id,
+            "definition": key,
+            "scope": scope,
+            "scopeId": scope_id,
+            "reason": reason,
+            "requestedBy": requested_by,
+            "requestedAt": self._now().isoformat(),
+            "state": "requested",
+            "decidedAt": None,
+            "decidedBy": None,
+            "decisionNote": None,
+            "installedBy": None,
+            "installationPerformed": False,
+        }
+        document["epoch"] = int(document.get("epoch", 0)) + 1
+        self._save(document)
+        return dict(document["requests"][request_id])
+
+    def decide(
+        self, *, request_id: Any, decision: Any, decided_by: Any, note: Any = None,
+    ) -> dict[str, Any]:
+        if not isinstance(request_id, str) or not self._ID.fullmatch(request_id):
+            raise ValueError("request id is invalid")
+        if decision not in self._DECISIONS:
+            raise ValueError("decision must be approved or rejected")
+        if not isinstance(decided_by, str) or not _SCOPE_ID.fullmatch(decided_by):
+            raise ValueError("decided_by is invalid")
+        if note is not None and (not isinstance(note, str) or not note.strip() or len(note) > 256):
+            raise ValueError("note is invalid")
+        document = self._load()
+        row = document["requests"].get(request_id)
+        if row is None:
+            raise ResourceDefinitionUnavailable("That install request is not recorded")
+        if row["state"] != "requested":
+            raise ResourceDefinitionUnavailable("That install request already has a decision")
+        row["state"] = decision
+        row["decidedAt"] = self._now().isoformat()
+        row["decidedBy"] = decided_by
+        row["decisionNote"] = note
+        document["epoch"] = int(document.get("epoch", 0)) + 1
+        self._save(document)
+        return dict(row)
+
+    def list(self, limit: int = 32) -> list[dict[str, Any]]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 128:
+            raise ValueError("limit must be between 1 and 128")
+        document = self._load()
+        rows = sorted(document["requests"].values(), key=lambda row: row["requestedAt"], reverse=True)
+        return [dict(row) for row in rows[:limit]]
+
+    def status(self) -> dict[str, Any]:
+        document = self._load()
+        return {
+            "requests": len(document["requests"]),
+            "maxRequests": self.max_requests,
+            "installationPerformed": False,
+            "note": (
+                "This server records the request and the operator's decision. It does not "
+                "install, download or execute the artefact, so an approved request means "
+                "'provision this recorded identity out of band', never 'installed'."
+            ),
+        }

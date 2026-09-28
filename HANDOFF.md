@@ -183,7 +183,9 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    `agent > workspace > project`, an effective-configuration view that reports declared
    against measured digests (`current`/`drifted`/`unobserved`/`configuration-only`), and the
    effective list recorded in every attempt snapshot. Still missing from that roadmap item:
-   install requests and the managed installation/update pipeline.
+   install requests are now recorded with an explicit owner decision (approve/reject,
+   once) that never claims an installation; the managed installation/update pipeline that
+   would consume an approval is still missing.
 
 9. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
    unstarted; the operator deferred these earlier — confirm before starting).

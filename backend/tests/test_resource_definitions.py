@@ -220,3 +220,91 @@ def _paired_owner_headers(socket_path: Path) -> dict[str, str]:
         }).encode() + b"\n")
         credential = json.loads(stream.readline())["credential"]
     return {"Authorization": f"Bearer {credential['access_token']}"}
+
+def test_install_requests_are_recorded_and_never_claim_an_installation(tmp_path):
+    from archon_server.resource_definitions import ResourceInstallRequestLedger
+
+    definitions = _ledger(tmp_path)
+    definitions.define(name="code-server", kind="runtime", version="4.139.1", digest=DIGEST)
+    ledger = ResourceInstallRequestLedger(tmp_path / "requests")
+    assert ledger.status()["installationPerformed"] is False
+    assert "never 'installed'" in ledger.status()["note"]
+
+    with pytest.raises(ResourceDefinitionUnavailable):
+        ledger.request(definition="missing", reason="please", requested_by="local-uid:1000",
+                       definitions={"code-server"})
+    with pytest.raises(ValueError):
+        ledger.request(definition="code-server", reason="", requested_by="local-uid:1000",
+                       definitions={"code-server"})
+    with pytest.raises(ValueError):
+        ledger.request(definition="code-server", reason="please", requested_by="local-uid:1000",
+                       definitions={"code-server"}, scope_id="workspace-abc")
+
+    row = ledger.request(definition="code-server", reason="pin the accepted IDE",
+                         requested_by="local-uid:1000", definitions={"code-server"},
+                         scope="workspace", scope_id="workspace-abc")
+    assert row["state"] == "requested" and row["installationPerformed"] is False
+    assert row["installedBy"] is None and row["id"].startswith("req-")
+
+    approved = ledger.decide(request_id=row["id"], decision="approved",
+                            decided_by="local-uid:1000", note="provision out of band")
+    assert approved["state"] == "approved" and approved["installationPerformed"] is False
+    # A second decision on the same request is refused, and nothing reports an install.
+    with pytest.raises(ResourceDefinitionUnavailable):
+        ledger.decide(request_id=row["id"], decision="rejected", decided_by="local-uid:1000")
+    with pytest.raises(ResourceDefinitionUnavailable):
+        ledger.decide(request_id="req-" + "0" * 16, decision="approved", decided_by="local-uid:1000")
+    with pytest.raises(ValueError):
+        ledger.decide(request_id=row["id"], decision="installed", decided_by="local-uid:1000")
+    assert all(listing["state"] in {"requested", "approved", "rejected"} for listing in ledger.list())
+    assert stat.S_IMODE(os.stat(tmp_path / "requests" / "install-requests.json").st_mode) == 0o600
+
+
+def test_the_install_request_api_is_owner_only_and_never_reports_an_install(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from archon_server.app import create_app
+    from archon_server.config import Settings
+
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        client.put("/api/local/resources/definitions/code-server", headers=headers, json={
+            "name": "code-server", "kind": "runtime", "version": "4.139.1", "digest": DIGEST,
+        })
+        assert client.get("/api/local/resources/install-requests").status_code == 401
+        assert client.post("/api/local/resources/install-requests", headers=headers, json={
+            "definition": "not-recorded", "reason": "please",
+        }).status_code == 409
+
+        created = client.post("/api/local/resources/install-requests", headers=headers, json={
+            "definition": "code-server", "reason": "provision the pinned IDE",
+            "scope": "workspace", "scopeId": "workspace-abc",
+        })
+        assert created.status_code == 201, created.text
+        assert created.json()["installationPerformed"] is False
+        request_id = created.json()["request"]["id"]
+
+        decided = client.post(f"/api/local/resources/install-requests/{request_id}/decision",
+                              headers=headers, json={"decision": "approved", "note": "out of band"})
+        assert decided.status_code == 200
+        assert decided.json()["request"]["state"] == "approved"
+        assert decided.json()["installationPerformed"] is False
+        assert client.post(f"/api/local/resources/install-requests/{request_id}/decision",
+                           headers=headers, json={"decision": "rejected"}).status_code == 409
+        listed = client.get("/api/local/resources/install-requests", headers=headers).json()
+        assert listed["installationPerformed"] is False
+        assert listed["requests"][0]["state"] == "approved"
+        # No row can report an installation: the ledger has no such state, and every
+        # row says the server performed none.
+        rows = listed["requests"]
+        assert rows and all(row["state"] in {"requested", "approved", "rejected"} for row in rows)
+        assert all(row["installationPerformed"] is False and row["installedBy"] is None for row in rows)
+
