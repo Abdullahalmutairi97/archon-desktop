@@ -314,6 +314,12 @@ def test_a_stale_identity_blocks_resuming_a_conversation(tmp_path):
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    # The test owns the runtime binary, so it does not depend on a runtime being
+    # installed on the host (CI installs none) while the digest it observes is real.
+    runtime_binary = tmp_path / "prime-runtime"
+    original_bytes = b"#!/bin/sh\nexit 0\n"
+    runtime_binary.write_bytes(original_bytes)
+    runtime_binary.chmod(0o755)
     settings = Settings(
         archon_root=tmp_path,
         hermes_home=tmp_path / ".hermes",
@@ -321,10 +327,10 @@ def test_a_stale_identity_blocks_resuming_a_conversation(tmp_path):
         auth_token="legacy-token",
         local_owner_mode=True,
         start_worker=False,
+        prime_executable=runtime_binary,
     )
     with TestClient(create_app(settings)) as client:
         headers = _paired_owner_headers(settings.local_pairing_socket_path)
-        original_executable = client.app.state.runtimes.runners["prime"].executable
         created = client.post("/api/tasks", headers=headers,
                               json={"prompt": "first turn", "cwd": str(workspace), "profile": "prime",
                                     "approval_mode": "auto"})
@@ -347,7 +353,7 @@ def test_a_stale_identity_blocks_resuming_a_conversation(tmp_path):
 
         # The executable changed: the conversation is stale, and the resume is refused
         # with the identity reason rather than any other admission error.
-        client.app.state.runtimes.runners["prime"].executable = "/bin/true"
+        runtime_binary.write_bytes(b"#!/bin/sh\nexit 1\n")
         stale = client.get("/api/local/resources/sessions", headers=headers).json()
         stale_row = next(item for item in stale["sessions"] if item["sessionId"] == session_id)
         assert stale_row["state"] == "stale" and stale_row["resumeAllowed"] is False
@@ -359,7 +365,7 @@ def test_a_stale_identity_blocks_resuming_a_conversation(tmp_path):
 
         # With nothing installed to match the recorded identity against, the resume is
         # still refused, and the reason says why.
-        client.app.state.runtimes.runners["prime"].executable = "/nonexistent/prime-agent"
+        runtime_binary.unlink()
         unobservable = client.post("/api/tasks", headers=headers,
                                    json={"prompt": "continue", "session_id": session_id,
                                          "profile": "prime", "approval_mode": "auto"})
@@ -369,7 +375,8 @@ def test_a_stale_identity_blocks_resuming_a_conversation(tmp_path):
         # A conversation with no recorded identity is allowed, and says it is unverified.
         # (A new conversation needs the runtime installed again, which is a separate
         # admission rule from the identity check.)
-        client.app.state.runtimes.runners["prime"].executable = original_executable
+        runtime_binary.write_bytes(original_bytes)
+        runtime_binary.chmod(0o755)
         other = client.post("/api/tasks", headers=headers,
                             json={"prompt": "unrelated", "cwd": str(workspace), "profile": "prime",
                                   "approval_mode": "auto"})
