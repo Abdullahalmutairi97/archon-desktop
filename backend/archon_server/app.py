@@ -1150,8 +1150,19 @@ def create_app(
         status_code=201,
         dependencies=[Depends(require_local_owner)],
     )
-    async def local_workspace_terminal_create(workspace_id: str, payload: WorkspaceTerminalCreateRequest):
+    async def local_workspace_terminal_create(
+        workspace_id: str,
+        payload: WorkspaceTerminalCreateRequest,
+        principal=Depends(require_local_owner),
+    ):
+        """Open a workspace shell while this caller holds the write lease.
+
+        A terminal is a detached, write-capable process inside the workspace, so
+        creating one is a handover of write access. Existing terminals are not
+        revoked by a later handover.
+        """
         current_owner_workspace(workspace_id)
+        claim_workspace_write(workspace_id, str(principal["principal_id"]))
         try:
             terminal = await workspace_terminal_service().create(
                 workspace_id,

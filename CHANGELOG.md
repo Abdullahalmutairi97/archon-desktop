@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — write lease covers workspace terminals
+
+- Opening a workspace terminal now requires the workspace write lease: the request takes or refreshes the lease for the identity its credential carries, and a live lease held by another writer is refused with 409 before any shell is created. Existing terminals are not revoked by a later handover, and that limit is stated in the route.
+
 ## Unreleased — migration evidence for the legacy data shapes
 
 - Add migration evidence tests for one legacy database holding every shape the P1 checklist names: two sessions sharing a project id beside a third on another project, native Prime and Pi session ids, two tombstoned sessions, and queued, running and completed tasks. The migration keeps every row, status, session id and mapping unchanged, writes exactly one pre-migration copy whose version and rows are pre-migration and whose integrity check passes, and reopening is idempotent.

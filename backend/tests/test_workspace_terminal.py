@@ -599,3 +599,53 @@ async def test_interactive_attach_requires_matching_workspace_generation(tmp_pat
         await service.open_attach(
             WORKSPACE_ID, created["sessionId"], expected_generation=1, mode="write",
         )
+
+
+def test_terminal_create_requires_the_workspace_write_lease(tmp_path, monkeypatch):
+    """A terminal is a write-capable handover, so a competing holder blocks it."""
+    fake = _fake_tmux(tmp_path)
+    monkeypatch.setenv(
+        "ARCHON_DESKTOP_LOCAL_WORKSPACE_TERMINAL_TMUX_EXECUTABLE",
+        str(fake),
+    )
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        workspace_root = tmp_path / "lease-checkout"
+        workspace_root.mkdir()
+        workspace_id = "workspace-cccccccccccccccccccccccccccccccc"
+        client.app.state.store.db.create_workspace(
+            workspace_id=workspace_id,
+            root=str(workspace_root),
+            owner_id=f"local-uid:{os.geteuid()}",
+            project_id="project-terminal-lease",
+            generation=2,
+            isolation_profile="git-checkout",
+        )
+        collection_url = f"/api/local/workspaces/{workspace_id}/terminals"
+        lease_url = f"/api/local/workspaces/{workspace_id}/write-lease"
+        owner = f"local-uid:{os.geteuid()}"
+
+        handed_over = client.post(lease_url, headers=headers, json={"holder": "desktop-editor", "ttlSeconds": 300})
+        assert handed_over.status_code == 200
+        blocked = client.post(collection_url, headers=headers, json={"expectedGeneration": 2})
+        assert blocked.status_code == 409
+        assert "desktop-editor" in blocked.json()["detail"]
+        assert client.get(collection_url, headers=headers).json() == {"terminals": []}
+
+        assert client.request(
+            "DELETE", lease_url, headers=headers, json={"holder": "desktop-editor"},
+        ).status_code == 200
+        created = client.post(collection_url, headers=headers, json={"expectedGeneration": 2})
+        assert created.status_code == 201
+        assert created.json()["terminal"]["sessionId"].startswith("wterm-")
+        # Creating the terminal claimed the lease for the caller's identity.
+        held = client.get(lease_url, headers=headers).json()
+        assert held["held"] is True and held["holder"] == owner
