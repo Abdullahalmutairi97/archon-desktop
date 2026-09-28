@@ -9,15 +9,20 @@ import type { BenchId } from '../shell/shortcuts'
 import { displayLine, isTerminalStatus, liveTasks, type LiveProject, type LiveSession, type LiveTask } from './liveModels'
 import type { LiveScope } from './useLiveServer'
 import { LIVE_TASK_LIMIT } from './LiveViews'
+import { LiveBrowser } from './LiveBrowser'
+import type { BrowserLink } from './browserLinks'
 import { Markdown } from './Markdown'
 import './LiveWorkbench.css'
 
 const tabs: { id: BenchId; label: string; icon: IconName }[] = [
   { id: 'activity', label: 'Activity', icon: 'activity' },
   { id: 'files', label: 'Files', icon: 'folder' },
+  { id: 'browser', label: 'Browser', icon: 'browser' },
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
-  { id: 'browser', label: 'Preview', icon: 'browser' },
+  { id: 'preview', label: 'Preview', icon: 'code' },
 ]
+
+const NO_LINKS: readonly BrowserLink[] = []
 
 const ACTIVITY_POLL_MS = 2_000
 const MAX_ACTIVITY_ROWS = 60
@@ -201,13 +206,15 @@ function ActivityPanel({ scope, session }: { scope: LiveScope; session: LiveSess
 }
 
 /**
- * The workbench beside a live conversation: its task activity, and the files,
- * terminal and service previews of the checkout it runs in.
+ * The workbench beside a live conversation: its task activity, a browser for
+ * the links in its replies, and the files, terminal and service previews of the
+ * checkout it runs in.
  */
 export function LiveWorkbench({
   scope,
   session,
   projects,
+  links = NO_LINKS,
   active,
   onSelect,
   onClose,
@@ -216,6 +223,8 @@ export function LiveWorkbench({
   scope: LiveScope
   session: LiveSession | null
   projects: readonly LiveProject[]
+  /** Web links found in this conversation's replies, offered in the Browser tab. */
+  links?: readonly BrowserLink[]
   active: BenchId
   onSelect(tab: BenchId): void
   onClose(): void
@@ -278,17 +287,18 @@ export function LiveWorkbench({
     </div>
     <div className="bench-content live-bench-content">
       {active === 'activity' && <ActivityPanel scope={scope} session={session} />}
-      {active !== 'activity' && checkoutBar()}
+      {active === 'browser' && <LiveBrowser key={scope.generation} bridge={scope.bridge.browser} links={links} />}
+      {active !== 'activity' && active !== 'browser' && checkoutBar()}
       {active === 'files' && current?.state === 'ready' && (checkout
         ? <WorkspaceFileBrowser key={`${checkout.id}:${checkout.generation}`} workspaceId={checkout.id} readOnlyFilePort={filePort} />
         : needsCheckout('Files'))}
-      {(active === 'terminal' || active === 'browser') && current?.state === 'ready' && !scope.localPairingAvailable && <p className="live-bench-empty" role="status">
+      {(active === 'terminal' || active === 'preview') && current?.state === 'ready' && !scope.localPairingAvailable && <p className="live-bench-empty" role="status">
         {active === 'terminal' ? 'Terminals' : 'Service previews'} need same-user pairing with the server, which this connection does not have.
       </p>}
       {active === 'terminal' && current?.state === 'ready' && scope.localPairingAvailable && (checkout
         ? <WorkspaceConsole key={`${checkout.id}:${checkout.generation}`} bridge={scope.bridge.workspaceConsole} workspaceId={checkout.id} generation={checkout.generation} pairingAvailable />
         : needsCheckout('Terminals'))}
-      {active === 'browser' && current?.state === 'ready' && scope.localPairingAvailable && (checkout
+      {active === 'preview' && current?.state === 'ready' && scope.localPairingAvailable && (checkout
         ? <WorkspaceServices key={`${checkout.id}:${checkout.generation}`} bridge={scope.bridge.workspaceServices} preview={scope.bridge.workspacePreview} workspaceId={checkout.id} generation={checkout.generation} pairingAvailable />
         : needsCheckout('Service previews'))}
     </div>

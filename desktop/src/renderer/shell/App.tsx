@@ -11,6 +11,7 @@ import { LiveChatView } from '../live/LiveChat'
 import { runtimeLabel as liveRuntimeLabel } from '../live/liveModels'
 import { LiveProjectsView, LiveSessionsView, LiveTasksView } from '../live/LiveViews'
 import { LiveWorkbench } from '../live/LiveWorkbench'
+import type { BrowserLink } from '../live/browserLinks'
 import { useLiveServer } from '../live/useLiveServer'
 import { FIXTURE_PROJECTS, FIXTURE_SESSIONS, FIXTURE_TASKS, runtimeLabel, sessionForId } from './fixtures'
 import { Icon } from './Icon'
@@ -20,6 +21,7 @@ import { resolveShellShortcut, type BenchId } from './shortcuts'
 import { WorkspaceBench } from './WorkspaceBench'
 
 const DEFAULT_SESSION_ID = FIXTURE_SESSIONS[0].scope.sessionId
+const NO_LINKS: readonly BrowserLink[] = []
 
 /** Server-scoped selection; it is dropped whenever the connection generation changes. */
 type LiveSelection = {
@@ -45,6 +47,13 @@ export function App() {
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [liveSelectionValue, setLiveSelectionValue] = useState<LiveSelection | null>(null)
+  // Links reported by the shown conversation, keyed `generation:sessionId` so none leak across.
+  const [liveLinks, setLiveLinks] = useState<{ key: string; links: readonly BrowserLink[] } | null>(null)
+  const reportLiveLinks = useCallback((key: string, links: readonly BrowserLink[]) => setLiveLinks((current) =>
+    // A streaming reply re-reports its links on every poll; keep the shell still when they are unchanged.
+    current && current.key === key && current.links.length === links.length && current.links.every((link, index) => link.url === links[index].url)
+      ? current
+      : { key, links }), [])
   const preview = isPreviewView(view)
   const demo = preview && !live
   const liveServer = useLiveServer(bridge, view)
@@ -53,6 +62,8 @@ export function App() {
   const liveSession = liveSelection?.sessionId
     ? liveServer.sessions.find((session) => session.id === liveSelection.sessionId) ?? null
     : null
+  const liveLinksKey = `${liveGeneration ?? ''}:${liveSelection?.sessionId ?? ''}`
+  const conversationLinks = liveLinks && liveLinks.key === liveLinksKey ? liveLinks.links : NO_LINKS
 
   const currentSession = useMemo(() => sessionForId(selectedSessionId) ?? FIXTURE_SESSIONS[0], [selectedSessionId])
   const currentProject = FIXTURE_PROJECTS.find((project) => project.id === selectedProjectId) ?? FIXTURE_PROJECTS[0]
@@ -182,7 +193,7 @@ export function App() {
             {demo && view === 'projects' && <span className="scope-pill"><i className={`runtime-dot runtime-${currentProject.runtime}`} />{currentProject.location} · {currentProject.runtime === 'codex' ? 'Local Codex' : currentProject.runtime === 'pi' ? 'Pi' : 'Prime'}</span>}
             {live && view === 'chat' && liveSession && <span className="scope-pill"><i className={`runtime-dot runtime-${liveSession.runtime ?? 'unverified'}`} />Server · {liveRuntimeLabel(liveSession.runtime)}</span>}
             {demo && <button className="icon-button view-action-button" aria-label="Open workbench activity" title="Open demo workbench" onClick={() => openDemoBench('activity')}><Icon name="activity" /></button>}
-            {live && view === 'chat' && liveServer.scope && <button className="icon-button view-action-button" aria-label={benchOpen ? 'Close workbench' : 'Open workbench'} aria-pressed={benchOpen} title="Workbench · Ctrl 1–4" onClick={() => setBenchOpen((open) => !open)}><Icon name="activity" /></button>}
+            {live && view === 'chat' && liveServer.scope && <button className="icon-button view-action-button" aria-label={benchOpen ? 'Close workbench' : 'Open workbench'} aria-pressed={benchOpen} title="Workbench · Ctrl 1–5" onClick={() => setBenchOpen((open) => !open)}><Icon name="activity" /></button>}
           </div>
         </div>
 
@@ -199,6 +210,7 @@ export function App() {
           onNewConversation={startLiveConversation}
           onOpenConnection={openConnection}
           onOpenTasks={openTasks}
+          onLinks={reportLiveLinks}
         />}
         {live && view === 'sessions' && <LiveSessionsView server={liveServer} selectedSessionId={liveSelection?.sessionId ?? null} onOpenSession={openLiveSession} onNewConversation={startLiveConversation} onOpenConnection={openConnection} />}
         {live && view === 'tasks' && <LiveTasksView server={liveServer} onOpenSession={openLiveSession} onOpenConnection={openConnection} />}
@@ -220,6 +232,7 @@ export function App() {
         scope={liveServer.scope}
         session={liveSession}
         projects={liveServer.projects}
+        links={conversationLinks}
         active={activeBench}
         onSelect={setActiveBench}
         onClose={() => setBenchOpen(false)}
@@ -341,7 +354,7 @@ function CommandPalette({ preview, live, onClose, onNavigate, onAppearance, onBe
           <button onClick={() => onNavigate('tasks')}><Icon name="activity" /><span>View demo tasks</span></button>
           <button onClick={() => onNavigate('projects')}><Icon name="folder" /><span>View demo projects</span></button>
           <button onClick={() => onBench('files')}><Icon name="file" /><span>Open synthetic files</span><kbd>Ctrl 2</kbd></button>
-          <button onClick={() => onBench('browser')}><Icon name="browser" /><span>Open offline browser fixture</span><kbd>Ctrl 4</kbd></button>
+          <button onClick={() => onBench('browser')}><Icon name="browser" /><span>Open offline browser fixture</span><kbd>Ctrl 3</kbd></button>
         </>}
       </div>}
       <div className="palette-group"><span className="eyebrow">SETTINGS</span>

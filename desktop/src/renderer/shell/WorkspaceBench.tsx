@@ -9,8 +9,8 @@ import { BrandMark } from './BrandMark'
 const tabs: { id: BenchId; label: string; icon: IconName }[] = [
   { id: 'activity', label: 'Activity', icon: 'activity' },
   { id: 'files', label: 'Files', icon: 'folder' },
-  { id: 'terminal', label: 'Terminal', icon: 'terminal' },
   { id: 'browser', label: 'Browser', icon: 'browser' },
+  { id: 'terminal', label: 'Terminal', icon: 'terminal' },
 ]
 
 const fixtureFiles = [

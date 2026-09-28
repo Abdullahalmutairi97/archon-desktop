@@ -9,6 +9,7 @@ import type {
   OperationResult,
 } from '../shared/bridge/types'
 import { BRIDGE_CHANNELS, parseBridgeRequest } from '../shared/bridge/validation'
+import { createBrowserBridge } from './browserBridge'
 import { createLocalCodexBridge } from './localCodexBridge'
 import type { LocalCodexIpcInvoker } from './localCodexBridge'
 import { createLanguageProfilesBridge } from './languageProfilesBridge'
@@ -45,5 +46,6 @@ export function createDesktopBridge(ipc: BridgeIpcInvoker): DesktopBridge {
     workspaceServices: createWorkspaceServicesBridge(ipc),
     languageProfiles: createLanguageProfilesBridge(ipc),
     workspacePreview: createWorkspacePreviewBridge(ipc),
+    browser: createBrowserBridge(ipc),
   })
 }

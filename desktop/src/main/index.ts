@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { homedir, userInfo } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -29,6 +29,8 @@ import { registerWorkspacePreview } from './registerWorkspacePreview'
 import { registerLanguageProfiles } from './registerLanguageProfiles'
 import { registerWorkspaceServices } from './registerWorkspaceServices'
 import { WorkspacePreviewController } from './workspacePreview'
+import { BrowserViewController, type BrowserWindowLike } from './browserView'
+import { registerBrowserView, sendBrowserState } from './registerBrowserView'
 import type { LocalCodexIpcController } from './registerLocalCodex'
 import { LocalCodexBackendAdapter } from './localCodexBackendAdapter'
 import { minimizeInsteadOfClosingForActiveWork } from './windowLifecycle'
@@ -49,6 +51,8 @@ let unregisterWorkspaceServices: (() => void) | undefined
 let unregisterLanguageProfiles: (() => void) | undefined
 let unregisterWorkspacePreview: (() => void) | undefined
 let workspacePreviewController: WorkspacePreviewController | undefined
+let unregisterBrowserView: (() => void) | undefined
+let browserViewController: BrowserViewController | undefined
 let quitRequested = false
 
 function getRendererDevOrigin(): string | undefined {
@@ -99,6 +103,9 @@ function createMainWindow(): BrowserWindow {
   window.webContents.on('did-start-navigation', (details) => {
     if (details.isMainFrame && !details.isSameDocument) {
       trustedFrame.invalidateNavigation(window.webContents)
+      // A reloaded shell no longer owns the native views drawn over it.
+      browserViewController?.close()
+      workspacePreviewController?.close()
     }
   })
   window.webContents.on('did-finish-load', () => {
@@ -115,6 +122,8 @@ function createMainWindow(): BrowserWindow {
   })
   window.on('closed', () => {
     trustedFrame.unregister(window)
+    browserViewController?.close()
+    workspacePreviewController?.close()
     if (mainWindow === window) mainWindow = undefined
   })
   window.on('close', (event) => {
@@ -255,9 +264,28 @@ void app.whenReady().then(async () => {
     guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
     invokePairedLocalCodex: connection.invokePairedLocalCodex,
     serverUrl: async () => (await connection.describe()).serverUrl,
-    open: async (url, bounds) => { await workspacePreviewController?.open(url, bounds) },
+    open: async (url, bounds) => {
+      // Only one native view is drawn over the workbench at a time.
+      browserViewController?.close()
+      await workspacePreviewController?.open(url, bounds)
+    },
     setBounds: (bounds) => workspacePreviewController?.setBounds(bounds) ?? false,
     close: () => workspacePreviewController?.close() ?? false,
+  })
+  browserViewController = new BrowserViewController({
+    // The controller only adds and removes the WebContentsView it created itself.
+    getWindow: () => mainWindow as unknown as BrowserWindowLike | undefined,
+    onState: (state) => sendBrowserState(mainWindow, state),
+  })
+  unregisterBrowserView = registerBrowserView({
+    ipc: {
+      handle: (channel, handler) => ipcMain.handle(channel, (event, ...args) => handler(event, ...args)),
+      removeHandler: (channel) => ipcMain.removeHandler(channel),
+    },
+    guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
+    controller: () => browserViewController,
+    beforeOpen: () => { workspacePreviewController?.close() },
+    openExternal: (url) => shell.openExternal(url),
   })
   registerBridgeHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, (event, ...args) => handler(event, ...args)),
@@ -289,6 +317,10 @@ app.on('before-quit', () => {
   unregisterWorkspacePreview = undefined
   workspacePreviewController?.close()
   workspacePreviewController = undefined
+  unregisterBrowserView?.()
+  unregisterBrowserView = undefined
+  browserViewController?.close()
+  browserViewController = undefined
   localCodexBackendAdapter?.close()
   localCodexBackendAdapter = undefined
   localCodexController?.close()

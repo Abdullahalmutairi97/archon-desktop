@@ -4,17 +4,17 @@ import { resolveShellShortcut, type ShortcutState } from './shortcuts'
 const closed: ShortcutState = { appearanceOpen: false, paletteOpen: false, benchOpen: false }
 
 describe('reconstruction shell keyboard map', () => {
-  it('keeps Ctrl+Backslash on sidebar collapse and maps the four workbench panels', () => {
+  it('keeps Ctrl+Backslash on sidebar collapse and maps the five workbench panels', () => {
     expect(resolveShellShortcut({ key: '\\', code: 'Backslash', ctrlKey: true, metaKey: false, altKey: false }, closed))
       .toEqual({ type: 'toggle-sidebar' })
 
-    const panels = ['activity', 'files', 'terminal', 'browser'] as const
+    const panels = ['activity', 'files', 'browser', 'terminal', 'preview'] as const
     panels.forEach((bench, index) => {
       expect(resolveShellShortcut({ key: String(index + 1), code: `Digit${index + 1}`, ctrlKey: true, metaKey: false, altKey: false }, closed))
         .toEqual({ type: 'open-bench', bench })
     })
-    // The IDE panel was removed; Ctrl+5 opens nothing.
-    expect(resolveShellShortcut({ key: '5', code: 'Digit5', ctrlKey: true, metaKey: false, altKey: false }, closed)).toBeNull()
+    // The IDE panel was removed; Ctrl+6 opens nothing.
+    expect(resolveShellShortcut({ key: '6', code: 'Digit6', ctrlKey: true, metaKey: false, altKey: false }, closed)).toBeNull()
   })
 
   it('closes only the topmost UI layer on Escape', () => {

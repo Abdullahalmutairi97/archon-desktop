@@ -1,0 +1,25 @@
+/* Workbench browser. Logical sides only, so the panel mirrors in RTL; addresses stay LTR. */
+.live-browser { display: flex; flex-direction: column; gap: 8px; flex: 1; min-block-size: 0; font-size: calc(11px * var(--font-scale)); }
+.live-browser-toolbar { display: flex; align-items: center; gap: 4px; }
+.live-browser-toolbar button { font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; min-inline-size: 28px; block-size: 28px; padding-inline: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.live-browser-toolbar button:disabled { opacity: 0.45; cursor: default; }
+.live-browser-toolbar svg { inline-size: 14px; block-size: 14px; }
+/* The chevron points toward the inline end; back points toward the start. */
+.live-browser-back svg { transform: scaleX(-1); }
+.live-browser-back:dir(rtl) svg { transform: none; }
+.live-browser-forward:dir(rtl) svg { transform: scaleX(-1); }
+.live-browser-address { display: flex; flex: 1; min-inline-size: 0; gap: 4px; }
+.live-browser-address input { flex: 1; min-inline-size: 0; font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding-block: 5px; padding-inline: 8px; text-align: start; }
+.live-browser-status { margin: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-browser-error { margin: 0; color: #d27272; line-height: 1.45; overflow-wrap: anywhere; }
+.live-browser-note { margin: 0; color: var(--muted); }
+.live-browser-sources { display: grid; gap: 4px; }
+.live-browser-sources-heading { display: flex; justify-content: space-between; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; font-size: calc(9px * var(--font-scale)); }
+.live-browser-sources ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-block-size: 132px; overflow: auto; }
+.live-browser-sources button { font: inherit; inline-size: 100%; text-align: start; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding-block: 5px; padding-inline: 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-browser-sources button:disabled { opacity: 0.6; cursor: default; }
+.live-browser-surface { flex: 1; min-block-size: 260px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; }
+.live-browser-surface.open { background: #ffffff; }
+.live-browser-empty { display: grid; justify-items: center; gap: 6px; padding: 16px; color: var(--muted); text-align: center; }
+.live-browser-empty svg { inline-size: 22px; block-size: 22px; }
+.live-browser-empty b { color: var(--text); font-weight: 600; }
