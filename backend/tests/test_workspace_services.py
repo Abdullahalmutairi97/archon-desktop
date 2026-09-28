@@ -366,7 +366,11 @@ async def test_resource_summary_counts_running_reserved_memory(tmp_path):
     manager._spawn = fake_spawn
     await manager.define(WORKSPACE_ID, _definition(name="a", argv=["/bin/sleep", "5"], memoryLimitMb=128))
     empty = await manager.resource_summary(WORKSPACE_ID)
-    assert empty["services"] == {"registered": 1, "running": 0, "reservedMemoryMb": 0, "maxTotalMemoryMb": 4096}
+    assert empty["services"] == {
+        "registered": 1, "running": 0, "reservedMemoryMb": 0, "maxTotalMemoryMb": 4096,
+        "declaredCpuPercent": 0, "declaredTasksMax": 0,
+        "filesystemConfined": 0, "networkIsolated": 0, "maxServices": 8,
+    }
     await manager.start(WORKSPACE_ID, "a")
     running = await manager.resource_summary(WORKSPACE_ID)
     assert running["services"]["running"] == 1
@@ -463,7 +467,17 @@ def test_local_owner_workspace_service_api_contract(tmp_path):
         assert resources.status_code == 200
         assert resources.headers["cache-control"] == "no-store"
         body = resources.json()
-        assert body["services"] == {"registered": 0, "running": 0, "reservedMemoryMb": 0, "maxTotalMemoryMb": 4096}
+        assert body["services"]["registered"] == 0
+        assert body["services"]["running"] == 0
+        assert body["services"]["reservedMemoryMb"] == 0
+        assert body["services"]["maxTotalMemoryMb"] == 4096
+        assert body["services"]["maxServices"] == 8
+        # Aggregate accounting: what this server can observe, plus what it cannot.
+        assert body["workspace"] == {"workspaceId": workspace_id, "generation": 2}
+        assert body["agentTasks"] == {"queued": 0, "running": 0, "cancelling": 0}
+        assert body["terminals"]["max"] >= 1
+        assert any("outside the workspace service manager" in row for row in body["unaccounted"])
+        assert "not a reservation" in body["note"]
         assert body["terminals"] == {"count": 0, "max": 16}
 
 
@@ -786,3 +800,72 @@ async def test_this_host_blocks_network_access_inside_the_sandbox():
     from archon_server.sandbox import probe_network_isolation
 
     assert await asyncio.to_thread(probe_network_isolation) is True
+
+@pytest.mark.asyncio
+async def test_resource_summary_reports_declared_controls_and_limits(tmp_path):
+    manager, launches = _recording_manager(
+        tmp_path, memory_enforcement=True, cpu_enforcement=True, tasks_enforcement=True,
+        filesystem_enforcement=True, network_enforcement=False,
+    )
+    await manager.define(WORKSPACE_ID, _definition(
+        name="bounded", argv=["/bin/sleep", "5"], memoryLimitMb=256, cpuQuotaPercent=50,
+        tasksMax=64, filesystemIsolation="workspace-only",
+    ))
+    await manager.define(WORKSPACE_ID, _definition(name="plain", argv=["/bin/sleep", "5"]))
+    await manager.start(WORKSPACE_ID, "bounded")
+    await manager.start(WORKSPACE_ID, "plain")
+
+    summary = await manager.resource_summary(WORKSPACE_ID)
+    assert summary["services"] == {
+        "registered": 2, "running": 2, "reservedMemoryMb": 256, "maxTotalMemoryMb": 4096,
+        "declaredCpuPercent": 50, "declaredTasksMax": 64,
+        "filesystemConfined": 1, "networkIsolated": 0, "maxServices": manager.max_services,
+    }
+    await manager.shutdown()
+    stopped = await manager.resource_summary(WORKSPACE_ID)
+    # A stopped service reserves nothing, however much it declared.
+    assert stopped["services"]["running"] == 0
+    assert stopped["services"]["reservedMemoryMb"] == 0
+    assert stopped["services"]["declaredCpuPercent"] == 0
+
+def test_resource_summary_counts_agent_tasks_bound_to_the_checkout(tmp_path):
+    """Agent tasks bound to the root appear; a task elsewhere does not."""
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        workspace_root = tmp_path / "resource-checkout"
+        workspace_root.mkdir()
+        workspace_id = "workspace-dddddddddddddddddddddddddddddddd"
+        client.app.state.store.db.create_workspace(
+            workspace_id=workspace_id,
+            root=str(workspace_root),
+            owner_id=f"local-uid:{os.geteuid()}",
+            project_id="project-resources",
+            generation=1,
+            isolation_profile="git-checkout",
+        )
+        # One queued task inside the checkout, one running task in a sibling folder.
+        client.app.state.store.submit("inside", cwd=str(workspace_root), approval_mode="auto")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        running = client.app.state.store.submit("outside", cwd=str(elsewhere), approval_mode="auto")
+        with client.app.state.store.db.transaction() as conn:
+            conn.execute("UPDATE tasks SET status='running' WHERE id=?", (running["id"],))
+
+        body = client.get(f"/api/local/workspaces/{workspace_id}/resources", headers=headers).json()
+        assert body["agentTasks"] == {"queued": 1, "running": 0, "cancelling": 0}
+
+        # The same predicate the file-write guard uses: a task one level below counts.
+        nested = workspace_root / "nested"
+        nested.mkdir()
+        client.app.state.store.submit("nested", cwd=str(nested), approval_mode="auto")
+        body = client.get(f"/api/local/workspaces/{workspace_id}/resources", headers=headers).json()
+        assert body["agentTasks"]["queued"] == 2
+

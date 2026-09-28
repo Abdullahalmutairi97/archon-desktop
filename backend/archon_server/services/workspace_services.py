@@ -368,18 +368,39 @@ class WorkspaceServiceManager:
             record = self._load(workspace)
             running = 0
             reserved = 0
+            cpu_quota = 0
+            tasks_max = 0
+            filesystem_confined = 0
+            network_isolated = 0
             for item in record["services"]:
                 runtime = self._runtime.get((workspace_id, item["name"]))
-                if runtime is not None and runtime["state"] in {"starting", "running"}:
-                    running += 1
-                    if item.get("memoryLimitMb") is not None:
-                        reserved += item["memoryLimitMb"]
+                if runtime is None or runtime["state"] not in {"starting", "running"}:
+                    continue
+                running += 1
+                if item.get("memoryLimitMb") is not None:
+                    reserved += item["memoryLimitMb"]
+                if item.get("cpuQuotaPercent") is not None:
+                    cpu_quota += item["cpuQuotaPercent"]
+                if item.get("tasksMax") is not None:
+                    tasks_max += item["tasksMax"]
+                if item.get("filesystemIsolation") == "workspace-only":
+                    filesystem_confined += 1
+                if item.get("networkIsolation") == "isolated":
+                    network_isolated += 1
             return {
                 "services": {
                     "registered": len(record["services"]),
                     "running": running,
                     "reservedMemoryMb": reserved,
                     "maxTotalMemoryMb": self.max_total_memory_mb,
+                    # Sums of declared controls for running services, so an operator can
+                    # see what the host is actually carrying. A sum is not a guarantee:
+                    # each control was probe-verified for its own service.
+                    "declaredCpuPercent": cpu_quota,
+                    "declaredTasksMax": tasks_max,
+                    "filesystemConfined": filesystem_confined,
+                    "networkIsolated": network_isolated,
+                    "maxServices": self.max_services,
                 },
             }
 

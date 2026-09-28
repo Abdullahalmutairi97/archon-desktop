@@ -1702,13 +1702,54 @@ def create_app(
         current_owner_workspace(workspace_id)
         return {"services": await workspace_service_manager().list(workspace_id)}
 
+    def workspace_agent_task_counts(root: str) -> dict[str, int]:
+        """Count agent tasks bound to this checkout, using the workspace write guard.
+
+        The predicate is the same one the file-write path uses to refuse an edit
+        while a task is active: the task cwd is the workspace root or below it.
+        """
+        with store.db.connect() as conn:
+            rows = conn.execute(
+                """SELECT status, COUNT(*) AS total FROM tasks
+                   WHERE cwd=? OR substr(cwd,1,length(?)+1)=? || '/'
+                   GROUP BY status""",
+                (root, root, root),
+            ).fetchall()
+        counts = {str(row["status"]): int(row["total"]) for row in rows}
+        return {
+            "queued": counts.get("queued", 0),
+            "running": counts.get("running", 0),
+            "cancelling": counts.get("cancelling", 0),
+        }
+
     @app.get("/api/local/workspaces/{workspace_id}/resources", dependencies=[Depends(require_local_owner)])
     async def local_workspace_resources(workspace_id: str):
-        current_owner_workspace(workspace_id)
+        """Aggregate what this server can actually observe for one checkout.
+
+        Counts and declared controls only: language servers inside code-server, REPL
+        kernels inside a runtime process, and native processes started outside the
+        service manager are listed as unaccounted rather than estimated.
+        """
+        workspace = current_owner_workspace(workspace_id)
         summary = await workspace_service_manager().resource_summary(workspace_id)
         terminal_service = workspace_terminal_service()
         terminals = await terminal_service.list(workspace_id)
         summary["terminals"] = {"count": len(terminals), "max": terminal_service.max_sessions}
+        summary["workspace"] = {
+            "workspaceId": workspace_id,
+            "generation": workspace["generation"],
+        }
+        summary["agentTasks"] = workspace_agent_task_counts(workspace["root"])
+        summary["unaccounted"] = [
+            "language servers and extensions that run inside the IDE service process",
+            "REPL kernels that run inside a runtime task process",
+            "native processes started outside the workspace service manager",
+        ]
+        summary["note"] = (
+            "Counts are observed at request time and are not a reservation: a native "
+            "process outside the service manager still consumes host resources without "
+            "appearing here."
+        )
         return JSONResponse(content=summary, headers={"Cache-Control": "no-store"})
 
     @app.put(

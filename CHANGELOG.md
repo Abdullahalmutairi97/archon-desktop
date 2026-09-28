@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — aggregate resource accounting
+
+- Extend `GET /api/local/workspaces/{id}/resources`: the service block now reports the sums of declared CPU quota, task limit and the confined/isolated service counts for running services beside the memory reservation; the report adds the workspace identity and generation, the count of agent tasks bound to that checkout (queued/running/cancelling, using the same cwd predicate the file-write guard uses), and an explicit `unaccounted` list — language servers inside the IDE process, REPL kernels inside a runtime task, and native processes started outside the service manager — with a note that counts are observations, not reservations.
+
 ## Unreleased — review fixes for the newest security code
 
 - **Lease race (high).** `WorkspaceWriteLease.acquire`/`release` were unlocked read-modify-write cycles, so two writers could both record themselves as holder. Each cycle now runs under an in-process lock plus an flock on a private `<root>/.leases.lock`, with thread and cross-process tests that assert exactly one holder.
