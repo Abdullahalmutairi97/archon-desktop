@@ -134,6 +134,7 @@ class PrimeRunner:
         default_cwd: Path | None = None,
         agent_session_root: Path | None = None,
         isolation: RuntimeConfinement | None = None,
+        native_home: Path | None = None,
     ):
         self.executable = Path(executable).expanduser().absolute()
         self.session_root = Path(session_root or (Path.home() / '.local/share/archon-desktop/prime-sessions'))
@@ -141,6 +142,9 @@ class PrimeRunner:
         self.agent_session_root = Path(agent_session_root or (Path.home() / '.prime/agent/sessions'))
         # Off by default; see RuntimeConfinement for what is and is not qualified.
         self.isolation = isolation or RuntimeConfinement()
+        # Prime's own settings and credentials; a confined run sees them through
+        # a discarded write layer so it can take its lock files.
+        self.native_home = Path(native_home or (Path.home() / '.prime'))
         self._active: dict[str, asyncio.subprocess.Process] = {}
         # Native session path per active attempt, resolved by run() so the native
         # lease and the process-wide lease cover the same run window.
@@ -352,7 +356,10 @@ class PrimeRunner:
             temp_root = self.session_root / session_id / "tmp"
             temp_root.mkdir(parents=True, exist_ok=True)
             writable = [agent_path if agent_session else session_dir, temp_root]
-            argv = self.isolation.command(argv=argv, cwd=cwd, writable_roots=writable)
+            argv = self.isolation.command(
+                argv=argv, cwd=cwd, writable_roots=writable,
+                private_homes=[self.native_home], search_path=child_env.get("PATH"),
+            )
             child_env["TMPDIR"] = str(temp_root)
         process = await asyncio.create_subprocess_exec(
             *supervised_argv(argv), cwd=str(cwd), env=child_env, stdin=asyncio.subprocess.PIPE,

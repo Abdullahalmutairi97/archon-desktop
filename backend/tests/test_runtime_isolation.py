@@ -5,7 +5,10 @@ import asyncio
 import json
 import os
 import shutil
+import socket
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -66,7 +69,8 @@ def test_missing_sandbox_refuses_the_run_instead_of_launching_unconfined():
 def test_network_isolation_adds_the_namespace_option():
     argv = bubblewrap_argv([Path("/tmp/x")], isolate_network=True)
     assert "--unshare-net" in argv
-    assert "bwrap" in argv and argv.count("--ro-bind") == 1
+    assert "bwrap" in argv
+    assert argv[argv.index("--ro-bind") + 1:argv.index("--ro-bind") + 3] == ["/", "/"]
 
 
 @pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is unavailable on this host")
@@ -222,3 +226,217 @@ def test_filesystem_probe_requires_the_writable_root_to_stay_writable(tmp_path):
         assert probe_filesystem_confinement(checkout) is False
     finally:
         os.chmod(checkout, 0o700)
+
+
+def _masks(argv: list[str]) -> list[str]:
+    return [argv[index + 1] for index, item in enumerate(argv) if item == "--tmpfs"]
+
+
+def test_confined_view_hides_host_ipc_scratch_and_devices(tmp_path):
+    """A read-only bind does not stop connect(), so IPC locations must be hidden."""
+    argv = bubblewrap_argv([tmp_path])
+    for root in ("/run", "/tmp", "/var/tmp"):
+        assert root in _masks(argv)
+    # A private minimal /dev replaces the host one (shared memory, device nodes).
+    assert argv[argv.index("--dev") + 1] == "/dev" and "--dev-bind" not in argv
+    # No process started inside may outlive the sandbox or signal host processes.
+    assert "--unshare-pid" in argv and "--die-with-parent" in argv
+    # Writable roots are bound after every mask, so they stay writable.
+    assert argv.index("--bind") > max(index for index, item in enumerate(argv) if item == "--tmpfs")
+
+
+def test_network_only_isolation_still_owns_its_pid_namespace():
+    argv = bubblewrap_argv([], confine_filesystem=False, isolate_network=True)
+    assert "--unshare-pid" in argv and "--unshare-net" in argv
+    assert "--tmpfs" not in argv
+
+
+def test_view_layers_apply_in_order(tmp_path):
+    home = tmp_path / "home"
+    package = home / "lib" / "pkg"
+    config = home / ".runtime"
+    for directory in (package, config):
+        directory.mkdir(parents=True)
+    view = sandbox.SandboxView(
+        masked_roots=(home,),
+        symlinks=(("../lib/pkg/cli", home / "bin" / "tool"),),
+        readable_paths=(package,),
+        private_homes=(config,),
+    )
+    argv = bubblewrap_argv([home / "work"], view=view)
+    mask = argv.index(str(home))
+    link = argv.index("--symlink")
+    readable = argv.index(str(package))
+    overlay = argv.index("--tmp-overlay")
+    writable = argv.index("--bind")
+    assert argv[mask - 1] == "--tmpfs"
+    assert mask < link < readable < overlay < writable
+    assert argv[overlay - 2:overlay + 2] == ["--overlay-src", str(config), "--tmp-overlay", str(config)]
+
+
+def test_program_view_follows_links_and_the_interpreter_into_masked_locations(tmp_path):
+    home = tmp_path / "home"
+    package = home / ".local" / "lib" / "node_modules" / "@scope" / "agent"
+    (package / "dist").mkdir(parents=True)
+    script = package / "dist" / "cli.js"
+    script.write_text("#!/usr/bin/env fakenode\nconsole.log(1)\n")
+    script.chmod(0o755)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "agent").symlink_to("../lib/node_modules/@scope/agent/dist/cli.js")
+    node_bin = home / ".local" / "share" / "node" / "bin"
+    node_bin.mkdir(parents=True)
+    interpreter = node_bin / "fakenode"
+    interpreter.write_text("#!/bin/sh\n")
+    interpreter.chmod(0o755)
+
+    links, readable = sandbox.program_view(
+        str(bin_dir / "agent"), search_path=str(node_bin), masked=[home],
+    )
+
+    assert links == (("../lib/node_modules/@scope/agent/dist/cli.js", bin_dir / "agent"),)
+    # The whole package (its modules and dependencies) and the interpreter's own
+    # directory are shown; nothing else of the masked home is.
+    assert readable == (package, node_bin)
+    # A program outside every masked location needs nothing re-exposed.
+    assert sandbox.program_view("/bin/sh", masked=[home]) == ((), ())
+
+
+def test_program_view_never_reexposes_a_whole_masked_location(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    tool = home / "tool"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    _links, readable = sandbox.program_view(str(tool), masked=[home])
+    # Its directory is the masked home itself, so only the file is shown.
+    assert readable == (tool,)
+
+
+def test_confined_command_refuses_a_writable_root_that_would_unmask_a_location(tmp_path):
+    view = sandbox.SandboxView(masked_roots=(tmp_path / "home",))
+    for root in (Path("/"), Path("/tmp"), Path("/run"), tmp_path / "home", tmp_path):
+        with pytest.raises(ValueError):
+            confined_command(argv=["/bin/true"], cwd=root, writable_roots=[], view=view)
+    # A root below a masked location is fine: it is bound over the mask.
+    workspace = tmp_path / "home" / "checkout"
+    argv = confined_command(argv=["/bin/true"], cwd=workspace, writable_roots=[], view=view)
+    assert [str(workspace), str(workspace)] == argv[argv.index("--bind") + 1:argv.index("--bind") + 3]
+
+
+def test_runtime_confinement_refuses_to_confine_a_run_in_the_home_directory():
+    confinement = RuntimeConfinement("workspace-only", prober=lambda _path: True)
+    with pytest.raises(RuntimeConfinementUnavailable) as refused:
+        confinement.command(argv=["/bin/true"], cwd=Path.home(), writable_roots=[])
+    assert "the run was not started" in str(refused.value)
+
+
+def test_runtime_confinement_masks_the_home_and_shows_the_native_home_privately(tmp_path):
+    native = tmp_path / "native"
+    native.mkdir()
+    extra = tmp_path / "extra"
+    confinement = RuntimeConfinement("workspace-only", prober=lambda _path: True, readable_paths=[extra])
+    checkout = tmp_path / WORKSPACE_DIRNAME
+    argv = confinement.command(
+        argv=["/bin/true"], cwd=checkout, writable_roots=[], private_homes=[native],
+    )
+    for home in sandbox.account_homes():
+        assert str(home) in _masks(argv)
+    assert argv[argv.index("--overlay-src") + 1] == str(native)
+    # A configured extra path is shown read-only when it exists, and skipped otherwise.
+    assert str(extra) not in argv
+    extra.mkdir()
+    argv = confinement.command(argv=["/bin/true"], cwd=checkout, writable_roots=[])
+    assert [str(extra), str(extra)] == argv[argv.index(str(extra)):argv.index(str(extra)) + 2]
+
+
+def _bwrap_supports_overlay() -> bool:
+    if shutil.which("bwrap") is None:
+        return False
+    try:
+        return "--tmp-overlay" in subprocess.run(
+            ["bwrap", "--help"], capture_output=True, text=True, timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is unavailable on this host")
+def test_filesystem_probe_refuses_a_view_that_leaves_host_ipc_reachable(monkeypatch):
+    """Regression: a read-only /tmp and /run still let a sandbox connect to host sockets.
+
+    That is how a confined process reached the user's session bus and ran
+    `systemd-run --user` outside the sandbox. The probe serves sockets in those
+    locations and must refuse a view that does not hide them.
+    """
+    monkeypatch.setattr(sandbox, "masked_system_roots", lambda: ())
+    outputs = _recording_run(monkeypatch)
+
+    assert probe_filesystem_confinement() is False
+    assert outputs and "reached=0" not in outputs[-1]
+    assert "denied=True" in outputs[-1] and "allowed=True" in outputs[-1]
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is unavailable on this host")
+def test_filesystem_probe_refuses_a_view_that_lets_a_process_outlive_it(monkeypatch):
+    """Regression: a daemonizing child survived the sandbox without a PID namespace."""
+    real_argv = sandbox.bubblewrap_argv
+    monkeypatch.setattr(
+        sandbox, "bubblewrap_argv",
+        lambda roots, **kwargs: [item for item in real_argv(roots, **kwargs) if item != "--unshare-pid"],
+    )
+    outputs = _recording_run(monkeypatch)
+
+    assert probe_filesystem_confinement() is False
+    # Every other leg held, so the refusal is the survivor check's.
+    assert outputs and "reached=0" in outputs[-1] and "denied=True" in outputs[-1]
+    assert not sandbox._survivors(sandbox.PROBE_PREFIX + "survivor-")
+
+
+@pytest.mark.skipif(not _bwrap_supports_overlay(), reason="bubblewrap has no --tmp-overlay on this host")
+def test_this_host_enforces_the_runtime_view_with_a_private_native_home():
+    """Evidence test: every probe leg, including the discarded configuration layer."""
+    assert probe_filesystem_confinement(private_homes=True) is True
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is unavailable on this host")
+def test_a_confined_command_cannot_see_the_account_home_or_host_sockets(tmp_path):
+    """Evidence test: the real view hides the home directory and /tmp sockets."""
+    checkout = tmp_path / WORKSPACE_DIRNAME
+    checkout.mkdir()
+    listener_dir = Path(tempfile.mkdtemp(prefix="archon-view-test-", dir="/tmp"))
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    path = str(listener_dir / "s")
+    try:
+        listener.bind(path)
+        listener.listen(1)
+        script = (
+            "import os, socket, sys\n"
+            "client = socket.socket(socket.AF_UNIX)\n"
+            "try:\n"
+            "    client.connect(sys.argv[1]); reached = True\n"
+            "except OSError:\n"
+            "    reached = False\n"
+            "home = os.path.expanduser('~')\n"
+            "print('reached=%s home=%s' % (reached, ','.join(sorted(os.listdir(home))) or '-'))\n"
+        )
+        view = sandbox.workspace_view("python3")
+        argv = confined_command(
+            argv=["python3", "-c", script, path], cwd=checkout, writable_roots=[], view=view,
+        )
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    finally:
+        listener.close()
+        shutil.rmtree(listener_dir, ignore_errors=True)
+    assert result.returncode == 0, result.stderr
+    fields = dict(item.split("=", 1) for item in result.stdout.split())
+    assert fields["reached"] == "False"
+    # The masked home holds nothing but the parents of what the view re-exposed.
+    shown = {
+        path.relative_to(Path.home()).parts[0]
+        for path in [*view.readable_paths, *(link for _target, link in view.symlinks)]
+        if sandbox._inside(path, Path.home())
+    }
+    visible = set() if fields["home"] == "-" else set(fields["home"].split(","))
+    assert visible <= shown
+    assert ".ssh" not in visible

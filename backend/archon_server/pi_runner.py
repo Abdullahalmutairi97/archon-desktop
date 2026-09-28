@@ -58,12 +58,16 @@ class PiRunner:
     """
 
     def __init__(self, executable: Path | str | None = None, session_root: Path | None = None,
-                 default_cwd: Path | None = None, isolation: RuntimeConfinement | None = None):
+                 default_cwd: Path | None = None, isolation: RuntimeConfinement | None = None,
+                 native_home: Path | None = None):
         self.executable = Path(executable or (Path.home() / ".local/bin/pi")).expanduser().absolute()
         self.session_root = Path(session_root or (Path.home() / ".local/share/archon-desktop/pi-sessions")).expanduser()
         self.default_cwd = Path(default_cwd or Path.home()).expanduser()
         # Off by default; see RuntimeConfinement for what is and is not qualified.
         self.isolation = isolation or RuntimeConfinement()
+        # Pi's own settings and credentials; a confined run sees them through a
+        # discarded write layer so it can take its lock files.
+        self.native_home = Path(native_home or (Path.home() / ".pi")).expanduser()
         self._active: dict[str, asyncio.subprocess.Process] = {}
         self._identities: dict[str, ProcessIdentity] = {}
         self._active_attempts: dict[str, str] = {}
@@ -137,7 +141,10 @@ class PiRunner:
                 # directory; a private temp directory keeps scratch writes bounded.
                 temp_root = session_dir / "tmp"
                 temp_root.mkdir(parents=True, exist_ok=True)
-                argv = self.isolation.command(argv=argv, cwd=cwd, writable_roots=[session_dir, temp_root])
+                argv = self.isolation.command(
+                    argv=argv, cwd=cwd, writable_roots=[session_dir, temp_root],
+                    private_homes=[self.native_home], search_path=child_env.get("PATH"),
+                )
                 child_env["TMPDIR"] = str(temp_root)
             process = await asyncio.create_subprocess_exec(
                 *supervised_argv(argv), cwd=str(cwd), env=child_env,

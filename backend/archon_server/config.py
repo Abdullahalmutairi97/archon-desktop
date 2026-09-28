@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     prime_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "prime-agent")
     pi_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "pi")
     runtime_isolation_profile: Literal["none", "workspace-only"] = "none"
+    # Host paths a confined runtime may read besides its own install tree and
+    # native home, for example a package its settings load from elsewhere.
+    runtime_isolation_readable_paths: list[Path] = Field(default_factory=list)
     code_server_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "code-server")
     # Where the owner places an artefact for an approved install request; None uses
     # a private directory under data_dir. The server only reads from it.

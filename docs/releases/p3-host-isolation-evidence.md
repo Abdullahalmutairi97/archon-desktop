@@ -78,6 +78,32 @@ A service may also declare `networkIsolation: "isolated"`. It then runs with `bw
 
 The agent-runtime profile now exists as an opt-in setting, `ARCHON_DESKTOP_RUNTIME_ISOLATION_PROFILE=workspace-only`: the Prime and Pi child that runs a task starts inside the same kind of sandbox, with only its checkout, its own session directory and a private temp directory writable. The probe must prove the mechanics before a run starts, and a host without them refuses the run instead of launching unconfined. What is verified is the sandbox mechanics and one sandboxed run of a fake runtime inside the repository's test suite (the checkout write succeeded, the `/etc` write was denied). What is **not** verified is runtime compatibility: no real provider turn has been executed inside the profile, so the profile stays off by default and must not be described as qualified.
 
+## Escape found and closed (2026-09-28)
+
+A follow-up check on the target workstation (`archonminipc`, bubblewrap 0.11.1) found that the `workspace-only` view above was escapable. The host was bound read-only, but `connect()` on a unix socket needs no write access to the mount, so every visible socket stayed reachable:
+
+- `systemd-run --user --wait touch <marker>` run **inside** the sandbox created the marker **outside** it, through the session bus in `/run/user/1000` (the direct `touch` of the same path was denied with `EROFS`).
+- `/run/docker.sock` (this account is in the `docker` group), libvirt, the system bus, a Prime daemon socket in `/tmp`, the code-server IPC socket under `~/.local/share`, `~/.ssh/id_ed25519` (with `sshd` listening on port 22) and the running server's environment file were all visible.
+- Prime 0.9.6 starts a daemon that calls `setsid`; after the sandboxed command exited, the daemon kept running inside the old mount namespace, reparented to the user manager, and a later run connected to it through its socket.
+
+Every confined view now owns a PID namespace, replaces `/run`, `/tmp`, `/var/tmp` and `/dev` with private empty ones (re-exposing `/run/systemd/resolve` read-only for DNS) and masks the account's home, showing back only the confined program's symlink chain, install tree and interpreter. The same commands, re-run through `confined_command(workspace_view("sh"))`:
+
+| Check from inside the view | Before | After |
+| --- | --- | --- |
+| `systemd-run --user --wait touch <marker>` | marker created on the host | exit 1, no marker |
+| `/run/docker.sock`, `/run/dbus/system_bus_socket` visible | yes | no |
+| `~/.ssh/id_ed25519`, code-server IPC socket, server `.prime.env` visible | yes | no |
+| Prime daemon socket in `/tmp` visible | yes | no |
+| Detached child alive after the command exits | yes | no (killed with the namespace) |
+| DNS (`getent hosts github.com`) | works | works |
+| Write inside the checkout | persisted | persisted |
+
+`node`, `npm` and `pi --version` start inside the masked view with only their install trees exposed. The probe now also requires sockets it serves in `/tmp` and in the runtime directory to refuse a connection from inside and a detached process not to survive, and regression tests fail the probe when either mask or the PID namespace is removed (`backend/tests/test_runtime_isolation.py`).
+
+For the agent-runtime profile, a bare Pi 0.87.1 turn and a bare Prime 0.9.6 turn both failed to start inside the earlier view (`EROFS` on `~/.pi/agent/settings.json.lock` and `~/.prime/agent/settings.json.lock`). With the runtime's native home shown through a discarded write layer, one Pi turn on `deepseek`/`deepseek-flash` returned `READY` inside the sandbox; that run used the earlier, unmasked home view, and no provider turn has been run in the final view. Prime additionally writes `session-artifacts` beside its session directory and still fails there. The runtime profile therefore stays off by default and is **not** qualified.
+
+What the view does not cover: the network namespace is shared unless `networkIsolation: "isolated"` is declared, so loopback and LAN services and abstract unix sockets remain reachable from a confined process; everything outside the hidden locations remains readable.
+
 ## Reproduction
 
 ```bash
@@ -88,6 +114,7 @@ systemd-run --user --scope --collect --quiet -p MemoryMax=128M -p MemorySwapMax=
 # PID
 systemd-run --user --scope --collect --quiet -p TasksMax=16 -- /usr/bin/python3 /tmp/p3-verify/fork_many.py
 # Filesystem
+# (historical; the current view adds --unshare-pid, --dev /dev and private /run, /tmp, /var/tmp and home)
 bwrap --ro-bind / / --dev-bind /dev /dev --proc /proc /bin/sh -c 'echo probe > /tmp/p3-verify/probe.txt; echo write-exit=$?'
 # Network
 bwrap --ro-bind / / --dev-bind /dev /dev --proc /proc --unshare-net /usr/bin/python3 /tmp/p3-verify/net_probe.py

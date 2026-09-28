@@ -848,7 +848,10 @@ def create_app(
     # One confinement policy for every runtime child this server launches; the
     # profile defaults to "none", and a requested profile that this host cannot
     # enforce makes the run fail closed instead of launching unconfined.
-    runtime_isolation = RuntimeConfinement(settings.runtime_isolation_profile)
+    runtime_isolation = RuntimeConfinement(
+        settings.runtime_isolation_profile,
+        readable_paths=settings.runtime_isolation_readable_paths,
+    )
     selected_runner = {
         "prime": PrimeRunner(
             settings.prime_executable,
@@ -856,12 +859,14 @@ def create_app(
             settings.archon_root,
             settings.prime_agent_session_dir,
             isolation=runtime_isolation,
+            native_home=settings.prime_resources_dir.parent,
         ),
         "pi": PiRunner(
             settings.pi_executable,
             settings.data_dir / "prime-sessions",
             settings.archon_root,
             isolation=runtime_isolation,
+            native_home=settings.pi_resources_dir.parent,
         ),
     }
     if runner is not None:

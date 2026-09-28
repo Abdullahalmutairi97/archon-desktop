@@ -24,7 +24,6 @@ import re
 import shutil
 import stat
 import subprocess
-import tempfile
 import urllib.request
 import uuid
 from collections import deque
@@ -39,7 +38,9 @@ from ..db import Database
 from ..sandbox import (
     bubblewrap_argv as shared_bubblewrap_argv,
     probe_filesystem_confinement,
+    masked_system_roots,
     probe_network_isolation,
+    workspace_view,
 )
 
 
@@ -593,6 +594,12 @@ class WorkspaceServiceManager:
         self._runtime[(workspace["workspace_id"], entry["name"])] = runtime
         try:
             await self._spawn_child(runtime, entry, cwd, env, Path(workspace["root"]))
+        except ValueError as exc:
+            runtime["state"] = "failed"
+            raise WorkspaceServiceUnavailable(
+                f"Workspace-only filesystem isolation cannot confine this service ({exc}); "
+                "the service was not started"
+            ) from exc
         except Exception:
             runtime["state"] = "failed"
             raise WorkspaceServiceUnavailable("Service could not be started")
@@ -714,9 +721,7 @@ class WorkspaceServiceManager:
     async def _ensure_filesystem_enforcement(self) -> bool:
         """Probe once whether a confined service really cannot write outside its workspace."""
         if self._filesystem_enforcement is None:
-            self._filesystem_enforcement = await asyncio.to_thread(
-                probe_filesystem_confinement, Path(tempfile.gettempdir())
-            )
+            self._filesystem_enforcement = await asyncio.to_thread(probe_filesystem_confinement)
         return self._filesystem_enforcement
 
     async def _ensure_network_enforcement(self) -> bool:
@@ -727,11 +732,24 @@ class WorkspaceServiceManager:
 
     @staticmethod
     def _bubblewrap_argv(writable_root: Path, *, confine_filesystem: bool = True,
-                         isolate_network: bool = False) -> list[str]:
-        """Confinement that leaves the host read-only and one directory writable."""
-        roots = [writable_root] if confine_filesystem else []
+                         isolate_network: bool = False, argv: list[str] | None = None,
+                         cwd: Path | None = None, search_path: str | None = None) -> list[str]:
+        """Confinement that leaves the host read-only and one directory writable.
+
+        A confined view also hides the account's home directory and the host's
+        IPC locations; only the service program's own install tree is shown
+        again, read-only, so it can start. A workspace that is, or contains, a
+        hidden location cannot be confined and is refused with ValueError.
+        """
+        if not confine_filesystem:
+            return shared_bubblewrap_argv([], confine_filesystem=False, isolate_network=isolate_network)
+        view = workspace_view(str((argv or [""])[0]), search_path=search_path, cwd=cwd or writable_root)
+        root = Path(os.path.abspath(writable_root))
+        hidden = (*masked_system_roots(), *view.masked_roots)
+        if root == Path("/") or any(root == mask or mask.is_relative_to(root) for mask in hidden):
+            raise ValueError(f"{root} would expose a masked location writable")
         return shared_bubblewrap_argv(
-            roots, confine_filesystem=confine_filesystem, isolate_network=isolate_network,
+            [root], confine_filesystem=True, isolate_network=isolate_network, view=view,
         )
 
 
@@ -765,7 +783,10 @@ class WorkspaceServiceManager:
         if confine_filesystem or isolate_network:
             root = writable_root or Path(runtime.get("writableRoot") or cwd)
             command = [
-                *self._bubblewrap_argv(root, confine_filesystem=confine_filesystem, isolate_network=isolate_network),
+                *self._bubblewrap_argv(
+                    root, confine_filesystem=confine_filesystem, isolate_network=isolate_network,
+                    argv=command, cwd=cwd, search_path=env.get("PATH"),
+                ),
                 "--chdir", str(cwd), "--", *command,
             ]
         # Enforce declared resource controls with a user-scoped cgroup. This host
