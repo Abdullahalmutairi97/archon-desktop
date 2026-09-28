@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — a handover must quiesce the writers it cannot see
+
+- Taking the workspace write lease now accounts for the writers a lease cannot name. `POST /api/local/workspaces/{id}/write-lease` reports the live writers (`terminals`, `services`, `agentTasks`) and refuses with 409 while this server's own terminals or services are still running, unless the caller passes `quiesce: true`, which stops them (terminals terminated, services stopped with confirmation) and verifies none remain before the lease is recorded. An agent task always refuses the handover, because this server cannot stop one mid-turn without leaving unknown side effects. Driving an existing shell already required the lease; that path now only reachable by seeding a competing lease, as a crash would leave it.
+
 ## Unreleased — bounded diagnostic capture
 
 - Add a private, redacted, expiring capture of runner diagnostics: `GET /api/local/diagnostics` (owner credential) returns the newest records with `rawCapture: false`, the caps and the TTL, and `DELETE` clears them. The task engine forwards every `diagnostic` event a runner emits to the ledger, and a failing sink can never fail a turn. Each record is capped, control characters are stripped and credential-shaped spans (assignments, bearer tokens, long opaque tokens) are redacted before the write; the ledger is 0600 with a bounded entry count, expires records after a TTL on read and write, and refuses an unsafe, malformed or oversized file. Raw process output is deliberately not stored, because a runtime's text cannot be proven free of credentials.

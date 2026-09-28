@@ -375,19 +375,109 @@ def test_terminal_input_requires_the_lease_but_interrupt_does_not(tmp_path):
         input_url = f"/api/local/workspaces/{workspace_id}/terminals/{session_id}/input"
         interrupt_url = f"/api/local/workspaces/{workspace_id}/terminals/{session_id}/interrupt"
 
-        # Creating the terminal claimed the lease for the owner, so hand it over first.
+        # Creating the terminal claimed the lease for the owner.
         owner = f"local-uid:{os.geteuid()}"
         assert client.request("DELETE", lease_url, headers=headers, json={"holder": owner}).status_code == 200
-        assert client.post(lease_url, headers=headers,
-                           json={"holder": "desktop-editor", "ttlSeconds": 300}).status_code == 200
+        # A handover is refused while that shell is still alive.
+        refused = client.post(lease_url, headers=headers,
+                              json={"holder": "desktop-editor", "ttlSeconds": 300})
+        assert refused.status_code == 409
+        assert "quiesce" in refused.json()["detail"]
+        assert "terminals" in refused.json()["detail"]
+
+        # A competing holder with a live shell (seeded directly, as a crash would leave
+        # it) still cannot drive that shell.
+        competing = WorkspaceWriteLease(tmp_path / ".data" / "workspace-write-leases")
+        competing.acquire(workspace_id, "desktop-editor", 300)
         blocked = client.post(input_url, headers=headers, json={"line": "touch /tmp/should-not-run"})
         assert blocked.status_code == 409
         assert "desktop-editor" in blocked.json()["detail"]
         assert client.post(interrupt_url, headers=headers).status_code in (200, 409, 504)
 
-        # The lease holder may drive the shell again after taking the workspace back.
-        assert client.request("DELETE", lease_url, headers=headers,
-                              json={"holder": "desktop-editor"}).status_code == 200
+        # The holder may drive the shell again once the competing lease is gone.
+        competing.release(workspace_id, "desktop-editor")
         allowed = client.post(input_url, headers=headers, json={"line": "echo hello"})
         assert allowed.status_code in (200, 504)
+
+def test_handover_requires_quiescing_writers_and_never_kills_a_task(tmp_path):
+    """A lease names one holder; live writers must stop first, and a task always blocks."""
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+        local_workspace_terminal_tmux_executable=str(_fake_tmux(tmp_path)),
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        workspace_root = tmp_path / "handover-checkout"
+        workspace_root.mkdir()
+        workspace_root.chmod(0o700)
+        workspace_id = "workspace-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2"
+        client.app.state.store.db.create_workspace(
+            workspace_id=workspace_id,
+            root=str(workspace_root),
+            owner_id=f"local-uid:{os.geteuid()}",
+            project_id="project-handover",
+            generation=1,
+            isolation_profile="git-checkout",
+        )
+        lease_url = f"/api/local/workspaces/{workspace_id}/write-lease"
+        owner = f"local-uid:{os.geteuid()}"
+
+        # An agent task bound to the checkout blocks the handover even with quiesce.
+        client.app.state.store.submit("agent work", cwd=str(workspace_root), approval_mode="auto")
+        blocked = client.post(lease_url, headers=headers,
+                              json={"holder": "desktop-editor", "quiesce": True})
+        assert blocked.status_code == 409
+        assert "agent task" in blocked.json()["detail"]
+        with client.app.state.store.db.transaction() as conn:
+            conn.execute("UPDATE tasks SET status='cancelled' WHERE cwd=?", (str(workspace_root),))
+
+        # With a live shell, quiescing stops it and the handover then succeeds.
+        created = client.post(f"/api/local/workspaces/{workspace_id}/terminals", headers=headers,
+                              json={"expectedGeneration": 1})
+        assert created.status_code == 201, created.text
+        assert client.request("DELETE", lease_url, headers=headers,
+                              json={"holder": owner}).status_code == 200
+        without = client.post(lease_url, headers=headers, json={"holder": "desktop-editor"})
+        assert without.status_code == 409 and "quiesce" in without.json()["detail"]
+        with_quiesce = client.post(lease_url, headers=headers,
+                                   json={"holder": "desktop-editor", "quiesce": True})
+        assert with_quiesce.status_code == 200, with_quiesce.text
+        # The shell was stopped before the handover was recorded.
+        assert client.get(f"/api/local/workspaces/{workspace_id}/terminals", headers=headers).json() == {"terminals": []}
+        assert client.get(lease_url, headers=headers).json()["holder"] == "desktop-editor"
+
+
+def test_a_quiet_workspace_hands_over_without_quiesce(tmp_path):
+    """No writers means no extra ceremony, and the inventory is reported."""
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        workspace_root = tmp_path / "quiet-checkout"
+        workspace_root.mkdir()
+        workspace_root.chmod(0o700)
+        workspace_id = "workspace-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3"
+        client.app.state.store.db.create_workspace(
+            workspace_id=workspace_id,
+            root=str(workspace_root),
+            owner_id=f"local-uid:{os.geteuid()}",
+            project_id="project-quiet",
+            generation=1,
+            isolation_profile="git-checkout",
+        )
+        acquired = client.post(f"/api/local/workspaces/{workspace_id}/write-lease", headers=headers,
+                               json={"holder": "desktop-editor", "ttlSeconds": 300})
+        assert acquired.status_code == 200, acquired.text
+        assert acquired.json()["lease"]["writers"] == {"terminals": 0, "services": 0, "agentTasks": 0}
 

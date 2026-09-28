@@ -128,9 +128,10 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    once and record what was observed; do not turn those constants on without that. Also
    open: Pylance is proprietary and absent, and there is no JavaScript debugger pin.
 3. **P3 resource accounting and lease remainder** — the owner-only resources summary now
-   covers services, terminals and agent tasks bound to the checkout, and names what it
-   cannot see (language servers inside the IDE process, kernels inside a runtime, native
-   processes outside the manager). Still open: fence the writers the lease does not reach:
+   covers services, terminals and agent tasks bound to the checkout and names what it
+   cannot see, and a lease handover now refuses while this server's own writers are alive
+   or an agent task is active, with an explicit `quiesce` path that stops them and
+   verifies the checkout is quiet. Still open: fence the writers the lease does not reach:
    kernels, debugger/run tasks (no implementation exists to fence yet) and existing
    detached tmux children, which a later handover does not revoke.
 4. **P2D blocked gates** — the Chromium OS sandbox and the native keyring need a

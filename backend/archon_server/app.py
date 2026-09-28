@@ -443,6 +443,9 @@ class WorkspaceWriteLeaseRequest(BaseModel):
 
     holder: str = Field(min_length=1, max_length=128)
     ttl_seconds: int | None = Field(default=None, alias="ttlSeconds", strict=True, ge=5, le=3600)
+    # Handing a workspace over while its own terminals and services are still running
+    # is refused unless the caller asks to stop them first.
+    quiesce: bool = Field(default=False, strict=True)
 
 
 class WorkspaceWriteLeaseReleaseRequest(BaseModel):
@@ -1488,16 +1491,76 @@ def create_app(
         except (WorkspaceWriteLeaseUnavailable, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    async def workspace_live_writers(workspace_id: str, workspace: Mapping[str, Any]) -> dict[str, int]:
+        """Count the server-owned writers that are still attached to this checkout."""
+        terminals = 0
+        if local_workspace_terminals is not None:
+            terminals = len(await local_workspace_terminals.list(workspace_id))
+        services = 0
+        if local_workspace_services is not None:
+            rows = await local_workspace_services.list(workspace_id)
+            services = len([row for row in rows if row.get("state") in {"starting", "running"}])
+        return {
+            "terminals": terminals,
+            "services": services,
+            "agentTasks": sum(workspace_agent_task_counts(workspace["root"]).values()),
+        }
+
     @app.post("/api/local/workspaces/{workspace_id}/write-lease", dependencies=[Depends(require_local_owner)])
     async def local_workspace_write_lease_acquire(workspace_id: str, payload: WorkspaceWriteLeaseRequest):
-        current_owner_workspace(workspace_id)
+        """Take the workspace write lease, and refuse a handover that is not quiesced.
+
+        A lease only names one holder; the processes already running in the checkout
+        keep writing until they stop. Taking the lease while this server's own
+        terminals or services are alive is therefore refused, with the inventory in
+        the error, unless the caller asks to stop them first (`quiesce`). An agent
+        task always blocks the handover: this server cannot stop one mid-turn without
+        leaving unknown side effects, so the caller must wait or cancel it.
+        """
+        workspace = current_owner_workspace(workspace_id)
+        writers = await workspace_live_writers(workspace_id, workspace)
+        if writers["agentTasks"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Workspace has an active agent task; wait for it or cancel it before "
+                    f"taking the write lease (writers={writers})"
+                ),
+            )
+        if (writers["terminals"] or writers["services"]) and not payload.quiesce:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Workspace still has running writers; stop them or retry with "
+                    f"quiesce=true (writers={writers})"
+                ),
+            )
+        if payload.quiesce:
+            # Stop the server-owned writers before the new holder is recorded. A stop
+            # failure aborts the handover instead of leaving two writers behind.
+            if local_workspace_terminals is not None:
+                for terminal in await local_workspace_terminals.list(workspace_id):
+                    await local_workspace_terminals.terminate(
+                        workspace_id, terminal["sessionId"], confirm=True,
+                    )
+            if local_workspace_services is not None:
+                for row in await local_workspace_services.list(workspace_id):
+                    if row.get("state") in {"starting", "running"}:
+                        await local_workspace_services.stop(workspace_id, row["name"], confirm=True)
+            remaining = await workspace_live_writers(workspace_id, workspace)
+            if remaining["terminals"] or remaining["services"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Workspace writers did not stop; the lease was not taken (writers={remaining})",
+                )
         try:
             lease = workspace_write_lease_service().acquire(workspace_id, payload.holder, payload.ttl_seconds)
         except WorkspaceWriteLeaseBusy as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (WorkspaceWriteLeaseUnavailable, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return JSONResponse(content={"lease": lease}, headers={"Cache-Control": "no-store"})
+        return JSONResponse(content={"lease": {**lease, "writers": writers}},
+                            headers={"Cache-Control": "no-store"})
 
     @app.delete("/api/local/workspaces/{workspace_id}/write-lease", dependencies=[Depends(require_local_owner)])
     async def local_workspace_write_lease_release(workspace_id: str, payload: WorkspaceWriteLeaseReleaseRequest):
