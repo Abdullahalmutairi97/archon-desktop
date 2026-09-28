@@ -223,9 +223,19 @@ def test_the_snapshot_and_pin_api_is_owner_only(tmp_path):
 
         drift = client.get("/api/local/resources/pins", headers=headers).json()
         assert drift["pins"][0]["runtime"] == "prime"
+        # Pinning the observed identity needs an executable on this host. Where the
+        # runtime is not installed there is nothing to pin, and the server says so
+        # instead of recording an empty identity.
+        observed_digest = next(
+            (row.get("executable_digest") for row in client.app.state.runtimes.describe() if row["id"] == "prime"),
+            None,
+        )
         pinned = client.post("/api/local/resources/pins", headers=headers,
                              json={"runtime": "prime", "note": "re-accepted"})
-        assert pinned.status_code == 201
+        if observed_digest:
+            assert pinned.status_code == 201
+        else:
+            assert pinned.status_code == 400 and "No executable digest" in pinned.json()["detail"]
         adopted = client.post("/api/local/resources/pins", headers=headers,
                               json={"runtime": "prime", "digest": OTHER_DIGEST})
         assert adopted.status_code == 409
