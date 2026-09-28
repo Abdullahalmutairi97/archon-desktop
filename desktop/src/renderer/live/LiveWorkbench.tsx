@@ -9,6 +9,7 @@ import type { BenchId } from '../shell/shortcuts'
 import { displayLine, isTerminalStatus, liveTasks, type LiveProject, type LiveSession, type LiveTask } from './liveModels'
 import type { LiveScope } from './useLiveServer'
 import { LIVE_TASK_LIMIT } from './LiveViews'
+import { Markdown } from './Markdown'
 import './LiveWorkbench.css'
 
 const tabs: { id: BenchId; label: string; icon: IconName }[] = [
@@ -165,7 +166,9 @@ function ActivityPanel({ scope, session }: { scope: LiveScope; session: LiveSess
     <div className="live-activity-events" aria-label="Task activity">
       {!rows && <p className="live-bench-empty">Loading task events…</p>}
       {rows && !rows.length && <p className="live-bench-empty">No tool activity was recorded for this task.</p>}
-      {rows && rows.map((row) => <div key={row.key} className={`live-activity-row live-activity-${row.kind}`} dir="auto">{row.text}</div>)}
+      {rows && rows.map((row) => row.kind === 'answer'
+        ? <Markdown key={row.key} className="live-activity-row live-activity-answer" text={row.text} />
+        : <div key={row.key} className={`live-activity-row live-activity-${row.kind}`} dir="auto">{row.text}</div>)}
       {current?.error && <div className="live-activity-row live-activity-error" dir="auto">{displayLine(current.error, MAX_ACTIVITY_TEXT)}</div>}
     </div>
   </div>

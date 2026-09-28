@@ -293,7 +293,7 @@ describe('live server conversation', () => {
     ])
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
 
-    expect(await screen.findByText('Tests added.', { selector: '.live-message-text' })).toBeInTheDocument()
+    expect(await screen.findByText('Tests added.', { selector: '.live-message-text p' })).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Conversation task' })).not.toBeInTheDocument())
     expect(invoke).toHaveBeenCalledWith('tasks.get', { taskId: 'task-9' })
     expect(invoke).toHaveBeenCalledWith('tasks.events', { taskId: 'task-9', after: 0 })

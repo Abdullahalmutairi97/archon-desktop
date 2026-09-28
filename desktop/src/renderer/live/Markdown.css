@@ -1,0 +1,12 @@
+/* Agent reply Markdown. Logical sides only; code blocks stay left-to-right. */
+.md { display: grid; gap: 8px; line-height: 1.55; overflow-wrap: anywhere; }
+.md-paragraph, .md-heading, .md-list, .md-quote { margin: 0; }
+.md-paragraph { white-space: pre-wrap; }
+.md-heading { font-size: calc(13px * var(--font-scale)); font-weight: 650; margin-block-start: 4px; }
+.md-list { padding-inline-start: 22px; display: grid; gap: 3px; }
+.md-quote { padding-inline-start: 10px; border-inline-start: 2px solid var(--line-strong, var(--line)); color: var(--muted); white-space: pre-wrap; }
+.md-rule { border: 0; border-block-start: 1px solid var(--line); inline-size: 100%; margin: 4px 0; }
+.md code { font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 0.92em; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding-inline: 4px; }
+.md-code { margin: 0; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 7px; overflow: auto; max-block-size: 420px; text-align: left; }
+.md-code code { background: none; border: 0; padding: 0; white-space: pre; }
+.md-link-url { color: var(--muted); }

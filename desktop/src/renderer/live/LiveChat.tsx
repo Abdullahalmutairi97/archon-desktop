@@ -22,6 +22,7 @@ import {
   type TrackedTask,
 } from './liveModels'
 import { checkoutChoices, type CheckoutChoice } from './LiveWorkbench'
+import { Markdown } from './Markdown'
 import type { LiveScope, LiveServer } from './useLiveServer'
 import { LiveUnavailable } from './LiveViews'
 import './LiveViews.css'
@@ -168,7 +169,7 @@ function TaskTrackerCard({
       <span className={`task-status status-text-${view.status}`} role="status">{taskStatusLabel(view)}</span>
     </div>
     <p className="live-task-id">Task <code>{task.id}</code></p>
-    {output && <p className="live-task-reply" dir="auto">{output}</p>}
+    {output && <Markdown className="live-task-reply" text={output} />}
     {!terminal && !output && <p className="live-task-note">Waiting for output…</p>}
     {task.toolNote && !terminal && <p className="live-task-note">{task.toolNote}</p>}
     {task.diagnostic && <p className="live-task-note">{task.diagnostic}</p>}
@@ -411,7 +412,9 @@ function LiveConversation({
           <div className="message-avatar" aria-hidden="true">{entry.role === 'user' ? 'Y' : runtime === 'pi' ? 'Pi' : 'P'}</div>
           <div className="message-body">
             <div className="message-byline"><strong>{entry.label}</strong><span>{entry.timestamp > 0 ? formatEpochSeconds(entry.timestamp) : ''}</span></div>
-            <p className="live-message-text" dir="auto">{entry.content}</p>
+            {entry.role === 'assistant'
+              ? <Markdown className="live-message-text" text={entry.content} />
+              : <p className="live-message-text" dir="auto">{entry.content}</p>}
             {entry.hiddenCharacters > 0 && <p className="live-message-clipped">{entry.hiddenCharacters.toLocaleString()} more characters are not shown.</p>}
           </div>
         </article>

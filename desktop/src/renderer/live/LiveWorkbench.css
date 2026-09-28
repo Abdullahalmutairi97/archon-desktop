@@ -24,7 +24,7 @@
 .live-activity-tool-end { color: var(--muted); }
 .live-activity-diagnostic { border-inline-start-color: #d2aa72; color: var(--muted); }
 .live-activity-error { border-inline-start-color: #d27272; }
-.live-activity-answer { border-inline-start-color: #7fb88a; background: var(--surface-2); border-radius: 4px; }
+.live-activity-answer { border-inline-start-color: #7fb88a; background: var(--surface-2); border-radius: 4px; white-space: normal; }
 /* The workbench is narrow: stack the file list above its preview. */
 .live-bench .workspace-file-browser-grid { grid-template-columns: minmax(0, 1fr); }
 .live-bench .workspace-file-list-pane { max-block-size: 260px; overflow: auto; }
