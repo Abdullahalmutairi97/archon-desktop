@@ -4,6 +4,8 @@ import { liveProjects, liveSessions, operationErrorCode, type LiveProject, type 
 
 /** Rows the shared session list asks for; the server may cap it further. */
 export const LIVE_SESSION_LIMIT = 200
+/** How often a disconnected view re-reads the local connection description. */
+export const DISCONNECTED_RECHECK_MS = 3_000
 
 /** A usable server connection. Everything loaded under it is discarded when `generation` changes. */
 export type LiveScope = {
@@ -68,6 +70,20 @@ export function useLiveServer(bridge: DesktopBridge | undefined, routeKey: strin
   const generation = description?.generation ?? -1
   const validGeneration = Number.isSafeInteger(generation) && generation >= 0
   const serverUrl = description?.serverUrl ?? null
+
+  // A connection saved elsewhere (another view, another window) does not change
+  // the route, so re-read it when the window regains focus, and every few
+  // seconds while nothing is connected. The read is local IPC, not the network.
+  useEffect(() => {
+    if (!bridge) return
+    const reread = () => setDescribeRequest((value) => value + 1)
+    window.addEventListener('focus', reread)
+    const timer = configured ? undefined : window.setInterval(reread, DISCONNECTED_RECHECK_MS)
+    return () => {
+      window.removeEventListener('focus', reread)
+      if (timer !== undefined) window.clearInterval(timer)
+    }
+  }, [bridge, configured])
   const localPairingAvailable = description?.localPairingAvailable === true
 
   useEffect(() => {

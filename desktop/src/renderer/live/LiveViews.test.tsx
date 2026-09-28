@@ -492,3 +492,22 @@ describe('live tasks and projects', () => {
     expect(invoke).toHaveBeenCalledWith('sessions.list', { projectId: 'project-1', limit: 200 })
   })
 })
+
+describe('connection changes without a route change', () => {
+  it('notices a connection saved while the chat view stays open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let current: ConnectionDescription = DISCONNECTED
+      const { bridge } = makeBridge(defaults, async () => current)
+      installBridge(bridge)
+      render(<App />)
+      expect(await screen.findByText(/No server connection is configured/)).toBeInTheDocument()
+      current = CONNECTED
+      await act(async () => { vi.advanceTimersByTime(3_100) })
+      // The sidebar lists the server's conversations without leaving the view.
+      expect((await screen.findAllByText('Refactor the queue')).length).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
