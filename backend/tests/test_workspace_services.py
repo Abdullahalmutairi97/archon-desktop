@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import socket
 from pathlib import Path
 
@@ -27,7 +28,8 @@ WORKSPACE_ID = "workspace-0123456789abcdef0123456789abcdef"
 
 
 def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 4096,
-             memory_enforcement: bool | None = None) -> WorkspaceServiceManager:
+             memory_enforcement: bool | None = None, cpu_enforcement: bool | None = None,
+             tasks_enforcement: bool | None = None) -> WorkspaceServiceManager:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(exist_ok=True)
     database = Database(tmp_path / "database.sqlite3")
@@ -49,7 +51,18 @@ def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 40
         health_probe=health_probe,
         max_total_memory_mb=max_total_memory_mb,
         memory_enforcement=memory_enforcement,
+        cpu_enforcement=cpu_enforcement,
+        tasks_enforcement=tasks_enforcement,
     )
+
+
+def _ledger_rows(tmp_path: Path) -> list[dict]:
+    """Read the persisted service definitions from the private metadata ledger."""
+    import hashlib as _hashlib
+
+    digest = _hashlib.sha256(WORKSPACE_ID.encode("ascii")).hexdigest()
+    path = tmp_path / "private-state" / (digest + ".services.json")
+    return json.loads(path.read_text())["services"]
 
 
 def _definition(**overrides) -> dict:
@@ -486,3 +499,124 @@ def test_workspace_code_server_template_api(tmp_path):
             f"/api/local/workspaces/{workspace_id}/services/code-server",
             headers=headers, json={"port": 80},
         ).status_code == 422
+
+
+def _recording_manager(tmp_path: Path, **kwargs):
+    """A manager whose fake spawn records the argv every start would run."""
+    manager = _manager(tmp_path, **kwargs)
+    launches: list[list[str]] = []
+
+    class FakeStream:
+        async def read(self, _size: int) -> bytes:
+            return b""
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = None
+            self.stdout = FakeStream()
+
+        async def wait(self) -> int:
+            while self.returncode is None:
+                await asyncio.sleep(0.01)
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+        def kill(self) -> None:
+            self.returncode = 0
+
+    async def fake_spawn(*argv, **_kwargs):
+        launches.append(list(argv))
+        return FakeProcess()
+
+    manager._spawn = fake_spawn
+    return manager, launches
+
+
+@pytest.mark.asyncio
+async def test_declared_resource_controls_reach_the_user_scope(tmp_path):
+    manager, launches = _recording_manager(
+        tmp_path, cpu_enforcement=True, tasks_enforcement=True, memory_enforcement=True,
+    )
+    await manager.define(WORKSPACE_ID, _definition(
+        name="bounded", argv=["/bin/sleep", "5"],
+        memoryLimitMb=256, cpuQuotaPercent=50, tasksMax=64,
+    ))
+    await manager.start(WORKSPACE_ID, "bounded")
+    command = launches[-1]
+    assert command[:5] == ["systemd-run", "--user", "--scope", "--collect", "--quiet"]
+    assert "MemoryMax=256M" in command and "MemorySwapMax=0" in command
+    assert "CPUQuota=50%" in command and "TasksMax=64" in command
+    assert command[command.index("--") + 1:] == ["/bin/sleep", "5"]
+    # The API projection stays the shape the desktop validates; the declared
+    # controls are persisted in the private ledger and applied through the scope.
+    row = _ledger_rows(tmp_path)[0]
+    assert row["cpuQuotaPercent"] == 50 and row["tasksMax"] == 64 and row["memoryLimitMb"] == 256
+    listed = [item for item in await manager.list(WORKSPACE_ID) if item["name"] == "bounded"][0]
+    assert set(listed) == {"name", "argv", "cwd", "ports", "restart", "state", "exitCode", "restarts", "health"}
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_an_uncontrolled_service_is_still_started_without_a_scope(tmp_path):
+    manager, launches = _recording_manager(tmp_path)
+    await manager.define(WORKSPACE_ID, _definition(name="plain", argv=["/bin/sleep", "5"]))
+    await manager.start(WORKSPACE_ID, "plain")
+    assert launches[-1] == ["/bin/sleep", "5"]
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_cpu_and_task_controls_fail_closed_when_unenforced(tmp_path):
+    manager = _manager(tmp_path, cpu_enforcement=False, tasks_enforcement=False)
+    await manager.define(WORKSPACE_ID, _definition(name="cpu", argv=["/bin/echo"], cpuQuotaPercent=25))
+    with pytest.raises(WorkspaceServiceUnavailable) as cpu_error:
+        await manager.start(WORKSPACE_ID, "cpu")
+    assert "CPU quota" in str(cpu_error.value)
+
+    await manager.define(WORKSPACE_ID, _definition(name="tasks", argv=["/bin/echo"], tasksMax=32))
+    with pytest.raises(WorkspaceServiceUnavailable) as tasks_error:
+        await manager.start(WORKSPACE_ID, "tasks")
+    assert "Task limit" in str(tasks_error.value)
+
+    # An undeclared control does not block an ordinary start.
+    await manager.define(WORKSPACE_ID, _definition(name="plain", argv=["/bin/echo"]))
+    await manager.start(WORKSPACE_ID, "plain")
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_resource_control_definitions_are_validated(tmp_path):
+    manager = _manager(tmp_path)
+    for overrides in (
+        {"cpuQuotaPercent": 0}, {"cpuQuotaPercent": 1601}, {"cpuQuotaPercent": True},
+        {"cpuQuotaPercent": "50"}, {"tasksMax": 3}, {"tasksMax": 4097}, {"tasksMax": False},
+        {"tasksMax": 1.0},
+    ):
+        with pytest.raises(ValueError):
+            await manager.define(WORKSPACE_ID, _definition(name="bad", **overrides))
+    await manager.define(WORKSPACE_ID, _definition(name="edges", cpuQuotaPercent=1, tasksMax=4))
+    row = _ledger_rows(tmp_path)[0]
+    assert row["cpuQuotaPercent"] == 1 and row["tasksMax"] == 4
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_absent_controls_are_recorded_as_null_not_zero(tmp_path):
+    manager = _manager(tmp_path)
+    await manager.define(WORKSPACE_ID, _definition(name="plain"))
+    row = _ledger_rows(tmp_path)[0]
+    assert row["cpuQuotaPercent"] is None and row["tasksMax"] is None
+    await manager.shutdown()
+
+
+@pytest.mark.skipif(
+    shutil.which("systemd-run") is None,
+    reason="systemd-run is unavailable on this host",
+)
+@pytest.mark.asyncio
+async def test_this_host_enforces_cpu_quota_and_task_limits():
+    """Evidence test: the probes must observe real enforcement here."""
+    assert await WorkspaceServiceManager._probe_cpu_enforcement() is True
+    assert await WorkspaceServiceManager._probe_tasks_enforcement() is True

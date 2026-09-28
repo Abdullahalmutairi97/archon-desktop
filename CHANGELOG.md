@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — CPU and task limits for workspace services
+
+- A workspace service definition may now declare `cpuQuotaPercent` (1-1600) and `tasksMax` (4-4096). Both are applied through the same user scope as the memory budget, and both are refused before launch unless a behavioural probe observes real enforcement on this host: the CPU probe requires the scope's own `cpu.stat` to report throttled periods under a 5% quota, and the task probe requires the fork past `TasksMax` to fail with `EAGAIN`. The API projection is unchanged, so the desktop's existing service row validation is unaffected.
+
 ## Unreleased — write lease covers workspace terminals
 
 - Opening a workspace terminal now requires the workspace write lease: the request takes or refreshes the lease for the identity its credential carries, and a live lease held by another writer is refused with 409 before any shell is created. Existing terminals are not revoked by a later handover, and that limit is stated in the route.

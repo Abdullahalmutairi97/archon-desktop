@@ -50,6 +50,46 @@ _MEMORY_PROBE_SCRIPT = (
     " b.append(c)\n"
     "print('allocated')\n"
 )
+_CPU_QUOTA_MIN_PERCENT = 1
+_CPU_QUOTA_MAX_PERCENT = 1600
+_TASKS_MAX_MIN = 4
+_TASKS_MAX_MAX = 4096
+# A 5% quota must throttle a busy loop quickly, so `nr_throttled` is the signal:
+# an accepted-but-unenforced quota never throttles.
+_CPU_PROBE_QUOTA_PERCENT = 5
+_CPU_PROBE_SCRIPT = (
+    "import time\n"
+    "end=time.monotonic()+1.5\n"
+    "x=0\n"
+    "while time.monotonic()<end: x+=1\n"
+    "path='/sys/fs/cgroup'+[l.split('::')[1].strip() for l in open('/proc/self/cgroup') if l.startswith('0::')][0]\n"
+    "stat=open(path+'/cpu.stat').read()\n"
+    "throttled=0\n"
+    "for line in stat.splitlines():\n"
+    " if line.startswith('nr_throttled'): throttled=int(line.split()[1])\n"
+    "print('nr_throttled=%d' % throttled)\n"
+)
+_TASKS_PROBE_TASKS = 4
+# `TasksMax` must refuse the fork that exceeds it with EAGAIN; a silently ignored
+# property spawns every child.
+_TASKS_PROBE_SCRIPT = (
+    "import os\n"
+    "children=[]\n"
+    "refused=None\n"
+    "for i in range(8):\n"
+    " try:\n"
+    "  pid=os.fork()\n"
+    " except OSError as exc:\n"
+    "  refused=exc.errno\n"
+    "  break\n"
+    " if pid==0:\n"
+    "  import time; time.sleep(0.3); os._exit(0)\n"
+    " children.append(pid)\n"
+    "for pid in children:\n"
+    " try: os.waitpid(pid,0)\n"
+    " except ChildProcessError: pass\n"
+    "print('spawned=%d refused=%s' % (len(children), refused))\n"
+)
 _MAX_ARGV = 32
 _MAX_ARG_BYTES = 1024
 _MAX_PORTS = 4
@@ -138,6 +178,8 @@ class WorkspaceServiceManager:
         spawn: SpawnProcess | None = None,
         health_probe: HealthProbe | None = None,
         memory_enforcement: bool | None = None,
+        cpu_enforcement: bool | None = None,
+        tasks_enforcement: bool | None = None,
     ):
         if not isinstance(owner_id, str) or not owner_id.strip() or len(owner_id) > 200:
             raise ValueError("owner_id is invalid")
@@ -154,6 +196,8 @@ class WorkspaceServiceManager:
         self._spawn = spawn or asyncio.create_subprocess_exec
         self._health_probe = health_probe or _default_health_probe
         self._memory_enforcement = memory_enforcement
+        self._cpu_enforcement = cpu_enforcement
+        self._tasks_enforcement = tasks_enforcement
         self._lock = asyncio.Lock()
         self._runtime: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -219,6 +263,14 @@ class WorkspaceServiceManager:
             runtime = self._runtime.get((workspace_id, name))
             if runtime is not None and runtime["state"] in {"starting", "running"}:
                 raise WorkspaceServiceConflict("Service is already running")
+            if entry.get("cpuQuotaPercent") is not None and not await self._ensure_cpu_enforcement():
+                raise WorkspaceServiceUnavailable(
+                    "CPU quota enforcement is unavailable on this host; the service was not started"
+                )
+            if entry.get("tasksMax") is not None and not await self._ensure_tasks_enforcement():
+                raise WorkspaceServiceUnavailable(
+                    "Task limit enforcement is unavailable on this host; the service was not started"
+                )
             if entry.get("memoryLimitMb") is not None:
                 if not await self._ensure_memory_enforcement():
                     raise WorkspaceServiceUnavailable(
@@ -401,17 +453,109 @@ class WorkspaceServiceManager:
 
         return await asyncio.to_thread(run)
 
+    async def _ensure_cpu_enforcement(self) -> bool:
+        """Probe once whether a user scope actually throttles a declared quota.
+
+        A host can accept `CPUQuota` without throttling, so the probe requires the
+        scope's own `cpu.stat` to report throttled periods under a small quota.
+        """
+        if self._cpu_enforcement is None:
+            self._cpu_enforcement = await self._probe_cpu_enforcement()
+        return self._cpu_enforcement
+
+    async def _ensure_tasks_enforcement(self) -> bool:
+        """Probe once whether a user scope actually refuses a fork past TasksMax."""
+        if self._tasks_enforcement is None:
+            self._tasks_enforcement = await self._probe_tasks_enforcement()
+        return self._tasks_enforcement
+
+    @staticmethod
+    async def _probe_cpu_enforcement() -> bool:
+        if shutil.which("systemd-run") is None or shutil.which("python3") is None:
+            return False
+
+        def run() -> bool:
+            try:
+                result = subprocess.run(
+                    [
+                        "systemd-run", "--user", "--scope", "--collect", "--quiet",
+                        "-p", f"CPUQuota={_CPU_PROBE_QUOTA_PERCENT}%",
+                        "--", "python3", "-c", _CPU_PROBE_SCRIPT,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return False
+            if result.returncode != 0:
+                return False
+            marker = [line for line in result.stdout.splitlines() if line.startswith("nr_throttled=")]
+            if not marker:
+                return False
+            try:
+                return int(marker[-1].split("=", 1)[1]) > 0
+            except ValueError:
+                return False
+
+        return await asyncio.to_thread(run)
+
+    @staticmethod
+    async def _probe_tasks_enforcement() -> bool:
+        if shutil.which("systemd-run") is None or shutil.which("python3") is None:
+            return False
+
+        def run() -> bool:
+            try:
+                result = subprocess.run(
+                    [
+                        "systemd-run", "--user", "--scope", "--collect", "--quiet",
+                        "-p", f"TasksMax={_TASKS_PROBE_TASKS}",
+                        "--", "python3", "-c", _TASKS_PROBE_SCRIPT,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return False
+            if result.returncode != 0:
+                return False
+            marker = [line for line in result.stdout.splitlines() if line.startswith("spawned=")]
+            if not marker:
+                return False
+            fields = dict(
+                item.split("=", 1) for item in marker[-1].split() if "=" in item
+            )
+            # errno 11 is EAGAIN, which is how a TasksMax refusal is reported.
+            return fields.get("refused") == "11"
+
+        return await asyncio.to_thread(run)
+
+    def _scope_properties(self, entry: dict[str, Any]) -> list[str]:
+        """Build the cgroup properties for every resource control a service declares."""
+        properties: list[str] = []
+        if entry.get("memoryLimitMb") is not None:
+            properties += ["-p", f"MemoryMax={entry['memoryLimitMb']}M"]
+            # Swap would otherwise absorb the overage and mask the cap.
+            properties += ["-p", "MemorySwapMax=0"]
+        if entry.get("cpuQuotaPercent") is not None:
+            properties += ["-p", f"CPUQuota={entry['cpuQuotaPercent']}%"]
+        if entry.get("tasksMax") is not None:
+            properties += ["-p", f"TasksMax={entry['tasksMax']}"]
+        return properties
+
     async def _spawn_child(self, runtime: dict[str, Any], entry: dict[str, Any], cwd: Path, env: dict[str, str]) -> None:
         command = list(entry["argv"])
-        # Enforce the declared memory budget with a user-scoped cgroup. This host
-        # provides systemd-run and cgroup v2; a memory budget is never silently
-        # ignored by falling back to an unbounded process.
-        if entry.get("memoryLimitMb") is not None:
+        # Enforce declared resource controls with a user-scoped cgroup. This host
+        # provides systemd-run and cgroup v2; a declared control is never silently
+        # ignored by falling back to an unbounded process. `start()` refuses to
+        # launch at all when a declared control is not enforced.
+        properties = self._scope_properties(entry)
+        if properties:
             command = [
                 "systemd-run", "--user", "--scope", "--collect", "--quiet",
-                "-p", f"MemoryMax={entry['memoryLimitMb']}M",
-                # Swap would otherwise absorb the overage and mask the cap.
-                "-p", "MemorySwapMax=0",
+                *properties,
                 "--", *command,
             ]
         process = await self._spawn(
@@ -570,7 +714,8 @@ class WorkspaceServiceManager:
     def _validate_definition(cls, definition: Any) -> dict[str, Any]:
         if not isinstance(definition, dict):
             raise ValueError("definition must be an object")
-        allowed = {"name", "argv", "cwd", "env", "ports", "health", "dependsOn", "restart", "memoryLimitMb"}
+        allowed = {"name", "argv", "cwd", "env", "ports", "health", "dependsOn", "restart",
+                   "memoryLimitMb", "cpuQuotaPercent", "tasksMax"}
         if set(definition) - allowed or "name" not in definition or "argv" not in definition:
             raise ValueError("definition has unsupported or missing fields")
         name = cls._validate_name(definition["name"])
@@ -644,6 +789,14 @@ class WorkspaceServiceManager:
         if memory is not None and (isinstance(memory, bool) or not isinstance(memory, int)
                                    or not 16 <= memory <= 65536):
             raise ValueError("memoryLimitMb must be between 16 and 65536")
+        cpu_quota = definition.get("cpuQuotaPercent")
+        if cpu_quota is not None and (isinstance(cpu_quota, bool) or not isinstance(cpu_quota, int)
+                                      or not _CPU_QUOTA_MIN_PERCENT <= cpu_quota <= _CPU_QUOTA_MAX_PERCENT):
+            raise ValueError("cpuQuotaPercent must be between 1 and 1600")
+        tasks_max = definition.get("tasksMax")
+        if tasks_max is not None and (isinstance(tasks_max, bool) or not isinstance(tasks_max, int)
+                                      or not _TASKS_MAX_MIN <= tasks_max <= _TASKS_MAX_MAX):
+            raise ValueError("tasksMax must be between 4 and 4096")
         return {
             "name": name,
             "argv": normalized_argv,
@@ -654,6 +807,8 @@ class WorkspaceServiceManager:
             "dependsOn": normalized_depends,
             "restart": restart,
             "memoryLimitMb": memory,
+            "cpuQuotaPercent": cpu_quota,
+            "tasksMax": tasks_max,
         }
 
     @staticmethod

@@ -60,6 +60,16 @@ which is why that path can be described as enforced rather than requested.
   in the workspace database is identity metadata and does not attest any control,
   as its own docstring states.
 
+## What Archon now enforces for a workspace service
+
+A service definition can declare `memoryLimitMb`, `cpuQuotaPercent` and `tasksMax`. The three are applied together through one `systemd-run --user --scope` and each declared control is refused before launch unless a behavioural probe observed real enforcement on this host:
+
+- memory: an allocation larger than the cap is killed (`MemoryMax`, `MemorySwapMax=0`);
+- CPU: the probe requires throttled periods in the scope's own `cpu.stat` under a 5% quota, because an accepted-but-unenforced quota never throttles;
+- tasks: the probe requires the fork past `TasksMax=4` to fail with `EAGAIN`.
+
+Filesystem and network confinement are still not implemented for services, so a service is not isolated from the host filesystem or network. That, the loopback probe conflict above, and the missing agent-runtime profile remain the open work.
+
 ## Reproduction
 
 ```bash

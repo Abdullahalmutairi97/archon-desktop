@@ -331,6 +331,8 @@ class WorkspaceServiceDefinitionRequest(BaseModel):
     dependsOn: list[str] = Field(default_factory=list, max_length=4)
     restart: Literal["never", "on-failure"] = "never"
     memoryLimitMb: int | None = Field(default=None, strict=True, ge=16, le=65536)
+    cpuQuotaPercent: int | None = Field(default=None, strict=True, ge=1, le=1600)
+    tasksMax: int | None = Field(default=None, strict=True, ge=4, le=4096)
 
 
 class WorkspaceServiceConfirmRequest(BaseModel):
