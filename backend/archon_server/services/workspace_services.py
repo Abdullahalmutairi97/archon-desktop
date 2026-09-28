@@ -33,6 +33,11 @@ from typing import Any, Awaitable, Callable
 
 from ..child_env import build_child_env
 from ..db import Database
+from ..sandbox import (
+    bubblewrap_argv as shared_bubblewrap_argv,
+    probe_filesystem_confinement,
+    probe_network_isolation,
+)
 
 
 _WORKSPACE_ID = re.compile(r"workspace-[0-9a-f]{32}\Z")
@@ -575,100 +580,29 @@ class WorkspaceServiceManager:
             return fields.get("refused") == "11"
 
         return await asyncio.to_thread(run)
-
     async def _ensure_filesystem_enforcement(self) -> bool:
         """Probe once whether a confined service really cannot write outside its workspace."""
         if self._filesystem_enforcement is None:
-            self._filesystem_enforcement = await self._probe_filesystem_enforcement()
+            self._filesystem_enforcement = await asyncio.to_thread(
+                probe_filesystem_confinement, Path(tempfile.gettempdir())
+            )
         return self._filesystem_enforcement
-
-    @classmethod
-    async def _probe_filesystem_enforcement(cls) -> bool:
-        if shutil.which("bwrap") is None or shutil.which("python3") is None:
-            return False
-
-        def run() -> bool:
-            probe_dir = None
-            try:
-                probe_dir = tempfile.mkdtemp(prefix="archon-isolation-probe-")
-                os.chmod(probe_dir, 0o700)
-                result = subprocess.run(
-                    [
-                        *cls._bubblewrap_argv(Path(probe_dir)),
-                        "--", "python3", "-c", _FILESYSTEM_PROBE_SCRIPT, probe_dir,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-            except (OSError, subprocess.SubprocessError):
-                return False
-            finally:
-                if probe_dir is not None:
-                    shutil.rmtree(probe_dir, ignore_errors=True)
-            if result.returncode != 0:
-                return False
-            marker = [line for line in result.stdout.splitlines() if line.startswith("denied=")]
-            if not marker:
-                return False
-            fields = dict(item.split("=", 1) for item in marker[-1].split() if "=" in item)
-            # The host file must be unwritable and the workspace directory must be writable.
-            return fields.get("denied") == "True" and fields.get("allowed") == "True"
-
-        return await asyncio.to_thread(run)
 
     async def _ensure_network_enforcement(self) -> bool:
         """Probe once whether a sandboxed service really cannot reach the network."""
         if self._network_enforcement is None:
-            self._network_enforcement = await self._probe_network_enforcement()
+            self._network_enforcement = await asyncio.to_thread(probe_network_isolation)
         return self._network_enforcement
-
-    @staticmethod
-    async def _probe_network_enforcement() -> bool:
-        if shutil.which("bwrap") is None or shutil.which("python3") is None:
-            return False
-
-        def run() -> bool:
-            try:
-                result = subprocess.run(
-                    [
-                        "bwrap", "--die-with-parent", "--ro-bind", "/", "/",
-                        "--dev-bind", "/dev", "/dev", "--proc", "/proc",
-                        "--unshare-net", "--", "python3", "-c", _NETWORK_PROBE_SCRIPT,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-            except (OSError, subprocess.SubprocessError):
-                return False
-            if result.returncode != 0:
-                return False
-            marker = [line for line in result.stdout.splitlines() if line.startswith("connect=")]
-            if not marker:
-                return False
-            try:
-                code = int(marker[-1].split("=", 1)[1])
-            except ValueError:
-                return False
-            # Any non-zero code means the network was unreachable inside the sandbox.
-            return code != 0
-
-        return await asyncio.to_thread(run)
 
     @staticmethod
     def _bubblewrap_argv(writable_root: Path, *, confine_filesystem: bool = True,
                          isolate_network: bool = False) -> list[str]:
         """Confinement that leaves the host read-only and one directory writable."""
-        argv = ["bwrap", "--die-with-parent"]
-        if confine_filesystem:
-            argv += ["--ro-bind", "/", "/", "--bind", str(writable_root), str(writable_root)]
-        else:
-            argv += ["--bind", "/", "/"]
-        argv += ["--dev-bind", "/dev", "/dev", "--proc", "/proc"]
-        if isolate_network:
-            argv.append("--unshare-net")
-        return argv
+        roots = [writable_root] if confine_filesystem else []
+        return shared_bubblewrap_argv(
+            roots, confine_filesystem=confine_filesystem, isolate_network=isolate_network,
+        )
+
 
     def _scope_properties(self, entry: dict[str, Any]) -> list[str]:
         """Build the cgroup properties for every resource control a service declares."""

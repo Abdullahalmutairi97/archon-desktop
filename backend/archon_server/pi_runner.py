@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .child_env import build_child_env
+from .sandbox import RuntimeConfinement
 from .runtimes import execution_cwd, validate_execution_mode
 
 from .hermes_runner import RunnerCancelled, ProcessIdentity, capture_process_identity, release_supervised_target, abort_supervised_start, abort_uncaptured_process, supervised_argv, terminate_process_tree
@@ -55,10 +56,13 @@ class PiRunner:
     normal Archon server; no local desktop Pi process or direct SSH is involved.
     """
 
-    def __init__(self, executable: Path | str | None = None, session_root: Path | None = None, default_cwd: Path | None = None):
+    def __init__(self, executable: Path | str | None = None, session_root: Path | None = None,
+                 default_cwd: Path | None = None, isolation: RuntimeConfinement | None = None):
         self.executable = Path(executable or (Path.home() / ".local/bin/pi")).expanduser().absolute()
         self.session_root = Path(session_root or (Path.home() / ".local/share/archon-desktop/pi-sessions")).expanduser()
         self.default_cwd = Path(default_cwd or Path.home()).expanduser()
+        # Off by default; see RuntimeConfinement for what is and is not qualified.
+        self.isolation = isolation or RuntimeConfinement()
         self._active: dict[str, asyncio.subprocess.Process] = {}
         self._identities: dict[str, ProcessIdentity] = {}
         self._active_attempts: dict[str, str] = {}
@@ -126,8 +130,16 @@ class PiRunner:
                 self._consume_cancellation(task_id, attempt_key)
                 raise RunnerCancelled(task_id)
 
+            child_env = build_child_env("pi")
+            if self.isolation.enabled:
+                # Confine the runtime child in the workspace and its own session
+                # directory; a private temp directory keeps scratch writes bounded.
+                temp_root = session_dir / "tmp"
+                temp_root.mkdir(parents=True, exist_ok=True)
+                argv = self.isolation.command(argv=argv, cwd=cwd, writable_roots=[session_dir, temp_root])
+                child_env["TMPDIR"] = str(temp_root)
             process = await asyncio.create_subprocess_exec(
-                *supervised_argv(argv), cwd=str(cwd), env=build_child_env("pi"),
+                *supervised_argv(argv), cwd=str(cwd), env=child_env,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 stdin=asyncio.subprocess.PIPE, start_new_session=True,
             )

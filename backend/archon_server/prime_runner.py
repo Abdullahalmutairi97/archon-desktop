@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from .child_env import build_child_env
+from .sandbox import RuntimeConfinement
 from .prime_session_lease import (
     LEASE_ENABLED_ENV as PRIME_LEASE_ENABLED_ENV,
     PrimeSessionAlreadyActive,
@@ -131,11 +132,14 @@ class PrimeRunner:
         session_root: Path | None = None,
         default_cwd: Path | None = None,
         agent_session_root: Path | None = None,
+        isolation: RuntimeConfinement | None = None,
     ):
         self.executable = Path(executable).expanduser().absolute()
         self.session_root = Path(session_root or (Path.home() / '.local/share/archon-desktop/prime-sessions'))
         self.default_cwd = Path(default_cwd or Path.home())
         self.agent_session_root = Path(agent_session_root or (Path.home() / '.prime/agent/sessions'))
+        # Off by default; see RuntimeConfinement for what is and is not qualified.
+        self.isolation = isolation or RuntimeConfinement()
         self._active: dict[str, asyncio.subprocess.Process] = {}
         # Native session path per active attempt, resolved by run() so the native
         # lease and the process-wide lease cover the same run window.
@@ -336,6 +340,14 @@ class PrimeRunner:
                 if self._agent_paths.get(attempt_key) is not None else None
             ),
         )
+        if self.isolation.enabled:
+            # Confine the runtime child in the workspace and its own state
+            # directory; a private temp directory keeps scratch writes bounded.
+            temp_root = self.session_root / session_id / "tmp"
+            temp_root.mkdir(parents=True, exist_ok=True)
+            writable = [agent_path.parent if agent_session else session_dir, temp_root]
+            argv = self.isolation.command(argv=argv, cwd=cwd, writable_roots=writable)
+            child_env["TMPDIR"] = str(temp_root)
         process = await asyncio.create_subprocess_exec(
             *supervised_argv(argv), cwd=str(cwd), env=child_env, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True,

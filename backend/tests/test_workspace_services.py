@@ -703,9 +703,11 @@ async def test_filesystem_isolation_definitions_are_validated(tmp_path):
     reason="bubblewrap is unavailable on this host",
 )
 @pytest.mark.asyncio
-async def test_this_host_confines_a_service_to_its_workspace():
+async def test_this_host_confines_a_service_to_its_workspace(tmp_path):
     """Evidence test: the probe must observe a denied host write and an allowed workspace write."""
-    assert await WorkspaceServiceManager._probe_filesystem_enforcement() is True
+    from archon_server.sandbox import probe_filesystem_confinement
+
+    assert await asyncio.to_thread(probe_filesystem_confinement, tmp_path) is True
 
 
 @pytest.mark.asyncio
@@ -781,4 +783,6 @@ async def test_network_isolation_definitions_are_validated(tmp_path):
 @pytest.mark.asyncio
 async def test_this_host_blocks_network_access_inside_the_sandbox():
     """Evidence test: the probe must observe an unreachable network in the sandbox."""
-    assert await WorkspaceServiceManager._probe_network_enforcement() is True
+    from archon_server.sandbox import probe_network_isolation
+
+    assert await asyncio.to_thread(probe_network_isolation) is True

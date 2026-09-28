@@ -72,7 +72,7 @@ A service may also declare `filesystemIsolation: "workspace-only"`. It then runs
 
 A service may also declare `networkIsolation: "isolated"`. It then runs with `bwrap --unshare-net`, and such a definition may not declare ports or a loopback health target, because it could never answer them; that removes the probe/preview conflict by construction instead of leaving an unreachable port. The probe requires a connection attempt inside the sandbox to fail, and the confinement composes with the filesystem profile and the resource scope. Reproduced end to end with a real service whose connection attempt returned `ENETUNREACH` (101).
 
-The remaining open work is the agent-runtime profile: a sandboxed Prime or Pi child process, which neither the runtime adapters nor the child-environment allowlists implement today.
+The agent-runtime profile now exists as an opt-in setting, `ARCHON_DESKTOP_RUNTIME_ISOLATION_PROFILE=workspace-only`: the Prime and Pi child that runs a task starts inside the same kind of sandbox, with only its checkout, its own session directory and a private temp directory writable. The probe must prove the mechanics before a run starts, and a host without them refuses the run instead of launching unconfined. What is verified is the sandbox mechanics and one sandboxed run of a fake runtime inside the repository's test suite (the checkout write succeeded, the `/etc` write was denied). What is **not** verified is runtime compatibility: no real provider turn has been executed inside the profile, so the profile stays off by default and must not be described as qualified.
 
 ## Reproduction
 

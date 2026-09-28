@@ -65,6 +65,7 @@ from .workspace_files import (
 from .workspace_git_diff import WorkspaceGitDiffService
 from .tasks import TaskEngine, TaskStore, hash_request_payload
 from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
+from .sandbox import RuntimeConfinement
 from .runner_ownership import RunnerOwnershipLock
 from .local_codex_event_journal import LocalCodexEventJournal, LocalCodexEventJournalError
 from .language_profiles import describe_profiles as describe_language_profiles
@@ -720,17 +721,23 @@ def create_app(
         raise RunnerJournalError(
             f"{exc}; {_runner_recovery_diagnostic(store, LOCAL_TASK_RUNNER_ID)}"
         ) from exc
+    # One confinement policy for every runtime child this server launches; the
+    # profile defaults to "none", and a requested profile that this host cannot
+    # enforce makes the run fail closed instead of launching unconfined.
+    runtime_isolation = RuntimeConfinement(settings.runtime_isolation_profile)
     selected_runner = {
         "prime": PrimeRunner(
             settings.prime_executable,
             settings.data_dir / "prime-sessions",
             settings.archon_root,
             settings.prime_agent_session_dir,
+            isolation=runtime_isolation,
         ),
         "pi": PiRunner(
             settings.pi_executable,
             settings.data_dir / "prime-sessions",
             settings.archon_root,
+            isolation=runtime_isolation,
         ),
     }
     if runner is not None:

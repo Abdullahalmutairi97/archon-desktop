@@ -4,6 +4,7 @@ import os
 import pwd
 import ipaddress
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -33,6 +34,7 @@ class Settings(BaseSettings):
     hermes_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "hermes")
     prime_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "prime-agent")
     pi_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "pi")
+    runtime_isolation_profile: Literal["none", "workspace-only"] = "none"
     code_server_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "code-server")
     code_server_extensions_dir: Path = Field(
         default_factory=lambda: _account_home() / ".local" / "share" / "code-server" / "extensions"

@@ -108,12 +108,15 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
 
 ## What is left (highest value first)
 
-1. **Agent-runtime isolation profile** — run a Prime/Pi child inside a bounded
-   sandbox (read-only host, writable checkout and runtime state) with a
-   behavioural probe and a fail-closed refusal. This is the remainder of "P3
-   isolation qualification": service-level controls are done, the runtime child
-   is not. Do not enable it by default, and do not claim runtime compatibility
-   without a real provider turn inside the profile.
+1. **Agent-runtime isolation qualification** — the profile exists
+   (`ARCHON_DESKTOP_RUNTIME_ISOLATION_PROFILE=workspace-only`, off by default): a
+   Prime/Pi task child starts inside bubblewrap with a read-only host, and only its
+   checkout, session directory and a private temp directory writable. The probe
+   proves the mechanics and the run is refused when they are unavailable, and a
+   sandboxed fake runtime is exercised in `backend/tests/test_runtime_isolation.py`.
+   What remains is qualification: run a real provider turn inside the profile, then
+   record the result. Until that happens, do not describe the profile as qualified
+   or turn it on by default.
 2. **P4 debug flow** — a breakpoint/debug flow for the workspace IDE. `ms-python.debugpy`
    is pinned and installed, but Archon exposes no debug-launch surface and no debug
    session has been exercised, so the roadmap box stays open. Also open: Pylance is
