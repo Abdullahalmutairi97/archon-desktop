@@ -101,11 +101,48 @@ export type WorkspaceRecord = JsonRecord & {
   generation: number
 }
 
-export interface TaskSubmitPayload {
+/**
+ * A new conversation in a registered project (Prime unless `runtime` says Pi),
+ * or a Prime task in a provisioned checkout. `runtime` and the checkout fields
+ * are mutually exclusive.
+ */
+export interface TaskSubmitProjectPayload {
   projectId: string
   prompt: string
+  runtime?: 'prime' | 'pi'
   workspaceId?: string
   workspaceGeneration?: number
+  sessionId?: never
+}
+
+/**
+ * Continue an existing server conversation. The server keeps the runtime the
+ * conversation recorded; an optional project id must match the session's.
+ */
+export interface TaskSubmitSessionPayload {
+  sessionId: string
+  prompt: string
+  projectId?: string
+  runtime?: never
+  workspaceId?: never
+  workspaceGeneration?: never
+}
+
+export type TaskSubmitPayload = TaskSubmitProjectPayload | TaskSubmitSessionPayload
+
+export interface SessionMessagesPayload {
+  sessionId: string
+  limit: number
+}
+
+/** One server transcript row. `content` is display text and is never markup. */
+export interface SessionMessageRecord {
+  id: string
+  role: string
+  content: string
+  kind: string
+  /** Epoch seconds; 0 when the server has no timestamp. */
+  timestamp: number
 }
 
 export interface TaskByIdPayload {
@@ -470,6 +507,10 @@ export interface OperationMap {
   'sessions.list': {
     payload: SessionsListPayload
     result: { sessions: readonly JsonRecord[] }
+  }
+  'sessions.messages': {
+    payload: SessionMessagesPayload
+    result: { messages: readonly SessionMessageRecord[] }
   }
   'tasks.list': {
     payload: TasksListPayload

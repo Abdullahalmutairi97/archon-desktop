@@ -346,6 +346,138 @@ describe('finite desktop bridge validation', () => {
     }
   })
 
+  it('accepts conversation continuation and new-runtime submissions only in their narrow shapes', () => {
+    const sessionId = 'prime-0f3c2d1e-aaaa-4bbb-8ccc-123456789abc'
+    expect(parseOperationRequest('tasks.submit', { sessionId, prompt: 'Keep going' })).toEqual([
+      'tasks.submit', { sessionId, prompt: 'Keep going' },
+    ])
+    expect(parseOperationRequest('tasks.submit', { sessionId, prompt: 'Keep going', projectId: 'project-1' })).toEqual([
+      'tasks.submit', { sessionId, prompt: 'Keep going', projectId: 'project-1' },
+    ])
+    expect(parseOperationRequest('tasks.submit', { projectId: 'project-1', prompt: 'Start', runtime: 'pi' })).toEqual([
+      'tasks.submit', { projectId: 'project-1', prompt: 'Start', runtime: 'pi' },
+    ])
+    expect(parseOperationRequest('tasks.submit', { projectId: 'project-1', prompt: 'Start', runtime: 'prime' })).toEqual([
+      'tasks.submit', { projectId: 'project-1', prompt: 'Start', runtime: 'prime' },
+    ])
+    const workspace = { workspaceId: `workspace-${'a'.repeat(32)}`, workspaceGeneration: 1 }
+
+    for (const payload of [
+      { sessionId, prompt: 'work', ...workspace },
+      { sessionId, prompt: 'work', projectId: 'project-1', ...workspace },
+      { sessionId, prompt: 'work', runtime: 'prime' },
+      { projectId: 'project-1', prompt: 'work', runtime: 'prime', ...workspace },
+      { projectId: 'project-1', prompt: 'work', runtime: 'codex' },
+      { projectId: 'project-1', prompt: 'work', runtime: 'Prime' },
+      { projectId: 'project-1', prompt: 'work', runtime: undefined },
+      { projectId: 'project-1', prompt: 'work', sessionId: undefined },
+      { sessionId, prompt: 'work', projectId: undefined },
+      { sessionId, prompt: 'work', projectId: '' },
+      { sessionId, prompt: 'work', profile: 'pi' },
+      { sessionId, prompt: 'work', approvalMode: 'approve' },
+      { sessionId, prompt: '   ' },
+      { sessionId, prompt: 'x'.repeat(8_001) },
+      { sessionId: '', prompt: 'work' },
+      { sessionId: '../other-session', prompt: 'work' },
+      { sessionId: 'session/../../etc', prompt: 'work' },
+      { sessionId: 'session?limit=1', prompt: 'work' },
+      { sessionId: 'session:with:colons', prompt: 'work' },
+      { sessionId: 's'.repeat(201), prompt: 'work' },
+      { sessionId: 42, prompt: 'work' },
+      { prompt: 'work' },
+      { prompt: 'work', runtime: 'pi' },
+    ]) {
+      expect(() => parseOperationRequest('tasks.submit', payload)).toThrow(TypeError)
+    }
+  })
+
+  it('accepts only a bounded session transcript request', () => {
+    const sessionId = `pi-native-${'a'.repeat(32)}`
+    expect(parseOperationRequest('sessions.messages', { sessionId, limit: 200 })).toEqual([
+      'sessions.messages', { sessionId, limit: 200 },
+    ])
+    expect(parseOperationRequest('sessions.messages', { sessionId: 's', limit: 1 })[1]).toEqual({ sessionId: 's', limit: 1 })
+    expect(parseOperationRequest('sessions.messages', { sessionId: 's'.repeat(200), limit: 500 })[1])
+      .toEqual({ sessionId: 's'.repeat(200), limit: 500 })
+
+    let invoked = false
+    const hostile = Object.defineProperty({ limit: 10 }, 'sessionId', {
+      enumerable: true,
+      get() {
+        invoked = true
+        return 'session-1'
+      },
+    })
+    for (const payload of [
+      hostile,
+      {},
+      { sessionId },
+      { limit: 10 },
+      { sessionId, limit: 0 },
+      { sessionId, limit: 501 },
+      { sessionId, limit: 2.5 },
+      { sessionId, limit: '10' },
+      { sessionId, limit: 10, projectId: 'project-1' },
+      { sessionId, limit: 10, url: 'https://evil.test' },
+      { sessionId: '', limit: 10 },
+      { sessionId: '../escape', limit: 10 },
+      { sessionId: 'a/b', limit: 10 },
+      { sessionId: 'a%2Fb', limit: 10 },
+      { sessionId: 'a b', limit: 10 },
+      { sessionId: 's'.repeat(201), limit: 10 },
+      { sessionId: ['session-1'], limit: 10 },
+      new Date(),
+      null,
+    ]) {
+      expect(() => parseOperationRequest('sessions.messages', payload)).toThrow(TypeError)
+    }
+    expect(invoked).toBe(false)
+  })
+
+  it('validates bounded transcript rows and rejects hostile or malformed messages', () => {
+    const message = { id: 'native-1:0', role: 'assistant', content: '<img src=x onerror=alert(1)>', kind: 'text', timestamp: 1_790_000_000 }
+    const rows = [
+      { id: 'task-abc-prompt', role: 'user', content: 'مرحبا — continue', kind: 'text', timestamp: 0 },
+      message,
+      { id: 'native-2', role: 'toolResult', content: '', kind: 'tool_result', timestamp: 1_790_000_001 },
+      { id: 'native-3', role: 'assistant', content: 'Native message record (no displayable payload)', kind: 'native', timestamp: 1_790_000_002 },
+    ]
+    const parsed = parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { messages: rows }, 'sessions.messages')
+    expect(parsed).toEqual({ messages: rows })
+    expect(Object.isFrozen(parsed)).toBe(true)
+    expect(Object.isFrozen((parsed as { messages: readonly unknown[] }).messages[1])).toBe(true)
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, { messages: [] }, 'sessions.messages')).toEqual({ messages: [] })
+
+    for (const bad of [
+      { messages: [{ ...message, extra: true }] },
+      { messages: [{ ...message, token: 'sentinel-token' }] },
+      { messages: [{ id: message.id, role: message.role, content: message.content, kind: message.kind }] },
+      { messages: [{ ...message, id: '' }] },
+      { messages: [{ ...message, id: 7 }] },
+      { messages: [{ ...message, id: 'x'.repeat(513) }] },
+      { messages: [{ ...message, id: 'line\nbreak' }] },
+      { messages: [{ ...message, role: '' }] },
+      { messages: [{ ...message, role: 'assistant<script>' }] },
+      { messages: [{ ...message, kind: null }] },
+      { messages: [{ ...message, kind: 'x'.repeat(65) }] },
+      { messages: [{ ...message, content: { html: '<b>x</b>' } }] },
+      { messages: [{ ...message, content: 'x'.repeat(2 * 1024 * 1024 + 1) }] },
+      { messages: [{ ...message, timestamp: -1 }] },
+      { messages: [{ ...message, timestamp: 1.5 }] },
+      { messages: [{ ...message, timestamp: '2026-09-28T00:00:00Z' }] },
+      { messages: [{ ...message, timestamp: Number.MAX_SAFE_INTEGER + 1 }] },
+      { messages: Array.from({ length: 501 }, () => message) },
+      { messages: Array.from({ length: 3 }, () => ({ ...message, content: 'x'.repeat(1024 * 1024) })) },
+      { messages: [message], cursor: 1 },
+      { messages: 'not-a-list' },
+      { messages: [null] },
+      { messages: [new Date()] },
+      {},
+    ]) {
+      expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, bad, 'sessions.messages')).toThrow(TypeError)
+    }
+  })
+
   it('validates bounded runtime, task and event responses', () => {
     const taskId = 'a'.repeat(32)
     const runtime = {
