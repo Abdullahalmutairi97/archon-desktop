@@ -29,7 +29,8 @@ WORKSPACE_ID = "workspace-0123456789abcdef0123456789abcdef"
 
 def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 4096,
              memory_enforcement: bool | None = None, cpu_enforcement: bool | None = None,
-             tasks_enforcement: bool | None = None) -> WorkspaceServiceManager:
+             tasks_enforcement: bool | None = None,
+             filesystem_enforcement: bool | None = None) -> WorkspaceServiceManager:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(exist_ok=True)
     database = Database(tmp_path / "database.sqlite3")
@@ -53,6 +54,7 @@ def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 40
         memory_enforcement=memory_enforcement,
         cpu_enforcement=cpu_enforcement,
         tasks_enforcement=tasks_enforcement,
+        filesystem_enforcement=filesystem_enforcement,
     )
 
 
@@ -620,3 +622,80 @@ async def test_this_host_enforces_cpu_quota_and_task_limits():
     """Evidence test: the probes must observe real enforcement here."""
     assert await WorkspaceServiceManager._probe_cpu_enforcement() is True
     assert await WorkspaceServiceManager._probe_tasks_enforcement() is True
+
+
+@pytest.mark.asyncio
+async def test_workspace_only_isolation_wraps_the_service_in_a_confined_mount_view(tmp_path):
+    manager, launches = _recording_manager(tmp_path, filesystem_enforcement=True)
+    await manager.define(WORKSPACE_ID, _definition(
+        name="confined", argv=["/bin/sleep", "5"], filesystemIsolation="workspace-only",
+    ))
+    await manager.start(WORKSPACE_ID, "confined")
+    command = launches[-1]
+    assert command[0] == "bwrap" and "--die-with-parent" in command
+    assert command[command.index("--ro-bind") + 1:command.index("--ro-bind") + 3] == ["/", "/"]
+    workspace = tmp_path / "workspace"
+    assert command[command.index("--bind") + 1:command.index("--bind") + 3] == [str(workspace), str(workspace)]
+    assert command[command.index("--chdir") + 1] == str(workspace)
+    assert command[command.index("--", command.index("--chdir")) + 1:] == ["/bin/sleep", "5"]
+    # The confinement is separate from the resource scope.
+    assert "systemd-run" not in command
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_isolation_and_resource_controls_compose_in_one_scope(tmp_path):
+    manager, launches = _recording_manager(
+        tmp_path, filesystem_enforcement=True, cpu_enforcement=True, memory_enforcement=True,
+    )
+    await manager.define(WORKSPACE_ID, _definition(
+        name="both", argv=["/bin/sleep", "5"],
+        filesystemIsolation="workspace-only", memoryLimitMb=128, cpuQuotaPercent=25,
+    ))
+    await manager.start(WORKSPACE_ID, "both")
+    command = launches[-1]
+    assert command[:2] == ["systemd-run", "--user"]
+    assert "MemoryMax=128M" in command and "CPUQuota=25%" in command
+    assert "bwrap" in command
+    # The scope starts the sandbox, which then starts the service.
+    assert command[command.index("--", command.index("--collect")) + 1] == "bwrap"
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_workspace_only_isolation_fails_closed_when_unavailable(tmp_path):
+    manager = _manager(tmp_path, filesystem_enforcement=False)
+    await manager.define(WORKSPACE_ID, _definition(
+        name="confined", argv=["/bin/echo"], filesystemIsolation="workspace-only",
+    ))
+    with pytest.raises(WorkspaceServiceUnavailable) as refused:
+        await manager.start(WORKSPACE_ID, "confined")
+    assert "filesystem isolation" in str(refused.value)
+    # The default profile is unaffected.
+    await manager.define(WORKSPACE_ID, _definition(name="plain", argv=["/bin/echo"]))
+    await manager.start(WORKSPACE_ID, "plain")
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_filesystem_isolation_definitions_are_validated(tmp_path):
+    manager = _manager(tmp_path)
+    for value in ("host", "workspace_only", "", "none ", 0, True, None):
+        with pytest.raises(ValueError):
+            await manager.define(WORKSPACE_ID, _definition(name="bad", filesystemIsolation=value))
+    await manager.define(WORKSPACE_ID, _definition(name="plain"))
+    assert _ledger_rows(tmp_path)[0]["filesystemIsolation"] == "none"
+    await manager.define(WORKSPACE_ID, _definition(name="confined", filesystemIsolation="workspace-only"))
+    rows = {row["name"]: row for row in _ledger_rows(tmp_path)}
+    assert rows["confined"]["filesystemIsolation"] == "workspace-only"
+    await manager.shutdown()
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bubblewrap is unavailable on this host",
+)
+@pytest.mark.asyncio
+async def test_this_host_confines_a_service_to_its_workspace():
+    """Evidence test: the probe must observe a denied host write and an allowed workspace write."""
+    assert await WorkspaceServiceManager._probe_filesystem_enforcement() is True

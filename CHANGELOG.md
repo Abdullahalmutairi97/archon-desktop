@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — workspace-only filesystem confinement for services
+
+- A workspace service definition may declare `filesystemIsolation: "workspace-only"`. The service then runs inside a mount namespace where the host filesystem is read-only and only the workspace root is writable (`bwrap --die-with-parent --ro-bind / / --dev-bind /dev /dev --proc /proc --bind <root> <root>`), which composes with the CPU, memory and task scope. A behavioural probe must observe a denied host write and an allowed workspace write before any service starts, and a host without that confinement is refused rather than started unconfined. Verified end to end with a real service process: its workspace write succeeded and its `/tmp` write was denied. Network confinement is still not implemented.
+
 ## Unreleased — CPU and task limits for workspace services
 
 - A workspace service definition may now declare `cpuQuotaPercent` (1-1600) and `tasksMax` (4-4096). Both are applied through the same user scope as the memory budget, and both are refused before launch unless a behavioural probe observes real enforcement on this host: the CPU probe requires the scope's own `cpu.stat` to report throttled periods under a 5% quota, and the task probe requires the fork past `TasksMax` to fail with `EAGAIN`. The API projection is unchanged, so the desktop's existing service row validation is unaffected.

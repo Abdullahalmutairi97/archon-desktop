@@ -23,6 +23,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tempfile
 import urllib.request
 import uuid
 from collections import deque
@@ -52,6 +53,26 @@ _MEMORY_PROBE_SCRIPT = (
 )
 _CPU_QUOTA_MIN_PERCENT = 1
 _CPU_QUOTA_MAX_PERCENT = 1600
+_FILESYSTEM_PROFILES = frozenset({"none", "workspace-only"})
+# A confined service sees the host read-only and may write only inside its
+# workspace, so a service cannot modify host files outside the checkout.
+_FILESYSTEM_PROBE_SCRIPT = (
+    "import pathlib\n"
+    "denied=False\n"
+    "allowed=False\n"
+    "try:\n"
+    " pathlib.Path('/etc/.archon-isolation-probe').write_text('x')\n"
+    "except OSError:\n"
+    " denied=True\n"
+    "target=pathlib.Path(__import__('sys').argv[1])/'.archon-isolation-probe'\n"
+    "try:\n"
+    " target.write_text('x')\n"
+    " target.unlink()\n"
+    " allowed=True\n"
+    "except OSError:\n"
+    " allowed=False\n"
+    "print('denied=%s allowed=%s' % (denied, allowed))\n"
+)
 _TASKS_MAX_MIN = 4
 _TASKS_MAX_MAX = 4096
 # A 5% quota must throttle a busy loop quickly, so `nr_throttled` is the signal:
@@ -180,6 +201,7 @@ class WorkspaceServiceManager:
         memory_enforcement: bool | None = None,
         cpu_enforcement: bool | None = None,
         tasks_enforcement: bool | None = None,
+        filesystem_enforcement: bool | None = None,
     ):
         if not isinstance(owner_id, str) or not owner_id.strip() or len(owner_id) > 200:
             raise ValueError("owner_id is invalid")
@@ -198,6 +220,7 @@ class WorkspaceServiceManager:
         self._memory_enforcement = memory_enforcement
         self._cpu_enforcement = cpu_enforcement
         self._tasks_enforcement = tasks_enforcement
+        self._filesystem_enforcement = filesystem_enforcement
         self._lock = asyncio.Lock()
         self._runtime: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -263,6 +286,10 @@ class WorkspaceServiceManager:
             runtime = self._runtime.get((workspace_id, name))
             if runtime is not None and runtime["state"] in {"starting", "running"}:
                 raise WorkspaceServiceConflict("Service is already running")
+            if entry.get("filesystemIsolation") == "workspace-only" and not await self._ensure_filesystem_enforcement():
+                raise WorkspaceServiceUnavailable(
+                    "Workspace-only filesystem isolation is unavailable on this host; the service was not started"
+                )
             if entry.get("cpuQuotaPercent") is not None and not await self._ensure_cpu_enforcement():
                 raise WorkspaceServiceUnavailable(
                     "CPU quota enforcement is unavailable on this host; the service was not started"
@@ -409,10 +436,11 @@ class WorkspaceServiceManager:
             "healthTask": None,
             "logs": deque(),
             "logsTruncated": False,
+            "writableRoot": str(workspace["root"]),
         }
         self._runtime[(workspace["workspace_id"], entry["name"])] = runtime
         try:
-            await self._spawn_child(runtime, entry, cwd, env)
+            await self._spawn_child(runtime, entry, cwd, env, Path(workspace["root"]))
         except Exception:
             runtime["state"] = "failed"
             raise WorkspaceServiceUnavailable("Service could not be started")
@@ -532,6 +560,59 @@ class WorkspaceServiceManager:
 
         return await asyncio.to_thread(run)
 
+    async def _ensure_filesystem_enforcement(self) -> bool:
+        """Probe once whether a confined service really cannot write outside its workspace."""
+        if self._filesystem_enforcement is None:
+            self._filesystem_enforcement = await self._probe_filesystem_enforcement()
+        return self._filesystem_enforcement
+
+    @classmethod
+    async def _probe_filesystem_enforcement(cls) -> bool:
+        if shutil.which("bwrap") is None or shutil.which("python3") is None:
+            return False
+
+        def run() -> bool:
+            probe_dir = None
+            try:
+                probe_dir = tempfile.mkdtemp(prefix="archon-isolation-probe-")
+                os.chmod(probe_dir, 0o700)
+                result = subprocess.run(
+                    [
+                        *cls._bubblewrap_argv(Path(probe_dir)),
+                        "--", "python3", "-c", _FILESYSTEM_PROBE_SCRIPT, probe_dir,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return False
+            finally:
+                if probe_dir is not None:
+                    shutil.rmtree(probe_dir, ignore_errors=True)
+            if result.returncode != 0:
+                return False
+            marker = [line for line in result.stdout.splitlines() if line.startswith("denied=")]
+            if not marker:
+                return False
+            fields = dict(item.split("=", 1) for item in marker[-1].split() if "=" in item)
+            # The host file must be unwritable and the workspace directory must be writable.
+            return fields.get("denied") == "True" and fields.get("allowed") == "True"
+
+        return await asyncio.to_thread(run)
+
+    @staticmethod
+    def _bubblewrap_argv(writable_root: Path) -> list[str]:
+        """Confinement that leaves the host read-only and one directory writable."""
+        return [
+            "bwrap",
+            "--die-with-parent",
+            "--ro-bind", "/", "/",
+            "--dev-bind", "/dev", "/dev",
+            "--proc", "/proc",
+            "--bind", str(writable_root), str(writable_root),
+        ]
+
     def _scope_properties(self, entry: dict[str, Any]) -> list[str]:
         """Build the cgroup properties for every resource control a service declares."""
         properties: list[str] = []
@@ -545,12 +626,24 @@ class WorkspaceServiceManager:
             properties += ["-p", f"TasksMax={entry['tasksMax']}"]
         return properties
 
-    async def _spawn_child(self, runtime: dict[str, Any], entry: dict[str, Any], cwd: Path, env: dict[str, str]) -> None:
+    async def _spawn_child(
+        self,
+        runtime: dict[str, Any],
+        entry: dict[str, Any],
+        cwd: Path,
+        env: dict[str, str],
+        writable_root: Path | None = None,
+    ) -> None:
         command = list(entry["argv"])
+        # A workspace-only service runs inside a mount namespace where the host is
+        # read-only and only its workspace is writable. `start()` refuses to launch
+        # at all when that confinement is not enforced on this host.
+        if entry.get("filesystemIsolation") == "workspace-only":
+            root = writable_root or Path(runtime.get("writableRoot") or cwd)
+            command = [*self._bubblewrap_argv(root), "--chdir", str(cwd), "--", *command]
         # Enforce declared resource controls with a user-scoped cgroup. This host
         # provides systemd-run and cgroup v2; a declared control is never silently
-        # ignored by falling back to an unbounded process. `start()` refuses to
-        # launch at all when a declared control is not enforced.
+        # ignored by falling back to an unbounded process.
         properties = self._scope_properties(entry)
         if properties:
             command = [
@@ -715,7 +808,7 @@ class WorkspaceServiceManager:
         if not isinstance(definition, dict):
             raise ValueError("definition must be an object")
         allowed = {"name", "argv", "cwd", "env", "ports", "health", "dependsOn", "restart",
-                   "memoryLimitMb", "cpuQuotaPercent", "tasksMax"}
+                   "memoryLimitMb", "cpuQuotaPercent", "tasksMax", "filesystemIsolation"}
         if set(definition) - allowed or "name" not in definition or "argv" not in definition:
             raise ValueError("definition has unsupported or missing fields")
         name = cls._validate_name(definition["name"])
@@ -793,6 +886,9 @@ class WorkspaceServiceManager:
         if cpu_quota is not None and (isinstance(cpu_quota, bool) or not isinstance(cpu_quota, int)
                                       or not _CPU_QUOTA_MIN_PERCENT <= cpu_quota <= _CPU_QUOTA_MAX_PERCENT):
             raise ValueError("cpuQuotaPercent must be between 1 and 1600")
+        isolation = definition.get("filesystemIsolation", "none")
+        if not isinstance(isolation, str) or isolation not in _FILESYSTEM_PROFILES:
+            raise ValueError("filesystemIsolation must be 'none' or 'workspace-only'")
         tasks_max = definition.get("tasksMax")
         if tasks_max is not None and (isinstance(tasks_max, bool) or not isinstance(tasks_max, int)
                                       or not _TASKS_MAX_MIN <= tasks_max <= _TASKS_MAX_MAX):
@@ -809,6 +905,7 @@ class WorkspaceServiceManager:
             "memoryLimitMb": memory,
             "cpuQuotaPercent": cpu_quota,
             "tasksMax": tasks_max,
+            "filesystemIsolation": isolation,
         }
 
     @staticmethod
