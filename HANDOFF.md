@@ -6,9 +6,9 @@ You are continuing work another agent started. Read this whole file before actin
 
 - Working tree: `/home/archonminipc/projects/archon-desktop-phase-2c6` — a `git worktree` of
   `~/projects/archon-desktop` checked out on the remote branch itself, so its history **matches**
-  the remote and ordinary fast-forward `git push origin HEAD:refs/heads/codex/phase-2c6-exact-file-approvals`
+  the remote and ordinary fast-forward `git push origin HEAD:refs/heads/archon-desktop-cookie-project`
   is correct. Check `git merge-base --is-ancestor origin/<branch> HEAD` before pushing.
-- Remote: `Abdullahalmutairi97/archon-desktop` (private), branch `codex/phase-2c6-exact-file-approvals`, PR **#28**.
+- Remote: `Abdullahalmutairi97/archon-desktop` (private). Since 2026-09-29 there are only two branches: `main` (never merge into it) and **`archon-desktop-cookie-project`**, which contains every earlier branch (the `codex/phase-*` stack and `codex/phased-roadmap`); those branches and their PRs (#5, #14–#28) were retired.
 - **Do not publish from the old tree** at
   `/home/archonminipc/projects/cookie-project/workspace/work/phase2c6-integration`. Its history is an
   imported reconstruction that does not match the remote, and it stops several commits behind the
@@ -20,12 +20,12 @@ You are continuing work another agent started. Read this whole file before actin
 
 ```bash
 git -C <repo> add -A && git -C <repo> commit -m "..."
-git -C <repo> push origin HEAD:refs/heads/codex/phase-2c6-exact-file-approvals
+git -C <repo> push origin HEAD:refs/heads/archon-desktop-cookie-project
 ```
 Then check CI and mergeability:
 
 ```bash
-gh pr view 28 -R Abdullahalmutairi97/archon-desktop --json headRefOid,mergeable,statusCheckRollup
+gh run list -R Abdullahalmutairi97/archon-desktop --branch archon-desktop-cookie-project --limit 4
 ```
 Do not merge, deploy or release. Target: every change is committed, published, and CI-green.
 
