@@ -81,6 +81,12 @@ from .resource_definitions import (
     ResourceDefinitionUnavailable,
     ResourceInstallRequestLedger,
 )
+from .resource_store import (
+    ResourceStore,
+    ResourceStoreError,
+    ResourceStoreRejected,
+    ResourceStoreUnavailable,
+)
 from .resource_snapshots import (
     ResourcePinLedger,
     ResourceSnapshotError,
@@ -494,6 +500,21 @@ class ResourceInstallVerifyRequest(BaseModel):
     note: str | None = Field(default=None, max_length=256)
 
 
+class ResourceProvisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # A bare file name inside the configured staging directory, never a path.
+    artifact: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
+    confirm: bool = Field(strict=True)
+
+
+class ResourceRollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = Field(strict=True)
+    digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
 class ResourceInstallDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -793,6 +814,7 @@ def create_app(
     resource_pins: ResourcePinLedger | None = None
     resource_definitions: ResourceDefinitionLedger | None = None
     resource_install_requests: ResourceInstallRequestLedger | None = None
+    resource_store: ResourceStore | None = None
     policy: PolicyLedger | None = None
     secret_broker: SecretBroker | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
@@ -978,9 +1000,21 @@ def create_app(
     # Declarative resource definitions and their scope assignments. Metadata only:
     # nothing here installs or downloads an artefact.
     resource_definitions = ResourceDefinitionLedger(snapshot_root / "definitions")
-    # Install requests record what an operator asked for and decided. Nothing here
-    # installs, downloads or executes an artefact, and no state claims otherwise.
+    # Install requests record what an operator asked for and decided; an approval
+    # binds the digest that was declared when it was given.
     resource_install_requests = ResourceInstallRequestLedger(snapshot_root / "install-requests")
+    # The managed store is the only installer: it copies a staged file whose digest
+    # matches an approval, activates it atomically and keeps rollback versions. It
+    # never downloads or executes an artefact. An unsafe store disables provisioning.
+    try:
+        resource_store = ResourceStore(
+            settings.data_dir.expanduser().resolve() / "resource-store",
+            staging_root=(settings.resource_staging_dir.expanduser().resolve()
+                          if settings.resource_staging_dir is not None
+                          else settings.data_dir.expanduser().resolve() / "resource-staging"),
+        )
+    except (ResourceStoreUnavailable, ValueError, OSError):
+        resource_store = None
     # Hard policy with a deny floor: a narrower scope can only narrow, never widen.
     policy = PolicyLedger(settings.data_dir.expanduser().resolve() / "policy")
 
@@ -1156,6 +1190,7 @@ def create_app(
             app.state.resource_pins = resource_pins
             app.state.resource_definitions = resource_definitions
             app.state.resource_install_requests = resource_install_requests
+            app.state.resource_store = resource_store
             app.state.policy = policy
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
@@ -1876,9 +1911,18 @@ def create_app(
                 }
                 continue
             source = row.get("source")
-            result[name] = measured.get(source) if isinstance(source, str) and source in measured else {
-                "present": None, "digest": None,
-            }
+            if isinstance(source, str) and source in measured:
+                result[name] = measured[source]
+                continue
+            result[name] = {"present": None, "digest": None}
+            if resource_store is not None:
+                # What the managed store's link holds now, hashed, not what it recorded.
+                try:
+                    stored = resource_store.measure(name)
+                except (ResourceStoreError, ValueError):
+                    continue
+                if stored["present"]:
+                    result[name] = {"present": True, "digest": stored["digest"]}
         return result
 
     def observed_definition_map() -> dict[str, str | None]:
@@ -1923,11 +1967,18 @@ def create_app(
               dependencies=[Depends(require_local_owner)])
     async def local_resource_install_decision(request_id: str, payload: ResourceInstallDecisionRequest,
                                               principal=Depends(require_local_owner)):
-        """Record the operator's decision. This server still installs nothing."""
+        """Record the operator's decision and bind the digest it approves. Installs nothing."""
         try:
-            row = resource_install_request_service().decide(
+            ledger = resource_install_request_service()
+            requested = ledger.get(request_id)
+            definition = None
+            if requested is not None:
+                definition = next((row for row in resource_definition_service().definitions()
+                                   if row["name"] == requested["definition"]), None)
+            row = ledger.decide(
                 request_id=request_id, decision=payload.decision,
                 decided_by=str(principal["principal_id"]), note=payload.note,
+                definition_digest=(definition or {}).get("digest"),
             )
             return JSONResponse(content={"request": row, "installationPerformed": False},
                                 headers={"Cache-Control": "no-store"})
@@ -1957,12 +2008,105 @@ def create_app(
                 present=measured.get("present"),
                 note=payload.note,
             )
-            return JSONResponse(content={"request": row, "installationPerformed": False},
+            return JSONResponse(content={"request": row,
+                                         "installationPerformed": row.get("installationPerformed") is True},
                                 headers={"Cache-Control": "no-store"})
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    def resource_store_service() -> ResourceStore:
+        if resource_store is None:
+            raise HTTPException(status_code=503, detail="The managed resource store is unavailable")
+        return resource_store
+
+    @app.get("/api/local/resources/store", dependencies=[Depends(require_local_owner)])
+    async def local_resource_store():
+        """Provisioned artefacts, their active and retained digests, and where to stage input."""
+        store_service = resource_store_service()
+        try:
+            entries = await asyncio.to_thread(store_service.entries)
+        except ResourceStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return JSONResponse(content={**store_service.status(), "entries": entries},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/local/resources/install-requests/{request_id}/provision",
+              dependencies=[Depends(require_local_owner)])
+    async def local_resource_install_provision(request_id: str, payload: ResourceProvisionRequest,
+                                               principal=Depends(require_local_owner)):
+        """Install exactly the approved digest from a staged file, once per approval.
+
+        The staged bytes are hashed while they are copied and nothing is kept unless
+        they match the digest the approval bound, which must still be the digest the
+        definition declares. Activation is an atomic link swap that retains the
+        previous version for rollback. Nothing is downloaded or executed.
+        """
+        if payload.confirm is not True:
+            raise HTTPException(status_code=400, detail="Provisioning requires explicit confirmation")
+        store_service = resource_store_service()
+        try:
+            ledger = resource_install_request_service()
+            requested = ledger.approved(request_id)
+            definition = next((row for row in resource_definition_service().definitions()
+                               if row["name"] == requested["definition"]), None)
+            if definition is None:
+                raise ResourceDefinitionUnavailable("The requested definition is no longer recorded")
+            if definition.get("digest") != requested["approvedDigest"]:
+                raise ResourceDefinitionUnavailable(
+                    "The definition changed after this approval; request and approve the new digest"
+                )
+            if definition["kind"] not in {"runtime", "extension"}:
+                raise ResourceDefinitionUnavailable("Only a runtime or extension artefact can be provisioned")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # A deny decides before any byte is copied, whatever a narrower scope says.
+        enforce_policy(f"resource.install.{capability_token(definition['name'])}",
+                       project=requested.get("scopeId") if requested.get("scope") == "project" else None,
+                       workspace=requested.get("scopeId") if requested.get("scope") == "workspace" else None,
+                       principal=str(principal["principal_id"]))
+        try:
+            entry = await asyncio.to_thread(
+                store_service.install,
+                name=definition["name"], kind=definition["kind"], digest=requested["approvedDigest"],
+                source=store_service.staging_root / payload.artifact,
+            )
+            row = ledger.record_installation(
+                request_id=request_id, installed_by=str(principal["principal_id"]),
+                digest=entry["activeDigest"], path=entry["path"],
+            )
+        except ResourceStoreRejected as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ResourceStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return JSONResponse(content={"request": row, "entry": entry, "installationPerformed": True},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/local/resources/store/{name}/rollback", dependencies=[Depends(require_local_owner)])
+    async def local_resource_store_rollback(name: str, payload: ResourceRollbackRequest,
+                                            principal=Depends(require_local_owner)):
+        """Re-activate a retained version after re-verifying its digest."""
+        if payload.confirm is not True:
+            raise HTTPException(status_code=400, detail="Rollback requires explicit confirmation")
+        store_service = resource_store_service()
+        enforce_policy(f"resource.rollback.{capability_token(name)}",
+                       principal=str(principal["principal_id"]))
+        try:
+            entry = await asyncio.to_thread(store_service.rollback, name=name, digest=payload.digest)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ResourceStoreRejected as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ResourceStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return JSONResponse(content={"entry": entry}, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/local/resources/definitions", dependencies=[Depends(require_local_owner)])
     async def local_resource_definitions():

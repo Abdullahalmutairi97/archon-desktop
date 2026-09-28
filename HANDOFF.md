@@ -187,8 +187,14 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    install requests are now recorded with an explicit owner decision (approve/reject,
    once) that never claims an installation, and an approved request can be verified
    against the host (`provisioned`/`drifted`/`missing`/`unverifiable` from a real
-   measurement). What is still missing is an actual provisioning pipeline: this server
-   observes and records, it never installs.
+   measurement). A provisioning pipeline now consumes an approval: the approval binds the
+   declared digest, the owner stages the file in `<data_dir>/resource-staging`, and
+   `POST /api/local/resources/install-requests/{id}/provision` copies it into a private
+   content-addressed store only on a digest match, activates `current/<name>` atomically and
+   keeps prior versions for `POST /api/local/resources/store/{name}/rollback`. It never
+   downloads or executes anything. Not yet exercised on the target host with a real runtime
+   update; a runtime keeps running its configured executable until that setting points at
+   the store link.
 
 9. **P5 hard policy precedence** — done for the brokered secret path: a policy ledger with the
    fixed chain `global` > `project` > `workspace` > `agent`, a deny floor (any deny decides,

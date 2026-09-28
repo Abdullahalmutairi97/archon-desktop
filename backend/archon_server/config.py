@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     pi_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "pi")
     runtime_isolation_profile: Literal["none", "workspace-only"] = "none"
     code_server_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "code-server")
+    # Where the owner places an artefact for an approved install request; None uses
+    # a private directory under data_dir. The server only reads from it.
+    resource_staging_dir: Path | None = None
     code_server_extensions_dir: Path = Field(
         default_factory=lambda: _account_home() / ".local" / "share" / "code-server" / "extensions"
     )

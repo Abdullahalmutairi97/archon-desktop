@@ -291,11 +291,12 @@ class ResourceDefinitionLedger:
 class ResourceInstallRequestLedger:
     """Requests to provision a recorded definition, and the operator's decision.
 
-    This server does not install, download or execute an artefact, and the ledger has
-    no `installed` state at all: a request ends at `approved` or `rejected`, so no code
-    path here can report an installation that never happened. An approval is the
-    operator's instruction to provision the recorded identity out of band, and the
-    record says so.
+    A request ends at `approved` or `rejected`. An approval binds the digest the
+    definition declared at that moment (`approvedDigest`), so a definition edited
+    afterwards cannot ride on the earlier approval. Recording, deciding and verifying
+    never install anything: only `record_installation`, called after the managed
+    store has verified and activated exactly the approved digest, marks a row
+    `installationPerformed`, and it does so once per approval.
     """
 
     _DECISIONS = ("approved", "rejected")
@@ -372,6 +373,8 @@ class ResourceInstallRequestLedger:
             "decisionNote": None,
             "installedBy": None,
             "installationPerformed": False,
+            "approvedDigest": None,
+            "installation": None,
             "verification": None,
         }
         document["epoch"] = int(document.get("epoch", 0)) + 1
@@ -380,6 +383,7 @@ class ResourceInstallRequestLedger:
 
     def decide(
         self, *, request_id: Any, decision: Any, decided_by: Any, note: Any = None,
+        definition_digest: Any = None,
     ) -> dict[str, Any]:
         if not isinstance(request_id, str) or not self._ID.fullmatch(request_id):
             raise ValueError("request id is invalid")
@@ -389,6 +393,9 @@ class ResourceInstallRequestLedger:
             raise ValueError("decided_by is invalid")
         if note is not None and (not isinstance(note, str) or not note.strip() or len(note) > 256):
             raise ValueError("note is invalid")
+        if definition_digest is not None and (not isinstance(definition_digest, str)
+                                              or not _DIGEST.fullmatch(definition_digest)):
+            raise ValueError("definition digest must be a sha256 hex digest")
         document = self._load()
         row = document["requests"].get(request_id)
         if row is None:
@@ -399,6 +406,8 @@ class ResourceInstallRequestLedger:
         row["decidedAt"] = self._now().isoformat()
         row["decidedBy"] = decided_by
         row["decisionNote"] = note
+        # The identity the owner approved; provisioning must match it exactly.
+        row["approvedDigest"] = definition_digest if decision == "approved" else None
         document["epoch"] = int(document.get("epoch", 0)) + 1
         self._save(document)
         return dict(row)
@@ -453,8 +462,55 @@ class ResourceInstallRequestLedger:
             "checkedAt": self._now().isoformat(),
             "note": note,
         }
-        # Verification observes; it never installs.
-        row["installationPerformed"] = False
+        # Verification observes; it never installs, and never erases a recorded install.
+        row["installationPerformed"] = row.get("installationPerformed") is True
+        document["epoch"] = int(document.get("epoch", 0)) + 1
+        self._save(document)
+        return dict(row)
+
+    def get(self, request_id: Any) -> dict[str, Any] | None:
+        """Return one request by id, however many newer requests exist."""
+        if not isinstance(request_id, str) or not self._ID.fullmatch(request_id):
+            raise ValueError("request id is invalid")
+        row = self._load()["requests"].get(request_id)
+        return dict(row) if row is not None else None
+
+    def approved(self, request_id: Any) -> dict[str, Any]:
+        """Return an approved request that has not been provisioned yet, or refuse."""
+        if not isinstance(request_id, str) or not self._ID.fullmatch(request_id):
+            raise ValueError("request id is invalid")
+        row = self._load()["requests"].get(request_id)
+        if row is None:
+            raise ResourceDefinitionUnavailable("That install request is not recorded")
+        if row["state"] != "approved":
+            raise ResourceDefinitionUnavailable("Only an approved request can be provisioned")
+        if row.get("installationPerformed") is True:
+            raise ResourceDefinitionUnavailable(
+                "That approval was already provisioned; an update needs its own request"
+            )
+        digest = row.get("approvedDigest")
+        if not isinstance(digest, str) or not _DIGEST.fullmatch(digest):
+            raise ResourceDefinitionUnavailable(
+                "That approval did not bind an artefact digest; request and approve it again"
+            )
+        return dict(row)
+
+    def record_installation(
+        self, *, request_id: Any, installed_by: Any, digest: Any, path: Any,
+    ) -> dict[str, Any]:
+        """Mark an approved request provisioned after the store activated its digest."""
+        if not isinstance(installed_by, str) or not _SCOPE_ID.fullmatch(installed_by):
+            raise ValueError("installed_by is invalid")
+        if not isinstance(path, str) or not path or len(path) > 4096:
+            raise ValueError("path is invalid")
+        pending = self.approved(request_id)
+        if digest != pending["approvedDigest"]:
+            raise ResourceDefinitionUnavailable("The installed digest is not the approved digest")
+        document = self._load()
+        row = document["requests"][request_id]
+        row["installationPerformed"] = True
+        row["installedBy"] = installed_by
+        row["installation"] = {"digest": digest, "path": path, "installedAt": self._now().isoformat()}
         document["epoch"] = int(document.get("epoch", 0)) + 1
         self._save(document)
         return dict(row)
@@ -471,11 +527,14 @@ class ResourceInstallRequestLedger:
         return {
             "requests": len(document["requests"]),
             "maxRequests": self.max_requests,
-            "installationPerformed": False,
+            "installationPerformed": any(
+                row.get("installationPerformed") is True for row in document["requests"].values()
+            ),
             "note": (
                 "This server records the request, the operator's decision and whether the "
-                "artefact is present on this host. It does not install, download or execute "
-                "anything, so an approved request means 'provision this recorded identity out "
-                "of band', and a verification reports what was measured, never an install."
+                "artefact is present on this host. Recording, deciding and verifying are "
+                "never an install: only provisioning an approved request writes an artefact, "
+                "into the managed store, after its bytes match the approved digest. Nothing "
+                "is downloaded or executed."
             ),
         }

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — approved install requests are provisioned through a managed store
+
+- Add owner-only `POST /api/local/resources/install-requests/{id}/provision` with `{"artifact": "<file name>", "confirm": true}`. The artefact is a bare file name in the staging directory (`ARCHON_DESKTOP_RESOURCE_STAGING_DIR`, default `<data_dir>/resource-staging`, private 0700); it must be a regular file owned by and writable only by this account, and is opened without following links. Its bytes are hashed while they are copied into `<data_dir>/resource-store/objects/<sha256>` (read-only; owner-executable for a runtime), and nothing is kept unless they match the approved digest. `current/<name>` is then switched to it with an atomic link replace.
+- An approval now binds the digest the definition declared when it was given (`approvedDigest`). Provisioning refuses when the definition changed afterwards, when the request is not approved, when it was already provisioned (an update needs its own request), for a configuration-only kind, and when the policy denies `resource.install.<name>`. Only a successful activation sets `installationPerformed`, `installedBy` and `installation` on the row.
+- Add owner-only `GET /api/local/resources/store` (staging location, active and retained digests, history) and `POST /api/local/resources/store/{name}/rollback` with `{"confirm": true, "digest"?}`, which re-hashes a retained object before switching back and is gated by `resource.rollback.<name>`. A modified object is never activated.
+- Verification of an approved request now also measures the managed store's link (by hashing it) when no runtime manifest or editor extension measures the name. A runtime the registry measures is still measured at its configured executable, so the store does not change what runs until the operator points that setting at `current/<name>`.
+- Limits: nothing is downloaded, unpacked or executed; an extension is stored but not registered with the editor; attempt snapshots still measure only runtime manifests and extensions.
+
 ## Unreleased — diagnostic records are encrypted at rest
 
 - The diagnostic capture ledger (`GET/DELETE /api/local/diagnostics`) is now written as an AES-256-GCM envelope under a random key drawn when the server starts and held only in its memory. A copied data directory or backup carries no readable record: not the detail, the kind, the task or the runtime. Each write uses a fresh nonce, and the envelope's authenticated data binds its version and key id.
