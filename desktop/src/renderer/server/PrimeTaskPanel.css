@@ -251,7 +251,7 @@
 .prime-task-warning {
   margin: 0 0 16px;
   padding: 10px 12px;
-  border-left: 2px solid #d2aa72;
+  border-inline-start: 2px solid #d2aa72;
   background: color-mix(in srgb, #d2aa72 9%, transparent);
   color: var(--text, #e8e5e0);
   font-size: calc(10px * var(--font-scale, 1));

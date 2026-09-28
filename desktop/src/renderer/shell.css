@@ -361,7 +361,7 @@ kbd { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--
 .reconstruction-ribbon i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .reconstruction-ribbon b { color: var(--line-strong); font-weight: 400; }
 .build-stamp { position: absolute; bottom: 27px; inset-inline-end: 8px; z-index: 1; color: var(--quiet); font: calc(7px * var(--font-scale)) ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; opacity: .54; }
-.toast-notice { position: fixed; z-index: 15; inset-inline-start: 50%; bottom: 37px; transform: translateX(-50%); max-width: calc(100vw - 30px); border: 1px solid var(--line-strong); border-radius: 7px; padding: 9px 13px; color: var(--text); background: var(--surface-3); box-shadow: 0 8px 30px #0004; font-size: calc(10px * var(--font-scale)); text-align: center; }
+.toast-notice { position: fixed; z-index: 15; inset-inline: 0; bottom: 37px; width: fit-content; margin-inline: auto; max-width: calc(100vw - 30px); border: 1px solid var(--line-strong); border-radius: 7px; padding: 9px 13px; color: var(--text); background: var(--surface-3); box-shadow: 0 8px 30px #0004; font-size: calc(10px * var(--font-scale)); text-align: center; }
 
 .modal-scrim { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 20px; background: #050505a8; backdrop-filter: blur(4px); }
 .appearance-dialog, .command-palette { width: min(570px, 100%); max-height: min(700px, calc(100vh - 40px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--canvas); box-shadow: 0 24px 80px #0008; }

@@ -33,7 +33,7 @@
 .local-codex-approval dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .local-codex-approval pre, .local-codex-approval code { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
 .local-codex-approval pre { margin: 0; padding: 10px; border-radius: var(--radius, 5px); background: var(--surface-2, #292929); }
-.local-codex-approval ul { margin: 0; padding-left: 20px; }
+.local-codex-approval ul { margin: 0; padding-inline-start: 20px; }
 .local-codex-file-changes { display: grid; gap: 14px; }
 .local-codex-file-changes section { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line, #343230); border-radius: var(--radius, 5px); }
 .local-codex-file-changes section > p { overflow-wrap: anywhere; }

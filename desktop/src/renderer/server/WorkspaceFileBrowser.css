@@ -157,7 +157,7 @@
   width: 100%;
   min-width: 0;
   padding: 6px 8px;
-  text-align: left;
+  text-align: start;
 }
 
 .workspace-file-search-hit span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -236,7 +236,7 @@
   background: transparent;
   color: var(--muted, #96928c);
   cursor: pointer;
-  text-align: left;
+  text-align: start;
   font: inherit;
   font-size: calc(9px * var(--font-scale, 1));
 }
@@ -378,7 +378,7 @@
   gap: 7px;
 }
 
-.workspace-file-editor-actions > span { margin-right: auto; }
+.workspace-file-editor-actions > span { margin-inline-end: auto; }
 
 .workspace-file-edit-toolbar button,
 .workspace-file-editor-actions button {
