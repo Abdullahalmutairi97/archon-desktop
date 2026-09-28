@@ -12,7 +12,7 @@ import tempfile
 import threading
 import uuid
 from contextlib import asynccontextmanager
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -107,6 +107,7 @@ from .services.workspace_terminal import (
     WorkspaceTerminalAttachBusy,
     WorkspaceTerminalAttachUnavailable,
     WorkspaceTerminalCapacity,
+    WorkspaceTerminalError,
     WorkspaceTerminalInterruptOutcomeUnknown,
     WorkspaceTerminalInputOutcomeUnknown,
     WorkspaceTerminalReadOnly,
@@ -115,6 +116,7 @@ from .services.workspace_terminal import (
 from .services.workspace_services import (
     WorkspaceServiceCapacity,
     WorkspaceServiceConflict,
+    WorkspaceServiceError,
     WorkspaceServiceManager,
     WorkspaceServiceNotFound,
     WorkspaceServiceUnavailable,
@@ -142,6 +144,14 @@ from .workspace_write_lease import (
     WorkspaceWriteLeaseNotHolder,
     WorkspaceWriteLeaseUnavailable,
 )
+from .workspace_detached_writers import (
+    DetachedWriterScan,
+    ProcessIdentity,
+    read_process_identity,
+    scan_detached_writers,
+    terminate_processes,
+    wait_for_exit,
+)
 from .secret_broker import (
     DEFAULT_TTL_SECONDS as SECRET_GRANT_DEFAULT_TTL_SECONDS,
     MAX_GRANT_TTL_SECONDS as SECRET_GRANT_MAX_TTL_SECONDS,
@@ -167,6 +177,12 @@ LOCAL_TASK_RUNNER_ID = "archon-desktop-local"
 # Each write path refreshes its own writer lease; the short TTL keeps a crashed
 # writer from blocking the workspace.
 WRITE_LEASE_TTL_SECONDS = 120
+# A quiesce stops proven detached writers in at most this many stop-and-rescan
+# rounds, so a writer that keeps forking cannot hold the handover open forever;
+# stopped terminals and services get a bounded moment to exit before a leftover
+# process counts as a survivor.
+QUIESCE_DETACHED_ROUNDS = 3
+QUIESCE_ANCHOR_EXIT_SECONDS = 2.0
 _RUNNER_PRINCIPAL = re.compile(r"runner-[0-9a-f]{32}\Z")
 LOCAL_CODEX_PROJECT_ID = re.compile(r"^codex-project:[A-Za-z0-9._:-]{1,242}$")
 LOCAL_CODEX_TASK_ID = re.compile(r"^codex-task:[A-Za-z0-9._:-]{1,245}$")
@@ -1699,13 +1715,84 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    async def workspace_writer_anchors(workspace_id: str) -> dict[ProcessIdentity, str]:
+        """Name the live processes behind this workspace's own terminals and services.
+
+        They are the writers already counted as `terminals` and `services`, and the
+        only processes a detached writer can descend from to count as Archon's own.
+        Without that evidence a writer is simply not provably Archon's: it then blocks
+        the handover and is never stopped, so an unavailable source narrows what a
+        quiesce may do instead of failing it.
+        """
+        labelled: dict[int, str] = {}
+        if local_workspace_terminals is not None:
+            try:
+                labelled.update(dict.fromkeys(await local_workspace_terminals.process_ids(workspace_id), "terminal"))
+            except (WorkspaceTerminalError, ValueError, PermissionError, KeyError):
+                logger.warning("workspace terminal processes are unavailable for %s", workspace_id)
+        if local_workspace_services is not None:
+            try:
+                labelled.update(dict.fromkeys(await local_workspace_services.process_ids(workspace_id), "service"))
+            except (WorkspaceServiceError, ValueError, PermissionError, KeyError):
+                logger.warning("workspace service processes are unavailable for %s", workspace_id)
+        anchors: dict[ProcessIdentity, str] = {}
+        for pid, label in labelled.items():
+            identity = read_process_identity(pid)
+            if identity is not None:
+                anchors[identity] = label
+        return anchors
+
+    def write_lease_refusal(
+        code: str, detail: str, writers: Mapping[str, int], scan: DetachedWriterScan | None = None,
+    ) -> JSONResponse:
+        """Refuse a handover with the inventory that blocked it."""
+        content: dict[str, Any] = {"detail": detail, "code": code, "writers": dict(writers)}
+        if scan is not None:
+            content["detachedWriters"] = scan.public()
+        return JSONResponse(status_code=409, content=content, headers={"Cache-Control": "no-store"})
+
+    async def stop_proven_detached_writers(
+        root: str,
+        targets: list[ProcessIdentity],
+        adopted: dict[ProcessIdentity, str],
+        exclude: Collection[ProcessIdentity],
+    ) -> DetachedWriterScan:
+        """Stop proven Archon-owned writers and rescan, in bounded rounds.
+
+        Only identities a scan proved to descend from this workspace's terminal or
+        service are signalled. Each round rescans, so a writer that forked while it
+        was being stopped is found; the rounds end when the checkout is quiet, when
+        a writer appears that is not provably Archon's, or after the bound. `adopted`
+        keeps every proven identity so the proof outlives the parent it came from.
+        """
+        rounds = 0
+        while True:
+            if targets:
+                await asyncio.to_thread(terminate_processes, targets)
+            verified = await asyncio.to_thread(
+                scan_detached_writers, root, anchors=adopted, exclude=exclude,
+            )
+            rounds += 1
+            if (rounds >= QUIESCE_DETACHED_ROUNDS or not verified.complete or not verified.writers
+                    or any(not writer.killable for writer in verified.writers)):
+                return verified
+            targets = [writer.identity for writer in verified.writers]
+            adopted.update({writer.identity: writer.origin for writer in verified.writers})
+
     @app.get("/api/local/workspaces/{workspace_id}/write-lease", dependencies=[Depends(require_local_owner)])
     async def local_workspace_write_lease_status(workspace_id: str):
-        current_owner_workspace(workspace_id)
+        workspace = current_owner_workspace(workspace_id)
         try:
-            return JSONResponse(content=workspace_write_lease_service().status(workspace_id), headers={"Cache-Control": "no-store"})
+            status = workspace_write_lease_service().status(workspace_id)
         except (WorkspaceWriteLeaseUnavailable, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # The owner sees what would block a handover without attempting one.
+        anchors = await workspace_writer_anchors(workspace_id)
+        scan = await asyncio.to_thread(
+            scan_detached_writers, workspace["root"], anchors=anchors, exclude=anchors,
+        )
+        status["detachedWriters"] = scan.public()
+        return JSONResponse(content=status, headers={"Cache-Control": "no-store"})
 
     async def workspace_live_writers(workspace_id: str, workspace: Mapping[str, Any]) -> dict[str, int]:
         """Count the server-owned writers that are still attached to this checkout."""
@@ -1732,26 +1819,78 @@ def create_app(
         the error, unless the caller asks to stop them first (`quiesce`). An agent
         task always blocks the handover: this server cannot stop one mid-turn without
         leaving unknown side effects, so the caller must wait or cancel it.
+
+        Processes outside that bookkeeping (a detached `nohup` job, an editor started
+        from a shell) are found by scanning this host's processes. One that provably
+        descends from this workspace's terminal or service is stopped by a quiesce;
+        any other one blocks until its owner closes it, and a scan that cannot finish
+        refuses the handover rather than assuming the checkout is quiet.
         """
         workspace = current_owner_workspace(workspace_id)
         writers = await workspace_live_writers(workspace_id, workspace)
         if writers["agentTasks"]:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Workspace has an active agent task; wait for it or cancel it before "
-                    f"taking the write lease (writers={writers})"
-                ),
+            return write_lease_refusal(
+                "workspace_agent_task_active",
+                "Workspace has an active agent task; wait for it or cancel it before "
+                f"taking the write lease (writers={writers})",
+                writers,
             )
-        if (writers["terminals"] or writers["services"]) and not payload.quiesce:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Workspace still has running writers; stop them or retry with "
-                    f"quiesce=true (writers={writers})"
-                ),
+        # Processes this server did not start, or that escaped it, still write into
+        # the checkout; the scan runs before anything is stopped, so a refusal here
+        # never leaves a half-quiesced workspace behind.
+        anchors = await workspace_writer_anchors(workspace_id)
+        scan = await asyncio.to_thread(
+            scan_detached_writers, workspace["root"], anchors=anchors, exclude=anchors,
+        )
+        if not scan.complete:
+            return write_lease_refusal(
+                "workspace_writer_scan_incomplete",
+                f"Could not verify that nothing else writes to the checkout ({scan.reason}); "
+                "the lease was not taken",
+                writers, scan,
+            )
+        stranded = [writer for writer in scan.writers if not writer.killable]
+        if stranded:
+            return write_lease_refusal(
+                "workspace_detached_writers",
+                f"Workspace has {len(stranded)} detached writer(s) that Archon cannot prove it "
+                "started; the owner must close them before the handover, quiesce never stops them "
+                f"(writers={writers})",
+                writers, scan,
+            )
+        if (writers["terminals"] or writers["services"] or scan.writers) and not payload.quiesce:
+            return write_lease_refusal(
+                "workspace_writers_running",
+                "Workspace still has running writers; stop them or retry with "
+                f"quiesce=true (writers={writers}, detachedWriters={len(scan.writers)})",
+                writers, scan,
             )
         if payload.quiesce:
+            # Every detached writer found above descends from this workspace's own
+            # terminal or service. Stop those first, while the terminal and service
+            # still run: their sessions and parent chains are what prove ownership of
+            # anything such a writer forks while it is being stopped. Identities are
+            # kept, because stopping the terminal or service erases that evidence.
+            adopted: dict[ProcessIdentity, str] = dict(anchors)
+            adopted.update({writer.identity: writer.origin for writer in scan.writers})
+            if scan.writers:
+                verified = await stop_proven_detached_writers(
+                    workspace["root"], [writer.identity for writer in scan.writers], adopted, anchors,
+                )
+                if not verified.complete:
+                    return write_lease_refusal(
+                        "workspace_writer_scan_incomplete",
+                        f"Could not verify that the checkout is quiet ({verified.reason}); "
+                        "the lease was not taken",
+                        writers, verified,
+                    )
+                if verified.writers:
+                    return write_lease_refusal(
+                        "workspace_writers_did_not_stop",
+                        "Workspace writers did not stop; the lease was not taken "
+                        f"(writers={writers}, detachedWriters={len(verified.writers)})",
+                        writers, verified,
+                    )
             # Stop the server-owned writers before the new holder is recorded. A stop
             # failure aborts the handover instead of leaving two writers behind.
             if local_workspace_terminals is not None:
@@ -1765,9 +1904,30 @@ def create_app(
                         await local_workspace_services.stop(workspace_id, row["name"], confirm=True)
             remaining = await workspace_live_writers(workspace_id, workspace)
             if remaining["terminals"] or remaining["services"]:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Workspace writers did not stop; the lease was not taken (writers={remaining})",
+                return write_lease_refusal(
+                    "workspace_writers_did_not_stop",
+                    f"Workspace writers did not stop; the lease was not taken (writers={remaining})",
+                    remaining,
+                )
+            # A stopped terminal's shell exits on the hangup tmux sends it, so give the
+            # stopped processes a bounded moment before a leftover counts as a survivor.
+            await asyncio.to_thread(wait_for_exit, list(anchors), QUIESCE_ANCHOR_EXIT_SECONDS)
+            # Verify from a fresh scan that nothing outlived the stop (a shell that
+            # ignores hangups, a service child), stopping only proven survivors.
+            verified = await stop_proven_detached_writers(workspace["root"], [], adopted, ())
+            if not verified.complete:
+                return write_lease_refusal(
+                    "workspace_writer_scan_incomplete",
+                    f"Could not verify that the checkout is quiet ({verified.reason}); "
+                    "the lease was not taken",
+                    remaining, verified,
+                )
+            if verified.writers:
+                return write_lease_refusal(
+                    "workspace_writers_did_not_stop",
+                    "Workspace writers did not stop; the lease was not taken "
+                    f"(writers={remaining}, detachedWriters={len(verified.writers)})",
+                    remaining, verified,
                 )
         try:
             lease = workspace_write_lease_service().acquire(workspace_id, payload.holder, payload.ttl_seconds)
@@ -1775,7 +1935,7 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (WorkspaceWriteLeaseUnavailable, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return JSONResponse(content={"lease": {**lease, "writers": writers}},
+        return JSONResponse(content={"lease": {**lease, "writers": writers, "detachedWriters": scan.public()}},
                             headers={"Cache-Control": "no-store"})
 
     @app.delete("/api/local/workspaces/{workspace_id}/write-lease", dependencies=[Depends(require_local_owner)])
@@ -2683,6 +2843,13 @@ def create_app(
             "generation": workspace["generation"],
         }
         summary["agentTasks"] = workspace_agent_task_counts(workspace["root"])
+        # Processes still writing into the checkout outside the server's bookkeeping;
+        # the same bounded scan a write-lease handover runs.
+        anchors = await workspace_writer_anchors(workspace_id)
+        scan = await asyncio.to_thread(
+            scan_detached_writers, workspace["root"], anchors=anchors, exclude=anchors,
+        )
+        summary["detachedWriters"] = scan.public()
         summary["unaccounted"] = [
             "language servers and extensions that run inside the IDE service process",
             "REPL kernels that run inside a runtime task process",

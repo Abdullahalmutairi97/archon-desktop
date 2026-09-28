@@ -489,6 +489,27 @@ class WorkspaceServiceManager:
                 },
             }
 
+    async def process_ids(self, workspace_id: str) -> list[int]:
+        """Return the pids of this workspace's live supervised service children.
+
+        A process in the checkout proves it came from a workspace service only by
+        descending from one of these. A child this manager has not reaped keeps its
+        pid, so the value cannot name an unrelated process while it is returned.
+        """
+        async with self._lock:
+            self._resolve_workspace(workspace_id)
+            pids: list[int] = []
+            for (owner, _name), runtime in self._runtime.items():
+                if owner != workspace_id or runtime["state"] not in {"starting", "running"}:
+                    continue
+                process = runtime.get("process")
+                pid = getattr(process, "pid", None)
+                if (process is None or getattr(process, "returncode", None) is not None
+                        or isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0):
+                    continue
+                pids.append(pid)
+            return sorted(pids)
+
     async def logs(self, workspace_id: str, name: str, *, lines: int = 200) -> dict[str, Any]:
         """Return a bounded tail of the captured stdout/stderr stream."""
         if isinstance(lines, bool) or not isinstance(lines, int) or not 1 <= lines <= 400:

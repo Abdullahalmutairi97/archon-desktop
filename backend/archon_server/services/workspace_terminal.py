@@ -28,6 +28,7 @@ _WORKSPACE_ID = re.compile(r"workspace-[0-9a-f]{32}\Z")
 _SESSION_ID = re.compile(r"wterm-[0-9a-f]{32}\Z")
 _TMUX_NAME = re.compile(r"archon-ws-[0-9a-f]{32}\Z")
 _PANE_ID = re.compile(r"%[0-9]+\Z")
+_PID = re.compile(r"[1-9][0-9]{0,9}\Z")
 _MAX_METADATA_BYTES = 16 * 1024
 _DEFAULT_MAX_SESSIONS = 16
 _MAX_SCREEN_BYTES = 24 * 1024
@@ -229,6 +230,38 @@ class WorkspaceTerminalService:
             record = self._load_record(workspace)
             await self._reconcile(workspace, record)
             return [self._public_row(row) for row in record["sessions"]]
+
+    async def process_ids(self, workspace_id: str) -> list[int]:
+        """Return the tmux server and pane process ids behind this workspace's sessions.
+
+        A process that runs in the checkout proves it came from an Archon terminal
+        only by descending from one of these, so an unrecognized tmux answer raises
+        instead of being guessed.
+        """
+        async with self._lock:
+            workspace = self._resolve_workspace(workspace_id)
+            self._assert_tmux_available()
+            record = self._load_record(workspace)
+            await self._reconcile(workspace, record)
+            names = {row["name"] for row in record["sessions"]}
+            socket_path = self._socket_path(workspace)
+            self._validate_socket(socket_path)
+            if not names or not socket_path.exists():
+                return []
+            result = await self._run_tmux(
+                socket_path, "list-panes", "-a", "-F", "#{session_name}|#{pid}|#{pane_pid}",
+            )
+            if result["returncode"] != 0 or result["stdoutTruncated"]:
+                raise WorkspaceTerminalUnavailable("tmux could not list the workspace terminal processes")
+            pids: set[int] = set()
+            for line in result["stdout"].splitlines():
+                parts = line.split("|")
+                if (len(parts) != 3 or not _TMUX_NAME.fullmatch(parts[0])
+                        or not _PID.fullmatch(parts[1]) or not _PID.fullmatch(parts[2])):
+                    raise WorkspaceTerminalUnavailable("tmux returned an invalid workspace process identity")
+                if parts[0] in names:
+                    pids.update((int(parts[1]), int(parts[2])))
+            return sorted(pids)
 
     async def terminate(self, workspace_id: str, session_id: str, *, confirm: bool) -> None:
         """Stop one ledger-owned session after explicit confirmation."""
