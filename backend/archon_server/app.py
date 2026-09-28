@@ -74,6 +74,12 @@ from .diagnostic_capture import (
     DiagnosticCaptureError,
     DiagnosticCaptureUnavailable,
 )
+from .resource_snapshots import (
+    ResourcePinLedger,
+    ResourceSnapshotError,
+    ResourceSnapshotStore,
+    ResourceSnapshotUnavailable,
+)
 from .language_profiles import describe_profiles as describe_language_profiles
 from .local_pairing import LocalPairingBroker, UnixSocketPairingServer
 from .services.local_codex_worker import (
@@ -442,6 +448,16 @@ class SecretInvokeRequest(BaseModel):
     attempt_id: str = Field(alias="attemptId", min_length=1, max_length=128)
 
 
+class ResourcePinRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime: str = Field(min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
+    # Supplying a digest adopts an identity this ledger already recorded; omitting
+    # it pins the digest the host reports right now.
+    digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    note: str | None = Field(default=None, max_length=256)
+
+
 class WorkspaceWriteLeaseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -713,6 +729,8 @@ def create_app(
     runner_results: RunnerResultLedger | None = None
     workspace_write_leases: WorkspaceWriteLease | None = None
     diagnostic_capture: DiagnosticCapture | None = None
+    resource_snapshots: ResourceSnapshotStore | None = None
+    resource_pins: ResourcePinLedger | None = None
     secret_broker: SecretBroker | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
@@ -884,9 +902,38 @@ def create_app(
     diagnostic_capture = DiagnosticCapture(
         settings.data_dir.expanduser().resolve() / "diagnostic-capture"
     )
+    # Immutable per-attempt snapshots of the identity a turn ran with, plus the
+    # runtime pins a person accepted. Snapshots are written before the runner
+    # starts and are never overwritten.
+    snapshot_root = settings.data_dir.expanduser().resolve() / "resource-snapshots"
+    resource_snapshots = ResourceSnapshotStore(snapshot_root / "attempts")
+    resource_pins = ResourcePinLedger(snapshot_root / "pins")
+
+    def record_attempt_snapshot(attempt: dict[str, Any]) -> None:
+        manifests = registry.describe()
+        runtime_id = attempt.get("runtime_id") or attempt.get("runtime")
+        pin_row = resource_pins.pin_for(str(runtime_id)) if runtime_id else None
+        manifest = next((row for row in manifests if row.get("id") == runtime_id), None)
+        observed = (manifest or {}).get("executable_digest")
+        resource_snapshots.record(
+            task_id=attempt.get("task_id"),
+            attempt_id=attempt.get("attempt_id"),
+            approval_mode=attempt.get("approval_mode"),
+            workspace_id=attempt.get("workspace_id"),
+            workspace_generation=attempt.get("workspace_generation"),
+            manifests=manifests,
+            runtime_id=runtime_id,
+            pins={
+                "digest": (pin_row or {}).get("digest"),
+                "pinnedAt": (pin_row or {}).get("pinnedAt"),
+                "drifted": bool(observed) and bool(pin_row) and observed != (pin_row or {}).get("digest"),
+            } if pin_row else None,
+        )
+
     engine = TaskEngine(store, selected_runner, settings.worker_poll_seconds, settings.quota_retry_seconds,
                         registry=registry, preflight=preflight, journal=journal,
-                        diagnostic_sink=diagnostic_capture.record_mapping)
+                        diagnostic_sink=diagnostic_capture.record_mapping,
+                        snapshot_sink=record_attempt_snapshot)
     for adapter in selected_runner.values():
         if isinstance(adapter, (PrimeRunner, PiRunner)):
             adapter.preflight = preflight
@@ -1004,6 +1051,8 @@ def create_app(
             app.state.workspace_write_leases = workspace_write_leases
             app.state.secret_broker = secret_broker
             app.state.diagnostic_capture = diagnostic_capture
+            app.state.resource_snapshots = resource_snapshots
+            app.state.resource_pins = resource_pins
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -1676,6 +1725,99 @@ def create_app(
             return JSONResponse(content={"removed": broker.clear()}, headers={"Cache-Control": "no-store"})
         except (DiagnosticCaptureUnavailable, DiagnosticCaptureError) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    def resource_snapshot_service() -> ResourceSnapshotStore:
+        if resource_snapshots is None:
+            raise HTTPException(status_code=503, detail="Resource snapshots are unavailable")
+        return resource_snapshots
+
+    def resource_pin_service() -> ResourcePinLedger:
+        if resource_pins is None:
+            raise HTTPException(status_code=503, detail="Resource pins are unavailable")
+        return resource_pins
+
+    @app.get("/api/local/resources/snapshots", dependencies=[Depends(require_local_owner)])
+    async def local_resource_snapshots(task_id: str | None = None, limit: int = Query(32, ge=1, le=128)):
+        """Immutable identity snapshots for the attempts of this server's tasks."""
+        try:
+            store_ = resource_snapshot_service()
+            return JSONResponse(
+                content={**store_.status(), "snapshots": store_.list(task_id=task_id, limit=limit)},
+                headers={"Cache-Control": "no-store"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceSnapshotUnavailable, ResourceSnapshotError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get(
+        "/api/local/resources/snapshots/{task_id}/{attempt_id}",
+        dependencies=[Depends(require_local_owner)],
+    )
+    async def local_resource_snapshot(task_id: str, attempt_id: str):
+        try:
+            return JSONResponse(
+                content={"snapshot": resource_snapshot_service().read(task_id, attempt_id)},
+                headers={"Cache-Control": "no-store"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceSnapshotUnavailable, ResourceSnapshotError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/local/resources/snapshots", dependencies=[Depends(require_local_owner)])
+    async def local_resource_snapshots_clear():
+        try:
+            return JSONResponse(
+                content={"removed": resource_snapshot_service().clear()},
+                headers={"Cache-Control": "no-store"},
+            )
+        except (ResourceSnapshotUnavailable, ResourceSnapshotError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/local/resources/pins", dependencies=[Depends(require_local_owner)])
+    async def local_resource_pins():
+        """Accepted runtime identities, and where the host has drifted from them."""
+        try:
+            return JSONResponse(
+                content=resource_pin_service().drift(registry.describe()),
+                headers={"Cache-Control": "no-store"},
+            )
+        except (ResourceSnapshotUnavailable, ResourceSnapshotError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/local/resources/pins", status_code=201, dependencies=[Depends(require_local_owner)])
+    async def local_resource_pin(payload: ResourcePinRequest):
+        """Accept the observed identity, or adopt a digest this ledger recorded."""
+        broker = resource_pin_service()
+        try:
+            observed = {row["id"]: row for row in registry.describe()}
+            row = observed.get(payload.runtime)
+            digest = payload.digest or (row or {}).get("executable_digest")
+            if not isinstance(digest, str):
+                raise ValueError("No executable digest is available to pin for that runtime")
+            broker.pin(
+                runtime=payload.runtime, digest=digest, note=payload.note,
+                history=() if payload.digest is None else ("rollback",),
+                accept_observed=payload.digest is None,
+            )
+            return JSONResponse(content=broker.drift(registry.describe()), status_code=201,
+                                headers={"Cache-Control": "no-store"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceSnapshotUnavailable, ResourceSnapshotError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.delete("/api/local/resources/pins/{runtime}", dependencies=[Depends(require_local_owner)])
+    async def local_resource_unpin(runtime: str):
+        try:
+            broker = resource_pin_service()
+            broker.unpin(runtime)
+            return JSONResponse(content=broker.drift(registry.describe()), headers={"Cache-Control": "no-store"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceSnapshotUnavailable, ResourceSnapshotError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/local/secrets/references", dependencies=[Depends(require_local_owner)])
     async def local_secret_references():

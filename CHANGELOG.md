@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — per-attempt resource snapshots, pins and drift
+
+- Every attempt now records an immutable snapshot of the identity it ran with, written before the runner starts and never overwritten: runtime id, executable digest, manifest revision and declared version, the capabilities the adapter publishes, the workspace id and generation, the approval mode, and whether the host had drifted from the accepted pin. Snapshots are 0600 files in a 0700 directory, hold identity facts only (no credential value and no process output), are schema-validated on read and refuse an unsafe, malformed or already-taken file. `GET /api/local/resources/snapshots` lists them, `GET /api/local/resources/snapshots/{task}/{attempt}` reads one, and `DELETE` clears them; a failing snapshot sink never fails a turn.
+- Runtime pins record the identity a person accepted (`POST /api/local/resources/pins`), keep the previous digests as rollback targets, report drift against the observed executable (`GET /api/local/resources/pins`) and can be removed (`DELETE /api/local/resources/pins/{runtime}`). Accepting the identity the host reports now is how a legitimate update becomes the pin; adopting an explicit digest is refused unless this ledger already recorded it. Pins are metadata: the ledger never installs or restores a binary.
+
 ## Unreleased — runtime choices come from the manifest and the auth state
 
 - The server view now has a Runtime compatibility panel that derives what may be chosen from `GET /api/runtimes` and the provider authentication state, instead of a hardcoded list. A runtime is `ready` only when the executable, its declared version and one brokered provider call were all observed; an unavailable executable, an unverified version or an absent/unverified credential state render as `unavailable` or `unverified` with the specific reason. Every capability the manifest publishes has a row, an unsupported capability is shown as `unsupported` rather than hidden, and a test fails if the manifest gains a key the table does not cover. The matrix and its limits are published in `docs/releases/p5-runtime-compatibility.md`.

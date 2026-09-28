@@ -1201,6 +1201,7 @@ class TaskEngine:
         preflight: Callable[[dict[str, Any]], None] | None = None,
         journal: RunnerJournal | None = None,
         diagnostic_sink: Callable[[dict[str, Any]], None] | None = None,
+        snapshot_sink: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.store = store
         self.runner = runner
@@ -1210,6 +1211,9 @@ class TaskEngine:
         # Optional sink for runner diagnostic records. It must never break a turn:
         # a capture failure is a diagnostic-capture problem, not a task failure.
         self.diagnostic_sink = diagnostic_sink
+        # Called once per attempt, before the runner starts, with the identity this
+        # server observed. A failing sink never fails a turn.
+        self.snapshot_sink = snapshot_sink
         self.poll_seconds = poll_seconds
         # Retain the constructor argument for callers; started work is no longer
         # replayed automatically after a provider error.
@@ -1277,6 +1281,21 @@ class TaskEngine:
             runner = self._runner_for(task)
             if not self.store.mark_attempt_running(task["id"], attempt_id=attempt_id):
                 raise RunnerCancelled(task["id"])
+            # Record the identity this attempt runs with, once. The snapshot is
+            # written before the runner starts so it cannot be influenced by what
+            # the turn does.
+            if self.snapshot_sink is not None:
+                try:
+                    self.snapshot_sink({
+                        "task_id": task["id"],
+                        "attempt_id": attempt_id,
+                        "runtime_id": task.get("runtime_id"),
+                        "approval_mode": task.get("approval_mode"),
+                        "workspace_id": task.get("workspace_id"),
+                        "workspace_generation": task.get("workspace_generation"),
+                    })
+                except Exception:
+                    logger.exception("resource snapshot failed")
             if not self.store.attempt_active(task["id"], attempt_id):
                 raise RunnerCancelled(task["id"])
             # Missing output does not prove that the runner made no side effects.

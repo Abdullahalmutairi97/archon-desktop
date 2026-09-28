@@ -169,7 +169,14 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    reachability stay open for anything running as the service account — see
    `docs/releases/p5-same-uid-exposure-evidence.md`. Closing it needs an enforced OS
    boundary around every workspace-capable process or real upstream scopes.
-8. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
+8. **P5 resource snapshots and pins** — done as far as identity goes: every attempt
+   records an immutable snapshot (runtime, digest, manifest revision, capabilities,
+   workspace generation, approval mode, pin state) before the runner starts, and runtime
+   pins record the accepted identity, keep rollback digests and report drift. Still open
+   in the same roadmap item: resource definitions and assignments, managed installation
+   requests, and a real update/rollback pipeline (this ledger installs nothing).
+
+9. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
    unstarted; the operator deferred these earlier — confirm before starting).
 
 ### Gates that must not be reported as passed
