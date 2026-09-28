@@ -171,10 +171,14 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    boundary around every workspace-capable process or real upstream scopes.
 8. **P5 resource snapshots and pins** — done as far as identity goes: every attempt
    records an immutable snapshot (runtime, digest, manifest revision, capabilities,
-   workspace generation, approval mode, pin state) before the runner starts, and runtime
-   pins record the accepted identity, keep rollback digests and report drift. Still open
-   in the same roadmap item: resource definitions and assignments, managed installation
-   requests, and a real update/rollback pipeline (this ledger installs nothing).
+   workspace generation, approval mode, pin state) before the runner starts, runtime pins
+   record the accepted identity with rollback digests and drift, and a conversation can no
+   longer resume under a changed runtime identity (`GET /api/local/resources/sessions`
+   reports the state and `POST /api/tasks` refuses a stale resume with 409). Still open in
+   the same roadmap item: resource definitions and assignments, managed installation
+   requests, a real update/rollback pipeline (this ledger installs nothing), and stopping
+   or restarting *running* work when a cached resource cannot be revoked — the check
+   reports a live task, it never kills one.
 
 9. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
    unstarted; the operator deferred these earlier — confirm before starting).

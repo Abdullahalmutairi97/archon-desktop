@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — a changed runtime identity blocks resuming a conversation
+
+- A conversation can only continue under the runtime identity its attempts ran with. `GET /api/local/resources/sessions` (owner credential) reports, per conversation, the identity its newest attempt snapshot recorded, the digest installed now, and whether a resume is allowed; `POST /api/tasks` refuses a resume with 409 when an attempt recorded a different executable digest, or when a recorded identity has no installed digest to match against. A conversation with no recorded identity is still allowed and reported as `unrecorded`, so an absence of evidence is never reported as verification.
+
 ## Unreleased — per-attempt resource snapshots, pins and drift
 
 - Every attempt now records an immutable snapshot of the identity it ran with, written before the runner starts and never overwritten: runtime id, executable digest, manifest revision and declared version, the capabilities the adapter publishes, the workspace id and generation, the approval mode, and whether the host had drifted from the accepted pin. Snapshots are 0600 files in a 0700 directory, hold identity facts only (no credential value and no process output), are schema-validated on read and refuse an unsafe, malformed or already-taken file. `GET /api/local/resources/snapshots` lists them, `GET /api/local/resources/snapshots/{task}/{attempt}` reads one, and `DELETE` clears them; a failing snapshot sink never fails a turn.

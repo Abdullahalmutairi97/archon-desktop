@@ -79,6 +79,7 @@ from .resource_snapshots import (
     ResourceSnapshotError,
     ResourceSnapshotStore,
     ResourceSnapshotUnavailable,
+    session_identity_state,
 )
 from .language_profiles import describe_profiles as describe_language_profiles
 from .local_pairing import LocalPairingBroker, UnixSocketPairingServer
@@ -1736,6 +1737,64 @@ def create_app(
             raise HTTPException(status_code=503, detail="Resource pins are unavailable")
         return resource_pins
 
+    def runtime_digest(runtime_id: Any) -> str | None:
+        """The digest this host reports for one runtime right now, if any."""
+        row = next((item for item in registry.describe() if item.get("id") == runtime_id), None)
+        digest = (row or {}).get("executable_digest")
+        return digest if isinstance(digest, str) else None
+
+    def conversation_identity(session_id: str) -> dict[str, Any]:
+        """Identity state for one conversation, from its attempts' snapshots."""
+        try:
+            rows = [row for row in store.list(500) if row.get("session_id") == session_id]
+        except Exception:
+            logger.exception("session identity lookup failed")
+            rows = []
+        runtime_id = next((row.get("runtime_id") for row in rows if row.get("runtime_id")), None)
+        recorded: list[str | None] = []
+        if resource_snapshots is not None and rows:
+            try:
+                digests = resource_snapshots.digest_by_task([row["id"] for row in rows])
+                recorded = [digests.get(row["id"]) for row in rows]
+            except (ResourceSnapshotError, ValueError):
+                recorded = []
+        state = session_identity_state(
+            recorded_digests=recorded, current_digest=runtime_digest(runtime_id),
+        )
+        return {
+            "sessionId": session_id,
+            "runtime": runtime_id,
+            "tasks": [row["id"] for row in rows][:16],
+            **state,
+        }
+
+    @app.get("/api/local/resources/sessions", dependencies=[Depends(require_local_owner)])
+    async def local_resource_sessions(limit: int = Query(32, ge=1, le=64)):
+        """Which conversations may still continue under the installed runtime identity."""
+        if resource_snapshots is None:
+            raise HTTPException(status_code=503, detail="Resource snapshots are unavailable")
+        try:
+            seen: list[str] = []
+            for row in store.list(500):
+                session_id = row.get("session_id")
+                if isinstance(session_id, str) and session_id not in seen:
+                    seen.append(session_id)
+                if len(seen) >= limit:
+                    break
+            return JSONResponse(
+                content={
+                    "sessions": [conversation_identity(session_id) for session_id in seen],
+                    "note": (
+                        "stale means an attempt recorded a runtime identity that is not the "
+                        "executable installed now, so a resume is refused; unrecorded means no "
+                        "attempt has recorded an identity yet and the state is unverified."
+                    ),
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        except (ResourceSnapshotUnavailable, ResourceSnapshotError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @app.get("/api/local/resources/snapshots", dependencies=[Depends(require_local_owner)])
     async def local_resource_snapshots(task_id: str | None = None, limit: int = Query(32, ge=1, le=128)):
         """Immutable identity snapshots for the attempts of this server's tasks."""
@@ -2642,6 +2701,11 @@ def create_app(
             session = None
             if payload.session_id:
                 owner, session = session_workspace(payload.session_id, catalog)
+                # A conversation may only continue under the identity its attempts ran
+                # with; a changed executable means cached state cannot be trusted.
+                identity = conversation_identity(payload.session_id)
+                if identity["resumeAllowed"] is False:
+                    raise HTTPException(status_code=409, detail=identity["reason"])
                 # Existing conversations retain their original runtime when the
                 # user changes the new-conversation picker.
                 task_runtime = owner['runtime_id']

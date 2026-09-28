@@ -303,6 +303,36 @@ class ResourceSnapshotStore:
         }
 
 
+    def digest_by_task(self, task_ids: Iterable[Any], *, limit: int = 512) -> dict[str, str | None]:
+        """Return the newest recorded executable digest for each requested task.
+
+        A task can have several attempts; the newest snapshot is the identity the
+        most recent attempt ran with.
+        """
+        wanted = {task for task in task_ids if isinstance(task, str) and _IDENTIFIER.fullmatch(task)}
+        found: dict[str, str | None] = {}
+        if not wanted:
+            return found
+        paths = sorted(self.root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)[:limit]
+        for path in paths:
+            name_task, _, _ = path.stem.partition("__")
+            if name_task not in wanted or name_task in found:
+                continue
+            try:
+                document = self._decode(_read_private(path, max_bytes=_MAX_SNAPSHOT_BYTES))
+            except ResourceSnapshotUnavailable:
+                # An unreadable snapshot is not evidence for or against a resume, so
+                # it is reported as unrecorded rather than treated as a match.
+                found[name_task] = None
+                continue
+            runtime = document.get("runtime")
+            digest = runtime.get("executableDigest") if isinstance(runtime, Mapping) else None
+            found[name_task] = digest if isinstance(digest, str) else None
+        for task in wanted:
+            found.setdefault(task, None)
+        return found
+
+
 class ResourcePinLedger:
     """The runtime identity a person accepted, with drift and recorded rollback."""
 
@@ -419,3 +449,61 @@ class ResourcePinLedger:
 
     def pin_for(self, runtime: str) -> dict[str, Any] | None:
         return (self._load()["pins"] or {}).get(runtime)
+
+
+def session_identity_state(
+    *,
+    recorded_digests: Iterable[str | None],
+    current_digest: str | None,
+) -> dict[str, Any]:
+    """Decide whether a conversation may continue under the current runtime identity.
+
+    A conversation is only resumed when every attempt that recorded an identity
+    recorded the identity that is installed now. With no recorded identity there is
+    no evidence of a change, so the resume is allowed and the state says
+    `unrecorded` rather than pretending it was verified. With a recorded identity
+    and nothing installed to match it against, the resume is refused: that is the
+    fail-closed direction.
+    """
+    recorded = [digest for digest in recorded_digests if isinstance(digest, str)]
+    if not recorded:
+        return {
+            "state": "unrecorded",
+            "recordedDigest": None,
+            "currentDigest": current_digest,
+            "resumeAllowed": True,
+            "reason": (
+                "No attempt recorded a runtime identity for this conversation yet, so a "
+                "change cannot be ruled out or confirmed."
+            ),
+        }
+    newest = recorded[0]
+    if current_digest is None:
+        return {
+            "state": "stale",
+            "recordedDigest": newest,
+            "currentDigest": None,
+            "resumeAllowed": False,
+            "reason": (
+                "This conversation recorded a runtime identity and no executable digest is "
+                "observable now, so the identity cannot be matched."
+            ),
+        }
+    if any(digest != current_digest for digest in recorded):
+        return {
+            "state": "stale",
+            "recordedDigest": newest,
+            "currentDigest": current_digest,
+            "resumeAllowed": False,
+            "reason": (
+                "The runtime executable changed since this conversation ran; start a new "
+                "conversation rather than resuming cached state under a different identity."
+            ),
+        }
+    return {
+        "state": "current",
+        "recordedDigest": newest,
+        "currentDigest": current_digest,
+        "resumeAllowed": True,
+        "reason": "Every attempt recorded the identity that is installed now.",
+    }

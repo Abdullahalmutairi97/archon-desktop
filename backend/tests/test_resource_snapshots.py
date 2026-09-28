@@ -264,3 +264,116 @@ def _paired_owner_headers(socket_path: Path) -> dict[str, str]:
         }).encode() + b"\n")
         credential = json.loads(stream.readline())["credential"]
     return {"Authorization": f"Bearer {credential['access_token']}"}
+
+def test_the_newest_recorded_identity_decides_whether_a_conversation_continues(tmp_path):
+    from archon_server.resource_snapshots import session_identity_state
+
+    # No attempt has recorded an identity: allowed, and named as unverified.
+    unrecorded = session_identity_state(recorded_digests=[None, None], current_digest=DIGEST)
+    assert unrecorded["state"] == "unrecorded" and unrecorded["resumeAllowed"] is True
+
+    # Every attempt matches what is installed now.
+    current = session_identity_state(recorded_digests=[DIGEST, DIGEST], current_digest=DIGEST)
+    assert current["state"] == "current" and current["resumeAllowed"] is True
+
+    # One attempt ran under a different binary: the conversation cannot continue.
+    stale = session_identity_state(recorded_digests=[DIGEST, OTHER_DIGEST], current_digest=DIGEST)
+    assert stale["state"] == "stale" and stale["resumeAllowed"] is False
+    assert stale["recordedDigest"] == DIGEST and stale["currentDigest"] == DIGEST
+    assert "start a new conversation" in stale["reason"]
+
+    # A recorded identity with nothing installed to match is refused, not assumed.
+    missing = session_identity_state(recorded_digests=[DIGEST], current_digest=None)
+    assert missing["state"] == "stale" and missing["resumeAllowed"] is False
+    assert "cannot be matched" in missing["reason"]
+
+
+def test_the_store_reports_the_newest_digest_per_task(tmp_path):
+    store = ResourceSnapshotStore(tmp_path / "attempts")
+    store.record(task_id="task-1", attempt_id="attempt-1", manifests=[_manifest()], runtime_id="prime")
+    store.record(task_id="task-1", attempt_id="attempt-2",
+                 manifests=[_manifest(executable_digest=OTHER_DIGEST)], runtime_id="prime")
+    store.record(task_id="task-2", attempt_id="attempt-1", manifests=[_manifest()], runtime_id="prime")
+    digests = store.digest_by_task(["task-1", "task-2", "task-missing", "bad id"])
+    assert digests["task-2"] == DIGEST
+    assert digests["task-1"] in {DIGEST, OTHER_DIGEST}
+    assert digests["task-missing"] is None and "bad id" not in digests
+
+    # An unreadable snapshot is reported as unrecorded rather than as a match.
+    path = next(path for path in (tmp_path / "attempts").glob("task-2__*.json"))
+    path.write_bytes(b"not json")
+    assert store.digest_by_task(["task-2"])["task-2"] is None
+
+
+def test_a_stale_identity_blocks_resuming_a_conversation(tmp_path):
+    """The server refuses a resume whose recorded identity is not installed now."""
+    from fastapi.testclient import TestClient
+
+    from archon_server.app import create_app
+    from archon_server.config import Settings
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        original_executable = client.app.state.runtimes.runners["prime"].executable
+        created = client.post("/api/tasks", headers=headers,
+                              json={"prompt": "first turn", "cwd": str(workspace), "profile": "prime",
+                                    "approval_mode": "auto"})
+        assert created.status_code == 202, created.text
+        task = created.json()["task"]
+        session_id = task["session_id"]
+
+        digest = next((row.get("executable_digest") for row in client.app.state.runtimes.describe()
+                       if row["id"] == "prime"), None) or DIGEST
+        client.app.state.resource_snapshots.record(
+            task_id=task["id"], attempt_id="attempt-1", runtime_id="prime",
+            manifests=[{"id": "prime", "available": True, "executable_digest": digest}],
+        )
+
+        assert client.get("/api/local/resources/sessions").status_code == 401
+        listing = client.get("/api/local/resources/sessions", headers=headers).json()
+        row = next(item for item in listing["sessions"] if item["sessionId"] == session_id)
+        assert row["state"] == "current" and row["resumeAllowed"] is True
+        assert row["recordedDigest"] == digest
+
+        # The executable changed: the conversation is stale, and the resume is refused
+        # with the identity reason rather than any other admission error.
+        client.app.state.runtimes.runners["prime"].executable = "/bin/true"
+        stale = client.get("/api/local/resources/sessions", headers=headers).json()
+        stale_row = next(item for item in stale["sessions"] if item["sessionId"] == session_id)
+        assert stale_row["state"] == "stale" and stale_row["resumeAllowed"] is False
+        refused = client.post("/api/tasks", headers=headers,
+                              json={"prompt": "continue", "session_id": session_id, "profile": "prime",
+                                    "approval_mode": "auto"})
+        assert refused.status_code == 409
+        assert "start a new conversation" in refused.json()["detail"]
+
+        # With nothing installed to match the recorded identity against, the resume is
+        # still refused, and the reason says why.
+        client.app.state.runtimes.runners["prime"].executable = "/nonexistent/prime-agent"
+        unobservable = client.post("/api/tasks", headers=headers,
+                                   json={"prompt": "continue", "session_id": session_id,
+                                         "profile": "prime", "approval_mode": "auto"})
+        assert unobservable.status_code == 409
+        assert "cannot be matched" in unobservable.json()["detail"]
+
+        # A conversation with no recorded identity is allowed, and says it is unverified.
+        # (A new conversation needs the runtime installed again, which is a separate
+        # admission rule from the identity check.)
+        client.app.state.runtimes.runners["prime"].executable = original_executable
+        other = client.post("/api/tasks", headers=headers,
+                            json={"prompt": "unrelated", "cwd": str(workspace), "profile": "prime",
+                                  "approval_mode": "auto"})
+        assert other.status_code == 202
+        fresh = client.get("/api/local/resources/sessions", headers=headers).json()
+        fresh_row = next(item for item in fresh["sessions"] if item["sessionId"] == other.json()["task"]["session_id"])
+        assert fresh_row["state"] == "unrecorded" and fresh_row["resumeAllowed"] is True
