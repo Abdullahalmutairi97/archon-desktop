@@ -326,6 +326,39 @@ def test_a_denied_capability_is_refused_on_every_gate_that_uses_the_helper(tmp_p
         assert still_denied.status_code == 403
 
 
+def test_a_denied_runtime_is_refused_before_its_availability_is_checked(tmp_path):
+    """A deny decides with 403 even when the runtime is not installed on this host."""
+    from fastapi.testclient import TestClient
+
+    from archon_server.app import create_app
+    from archon_server.config import Settings
+
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+        pi_executable=tmp_path / "missing-pi",
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        body = {"prompt": "run", "profile": "pi", "approval_mode": "auto"}
+        # Without a policy entry the missing executable is what refuses the task.
+        unavailable = client.post("/api/tasks", headers=headers, json=body)
+        assert unavailable.status_code == 503, unavailable.text
+
+        client.put("/api/local/policy", headers=headers, json={
+            "scope": "global", "scopeId": "*", "capability": "runtime.pi", "effect": "deny",
+        })
+        before = len(client.app.state.store.list(50))
+        denied = client.post("/api/tasks", headers=headers, json=body)
+        assert denied.status_code == 403, denied.text
+        assert "runtime.pi" in denied.json()["detail"]
+        assert len(client.app.state.store.list(50)) == before
+
+
 def _fake_tmux(tmp_path: Path) -> Path:
     script = tmp_path / "fake-tmux"
     script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")

@@ -1343,8 +1343,8 @@ def create_app(
         """Open a workspace shell while this caller holds the write lease.
 
         A terminal is a detached, write-capable process inside the workspace, so
-        creating one is a handover of write access. Existing terminals are not
-        revoked by a later handover.
+        creating one is a handover of write access. A later lease handover refuses
+        while this terminal is alive unless the caller quiesces it first.
         """
         current_owner_workspace(workspace_id)
         enforce_policy("terminal.create", workspace=workspace_id,
@@ -3122,15 +3122,17 @@ def create_app(
                 task_runtime = owner['runtime_id']
             else:
                 task_runtime = registry.resolve(payload.profile)
+            # A denied runtime cannot be selected, whatever a narrower scope says. The
+            # deny decides before availability, so the answer does not depend on
+            # whether the runtime happens to be installed on this host.
+            enforce_policy(f"runtime.{capability_token(str(task_runtime))}",
+                           project=payload.project_id)
             admitted = admit_workspace(
                 scratch_root=settings.task_scratch_root or settings.archon_root,
                 projects=catalog, cwd=payload.cwd, project_id=payload.project_id, session=session,
             )
             registry.validate({"runtime_id": task_runtime, "approval_mode": payload.approval_mode,
                                "chat_only": payload.chat_only})
-            # A denied runtime cannot be selected, whatever a narrower scope says.
-            enforce_policy(f"runtime.{capability_token(str(task_runtime))}",
-                           project=payload.project_id)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
