@@ -139,8 +139,12 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    (`backend/tests/test_resume_evidence.py`, `test_migration_restore_evidence.py`).
    The one shape a reviewer may still ask for is duplicate project *names*, which live
    in the separate Hermes projects database that the Archon migration never reads.
-6. **P5 remainder** — event normalization is done (bounded diagnostics for
-   unreadable or unhandled native records). The two-channel bypass check is now
+6. **P5 remainder** — event normalization and the approval binding are done
+   (bounded diagnostics for unreadable or unhandled native records; the Codex
+   approval broker binds each prompt to its request id, process generation and exact
+   action, and denies stale, replayed, unauthorized and expired decisions). What is
+   left is that no tool/MCP adapter consumes the broker yet. The two-channel bypass
+   check is now
    *measured*, not demonstrated: the environment channel is filtered and the server
    clears its dumpable flag so `/proc/<server>/environ` is denied to other same-uid
    processes, but ledger-retarget (reproduced), the pairing socket and direct provider

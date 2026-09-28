@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — approval binding evidence recorded
+
+- Record the approval-binding evidence for the P5 box: the local Codex approval broker binds each prompt to the protocol request id and app-server process generation, and accepts an answer only when session, thread, task, kind, command or canonical changed paths, cwd, reason and diffs all match, denying stale generations, inactive tasks, unknown or replayed requests, a path that became a symlink while the dialog was open, disconnects and timeouts. Prime, Pi and Hermes have no interactive approval prompt, and the secret broker binds its grants to the action digest and identity fields.
+
 ## Unreleased — debug readiness is reported, not claimed
 
 - Add a bounded `debug` block to the owner-only `GET /api/local/workspaces/{id}/language-profiles` report: the pinned debug adapter with its version, digest and install state, the debug features this host cannot provide with reasons (no JavaScript debugger pin; this server speaks no debug adapter protocol and code-server exposes no session flag), and how the IDE service is actually launched (argv, state, ports, `authMode`, bind address and declared resource controls) when it is registered. `sessionExercised` and `breakpointVerified` are false constants, and the desktop validator refuses any payload that sets them true, so a fabricated session claim cannot reach the renderer. The desktop renders the same facts including "no session exercised, no breakpoint verified".
