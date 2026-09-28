@@ -74,6 +74,7 @@ from .diagnostic_capture import (
     DiagnosticCaptureError,
     DiagnosticCaptureUnavailable,
 )
+from .policy import PolicyError, PolicyLedger, PolicyUnavailable, capability_token
 from .resource_definitions import (
     ResourceDefinitionError,
     ResourceDefinitionLedger,
@@ -455,6 +456,16 @@ class SecretInvokeRequest(BaseModel):
     attempt_id: str = Field(alias="attemptId", min_length=1, max_length=128)
 
 
+class PolicyEntryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str = Field(pattern=r"^(global|project|workspace|agent)$")
+    scope_id: str = Field(alias="scopeId", min_length=1, max_length=128)
+    capability: str = Field(min_length=1, max_length=128)
+    effect: str = Field(pattern=r"^(allow|deny)$")
+    note: str | None = Field(default=None, max_length=256)
+
+
 class ResourceDefinitionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -782,6 +793,7 @@ def create_app(
     resource_pins: ResourcePinLedger | None = None
     resource_definitions: ResourceDefinitionLedger | None = None
     resource_install_requests: ResourceInstallRequestLedger | None = None
+    policy: PolicyLedger | None = None
     secret_broker: SecretBroker | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
@@ -965,6 +977,8 @@ def create_app(
     # Install requests record what an operator asked for and decided. Nothing here
     # installs, downloads or executes an artefact, and no state claims otherwise.
     resource_install_requests = ResourceInstallRequestLedger(snapshot_root / "install-requests")
+    # Hard policy with a deny floor: a narrower scope can only narrow, never widen.
+    policy = PolicyLedger(settings.data_dir.expanduser().resolve() / "policy")
 
     def observed_definition_digests() -> dict[str, str | None]:
         """Digest this host reports for each recorded definition, where it can be measured."""
@@ -1138,6 +1152,7 @@ def create_app(
             app.state.resource_pins = resource_pins
             app.state.resource_definitions = resource_definitions
             app.state.resource_install_requests = resource_install_requests
+            app.state.policy = policy
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -2251,6 +2266,13 @@ def create_app(
     @app.post("/api/local/secrets/grants", status_code=201, dependencies=[Depends(require_local_owner)])
     async def local_secret_grant(payload: SecretGrantRequest, principal=Depends(require_local_owner)):
         """Mint one single-use grant for an exact action, bound to this principal."""
+        # A denied reference cannot be granted at all, whatever narrower scopes say,
+        # and the denial decides before the workspace is looked up: refusing early does
+        # not reveal whether the workspace exists.
+        enforce_policy(f"secret.reference.{capability_token(payload.reference)}",
+                       principal=str(principal["principal_id"]))
+        enforce_policy(f"secret.tool.{capability_token(payload.tool)}",
+                       principal=str(principal["principal_id"]))
         current_owner_workspace(payload.workspace_id)
         delegate = payload.delegate_principal
         if delegate is not None:
@@ -2280,11 +2302,77 @@ def create_app(
     @app.post("/api/local/secrets/invoke", dependencies=[Depends(require_local_owner)])
     async def local_secret_invoke(payload: SecretInvokeRequest, principal=Depends(require_local_owner)):
         """Perform one brokered action. The caller never receives the credential."""
+        # Policy is checked here as well as at minting: a grant minted before a denial
+        # cannot be spent after it.
+        enforce_policy(f"secret.tool.{capability_token(payload.tool)}",
+                       principal=str(principal["principal_id"]))
         return await brokered_secret_result(
             secret_broker_service(),
             principal=principal["principal_id"],
             payload=payload,
         )
+
+    def policy_service() -> PolicyLedger:
+        if policy is None:
+            raise HTTPException(status_code=503, detail="Policy storage is unavailable")
+        return policy
+
+    def enforce_policy(capability: str, *, principal: str | None = None) -> None:
+        """Refuse a denied capability with the deciding scope, and never guess an allow."""
+        decided = policy_service().effective(capability=capability, agent=principal)
+        if decided["decision"] == "deny":
+            raise HTTPException(status_code=403, detail=decided["reason"])
+
+    @app.get("/api/local/policy", dependencies=[Depends(require_local_owner)])
+    async def local_policy():
+        """Recorded policy entries and the scope order they are evaluated in."""
+        try:
+            ledger = policy_service()
+            return JSONResponse(
+                content={**ledger.status(), "entries": ledger.entries()},
+                headers={"Cache-Control": "no-store"},
+            )
+        except (PolicyUnavailable, PolicyError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.put("/api/local/policy", status_code=201, dependencies=[Depends(require_local_owner)])
+    async def local_policy_set(payload: PolicyEntryRequest):
+        try:
+            entry = policy_service().set(
+                scope=payload.scope, scope_id=payload.scope_id,
+                capability=payload.capability, effect=payload.effect, note=payload.note,
+            )
+            return JSONResponse(status_code=201, content={"entry": entry}, headers={"Cache-Control": "no-store"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (PolicyUnavailable, PolicyError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.delete("/api/local/policy", dependencies=[Depends(require_local_owner)])
+    async def local_policy_delete(scope: str, scope_id: str, capability: str):
+        try:
+            policy_service().remove(scope=scope, scope_id=scope_id, capability=capability)
+            return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (PolicyUnavailable, PolicyError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/local/policy/effective", dependencies=[Depends(require_local_owner)])
+    async def local_policy_effective(capability: str, project: str | None = None,
+                                    workspace: str | None = None, agent: str | None = None):
+        """Explain one decision: the chain, the matches and the entry that decided it."""
+        try:
+            return JSONResponse(
+                content=policy_service().effective(
+                    capability=capability, project=project, workspace=workspace, agent=agent,
+                ),
+                headers={"Cache-Control": "no-store"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (PolicyUnavailable, PolicyError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     def workspace_service_manager() -> WorkspaceServiceManager:
         if local_workspace_services is None:

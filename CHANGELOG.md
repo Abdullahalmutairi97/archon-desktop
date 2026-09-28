@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — hard policy precedence with a deny floor
+
+- Add owner-only policy entries (`GET/PUT/DELETE /api/local/policy`) evaluated over one fixed chain, `global` > `project` > `workspace` > `agent`, with a deny floor: any matching `deny` decides, a matching `allow` decides only when nothing denies, and no entry means `unset` — never allowed. A narrower scope can therefore only narrow; it cannot widen a denial or re-open a reference. `GET /api/local/policy/effective` explains one decision with the chain, every matching entry and the deciding scope.
+- Capabilities are dotted names, so a subtree wildcard matches at a separator boundary (`secret:*` covers `secret.tool.send`, not `secrets.write`). Names from outside (a tool, a reference) become lowercase tokens, so an unexpected character cannot defeat a pattern.
+- Enforced on the brokered secret path: a denied reference or tool is refused with 403 at grant minting, before the workspace is even looked up, and checked again at invocation, so a grant minted before a denial cannot be spent after it. An unset policy leaves behaviour unchanged.
+
 ## Unreleased — an approval can be checked against the host, still without installing
 
 - Add owner-only `POST /api/local/resources/install-requests/{id}/verify`. Only an approved request can be verified, and the check only measures: it compares the digest the definition declares with the digest this host reports and records `provisioned`, `drifted`, `missing` or `unverifiable`. A definition with no digest, or an artefact this host cannot measure, is `unverifiable`, never `provisioned`. Every row still reports `installationPerformed: false` and `installedBy: null`: the server observes, it never installs.
