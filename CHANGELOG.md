@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — frozen kit re-verification
+
+- Re-verify the frozen v0.3.0 kit on this host: 88/88 kit tests pass, the frozen archive still hashes to `36d3ae03…e549b`, a rebuilt candidate hashes to `e409eaf5…b856`, and the canonical comparison reports `frozen.ok: true` with the expected two-by-design differences. Also correct the handoff: `current/testing/canonical-compare.cjs` is a Node script, so it must be run with `node`, not `python3`.
+
 ## Unreleased — unreadable runtime records become diagnostics
 
 - A native record this server cannot parse, or one whose type is not handled, is now counted and reported as a bounded `diagnostic` task event (`malformed_record` or `unknown_event_type`, at most four per run, with the running counts) instead of being dropped silently. A record that is valid JSON but not an object no longer aborts the stream. If a runtime exits successfully with unreadable output and no answer, the turn fails closed rather than completing with empty text, and the desktop shows the diagnostic in the task activity without treating it as assistant output.

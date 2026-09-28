@@ -77,3 +77,21 @@ behavioural parity claim, and no threshold was lowered.
 - The capture harness runs the renderer of each app on a virtual display; interactive
   input, live transport and multi-monitor/DPI behaviour are not exercised.
 - The installed app was not replaced, and no release/deploy step was performed.
+
+## Re-verification 2026-09-28
+
+Re-run on the same host after the P3/P4/P5/P2D work described in `HANDOFF.md`:
+
+- Frozen kit: `ARCHON_V030_ASAR=<frozen> node --test refresh.test.cjs tests/*.test.cjs`
+  → `tests 88`, `pass 88`, `fail 0`.
+- Frozen archive unchanged: sha256
+  `36d3ae03bd6b20c4e9ea5fc690461ef972b16eb0c9433bfb1305daeb068e549b`.
+- Candidate rebuilt with `npm run build:candidate -- <frozen> /tmp/archon-v030-candidate.asar`
+  → sha256 `e409eaf57cebf98152d68842f19e98b7e15ab1931e2af38372fa371fe723b856`.
+- `node current/testing/canonical-compare.cjs <frozen> /tmp/archon-v030-candidate.asar`
+  reports `frozen.ok: true` with all four baseline files hash-matching, the candidate's
+  `package.json` and `dist/main/preload.cjs` matching the baseline, and the two files the
+  candidate patches (`dist/main/main.cjs`, `dist/renderer/assets/index-DN77foUV.js`)
+  differing by design, with `peerjsBundled` and `peerjsCsp` true.
+
+Nothing in this work touched `current/`; `git status current/` stayed clean.

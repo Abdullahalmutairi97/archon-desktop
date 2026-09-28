@@ -40,7 +40,10 @@ Do not merge, deploy or release. Target: every change is committed, published, a
   export PATH="/home/archonminipc/.local/share/prime-node/node-v24.21.0/bin:$PATH"
   ARCHON_V030_ASAR=/home/archonminipc/projects/archon-desktop-v0.3.0/unified-refresh/app-v0.3.0-unified-refresh.asar \
     node --test refresh.test.cjs tests/*.test.cjs
-  python3 testing/canonical-compare.cjs "$ARCHON_V030_ASAR" /tmp/candidate.asar
+  # canonical-compare.cjs is a Node script, not Python.
+  node testing/canonical-compare.cjs "$ARCHON_V030_ASAR" /tmp/candidate.asar
+  # rebuild a candidate first (from the repository root):
+  npm run build:candidate -- "$ARCHON_V030_ASAR" /tmp/archon-v030-candidate.asar
   ```
 - `umask 0022` matters: a `0002` umask makes a permission-ancestry test fail.
 
