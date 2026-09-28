@@ -129,10 +129,11 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    host that provides them (setuid `chrome-sandbox` or unprivileged user namespaces;
    a protected Linux secret-service backend). Both are recorded in
    `docs/releases/p2d-fresh-builds.md`. Re-run the native check on such a host.
-5. **P1 evidence remainder** — an explicit resume as a new attempt exercised end to
-   end through the API, and the migration import/rollback shapes (duplicate project
-   *names* live in the separate Hermes projects database, which the Archon
-   migration never reads).
+5. **P1 evidence remainder** — the explicit resume path is now covered end to end
+   through the admission API (`backend/tests/test_resume_evidence.py`). Still open:
+   the migration import/rollback shapes beyond the snapshot cases, and duplicate
+   project *names*, which live in the separate Hermes projects database that the
+   Archon migration never reads.
 6. **P5 remainder** — event normalization and an approval binding for the adapters
    themselves; the broker and its scoped auth states are done. No tool/MCP adapter
    consumes the broker yet, so the two-channel bypass check (named tool versus

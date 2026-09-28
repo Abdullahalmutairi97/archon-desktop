@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — resume evidence through the API
+
+- Add an end-to-end evidence test for the P1 M1.6 list: a task that records a durable effect and then vanishes, a restart that reconciles it as `review_required` without a retry, an explicit resume that admits a new task for the same session, and a late completion for the interrupted attempt that cannot mutate the resumed task or its event ledger.
+
 ## Unreleased — opt-in confinement for runtime children
 
 - Add `ARCHON_DESKTOP_RUNTIME_ISOLATION_PROFILE` (`none` by default, or `workspace-only`). With `workspace-only`, the Prime and Pi child that runs a task starts inside bubblewrap: the host filesystem is read-only, and only the run's checkout, the runtime's own session directory and a private temp directory are writable. The probe must prove the confinement mechanics (a denied host write plus an allowed bound write) before any run starts, and a host without them refuses the run instead of launching unconfined. **Not qualified**: no real provider turn has been run inside the profile, so runtime compatibility is unverified and the profile stays off by default. Shared sandbox helpers now live in `backend/archon_server/sandbox.py` and back the workspace-service confinement too.
