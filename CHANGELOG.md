@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — a workbench beside conversations; the IDE is dropped
+
+- The connected app opens on server conversations, and Ctrl+N starts a new one (the browser preview still opens on Local Codex).
+- Beside a conversation, the workbench (Ctrl+1–4) shows **Activity** — the conversation's recent tasks with their tool calls, diagnostics and streamed answer, following the server's paged event cursor — and the **Files**, **Terminal** and **Preview** (services) of the checkout the conversation runs in: the checkout whose root is its working directory, else one of its project, else a pointer to Server work. Terminal and Preview need same-user pairing and say so otherwise.
+- A new conversation can run in a checkout of its project (Prime, the server's checkout route), so the agent and the workbench share one root.
+- Assistant replies, the live reply and the workbench answer render a Markdown subset (code blocks, headings, lists, quotes, inline code, bold, italic, links shown as text) with React elements only; raw HTML stays text and every pattern is linear.
+- Removed by the owner's decision: the IDE workbench tab and Ctrl+5, code-server registration in the services panel, and the language profiles panel.
+
 ## Unreleased — Chat, Sessions, Tasks and Projects show live server work
 
 - In the desktop app, the Chat, Sessions, Tasks and Projects views and the sidebar now show live server data instead of synthetic fixtures; the browser preview (no desktop bridge) keeps the labelled demo. Not-connected, rejected and failed states point to the Connection view and never mix in sample data.

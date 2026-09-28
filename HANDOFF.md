@@ -55,6 +55,26 @@ Do not merge, deploy or release. Target: every change is committed, published, a
   ```
 - `umask 0022` matters: a `0002` umask makes a permission-ancestry test fail.
 
+## Owner direction (2026-09-28 evening) — read this first
+
+The goal is a desktop app the owner can use day to day, not closed roadmap phases. **Ignore the
+server/deployment side** and **drop the IDE** (code-server, language profiles, the P4 debug flow):
+those items below are closed by decision, not pending. Skip or remove anything that does not serve
+daily use.
+
+State of the app now: it opens on live server conversations (Ctrl+N starts one); a conversation has
+a workbench beside it with Activity, Files, Terminal and Preview for the checkout it runs in; replies
+render as Markdown; a new conversation can run inside a checkout. A portable build is installed next
+to the frozen app at `~/Applications/archon-desktop-rebuild` with the launcher
+`~/.local/share/applications/archon-desktop-rebuild.desktop` ("Archon Desktop (Rebuild)", its own
+profile). To use it, open Connection and enter the backend URL (the live service listens on
+`http://100.67.235.123:9700`) and its token — only the owner enters the token. Terminal and Preview
+additionally need same-user pairing, which the live backend does not enable.
+
+Rebuild the install after changes: `npm run package:portable` in `desktop/` (Node 24; the Electron
+runtime must be in `desktop/node_modules/electron/dist`), then extract the tarball over a fresh
+directory. The packager refuses to overwrite an existing tarball.
+
 ## Session of 2026-09-28 (afternoon) — what changed
 
 Worked in the worktree above; every slice was checked with the full backend suite and the full
