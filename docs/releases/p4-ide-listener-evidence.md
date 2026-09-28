@@ -51,6 +51,7 @@ port.
   private parent, so a process running as the same account remains inside the trust
   boundary, exactly as it does for the rest of this server's files.
 - The response cap that a preview may forward was 2 MiB and truncated the 19 MiB editor
-  bundle, so no IDE preview could load. The cap is now 24 MiB, still bounded, with
-  truncation reported; per-request memory is one buffered response and a workspace is
-  limited to eight preview sessions.
+  bundle, so no IDE preview could load. The cap is now 24 MiB, still bounded, and a
+  workspace is limited to eight preview sessions. Since 28 September responses stream
+  instead of being buffered: the cap bounds one response, a body that passes it is
+  aborted rather than truncated, and the `x-archon-preview-truncated` flag is gone.

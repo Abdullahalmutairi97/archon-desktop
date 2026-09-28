@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — Chat, Sessions, Tasks and Projects show live server work
+
+- In the desktop app, the Chat, Sessions, Tasks and Projects views and the sidebar now show live server data instead of synthetic fixtures; the browser preview (no desktop bridge) keeps the labelled demo. Not-connected, rejected and failed states point to the Connection view and never mix in sample data.
+- Open a server conversation to read its transcript (thinking, tool and native records collapsed; all content rendered as text with `dir="auto"`) and continue it. The follow-up is sent once, the task is followed with bounded polling and can be cancelled, and the transcript reloads when it ends; an ambiguous send is never retried, and the composer stays locked while a task runs.
+- Start a new server conversation in a registered project with a runtime the server reports as available. Read-only (`pi-native-*`), review-required and unverified conversations are labelled and cannot be continued.
+- Bridge: new read-only `sessions.messages` operation (`GET /api/sessions/{id}/messages?limit=`, 1..500, exact message records, 2 MiB content bound). `tasks.submit` now accepts a `sessionId` (continue; the server keeps the conversation's runtime) or a `runtime` (`prime`/`pi`, new conversation), validated strictly and never combined with a checkout.
+- Verified in the built Electron app against an isolated backend with fake runtimes: live sidebar, transcript, a continued turn from queued to answered, tasks and projects, in both LTR and RTL. The last physical left/right style rules now use logical sides.
+
+## Unreleased — the preview gateway streams
+
+- The private preview gateway streams proxied responses as they arrive (event streams, long polls, chunked HMR, large assets) instead of buffering up to 24 MiB per request, for loopback-port and unix-socket targets alike, using a bounded standard-library HTTP/1.1 exchange.
+- A response is still capped at 24 MiB: a body that passes the cap mid-stream is aborted (no terminating chunk), never cut and presented as complete, and a declared `Content-Length` over the cap is refused with 502. The `x-archon-preview-truncated` header is gone.
+- A streamed response is re-checked against the live ticket binding every 2 s, like preview WebSockets: stopping or removing the service, a generation change or ticket expiry ends it, and the target connection is always released. The gateway waits up to 60 s for a response head or the next chunk; an unreachable or stalled target answers 502 instead of 500.
+
+## Unreleased — a write-lease handover waits for detached writers
+
+- A write-lease handover now refuses (409 `workspace_detached_writers`) while any same-user process has its working directory in the checkout or a checkout file open for writing — `nohup`/`setsid` jobs and editors started from a shell included. A process that only reads is not counted.
+- `quiesce` also stops detached writers that provably descend from the workspace's own terminal or service (parent chain or session, matched by pid and start time; SIGTERM, then SIGKILL, then verified gone, signalled through a pidfd). A writer Archon cannot prove it started is never killed and keeps blocking; nothing is stopped when any such writer exists.
+- A scan that cannot finish (`/proc` unreadable, timeout, too many processes or descriptors) refuses the handover (409 `workspace_writer_scan_incomplete`) instead of assuming the checkout is quiet. Processes that hide their `/proc` details are reported under `detachedWriters.unknown`; they block only when they provably descend from the workspace's own terminal or service.
+- Lease status, lease acquire and the workspace resources summary report `detachedWriters` (count, up to 32 entries, unknown processes). Lease refusals are structured JSON (`detail`, `code`, `writers`, `detachedWriters`); `detail` keeps its previous text.
+
 ## Unreleased — workspaces report their owner and where HEAD points
 
 - `GET /api/workspaces` and `GET /api/workspaces/{id}` accept `?include=checkout` and then add the recorded `owner_id` and a `checkout` record: `branch` (with its name), `detached` (with the full commit and whether it is still the provisioned revision), or `unknown`. HEAD is read from `.git/HEAD` directly — no Git process, hook or configuration from the writable checkout runs — and a linked or symlinked Git directory, an oversized or non-regular HEAD, or an unusual ref is `unknown`, never a guess. Without the parameter the record is unchanged, so an older desktop keeps validating it.
