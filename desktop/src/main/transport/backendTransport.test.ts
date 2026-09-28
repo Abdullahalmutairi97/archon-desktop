@@ -127,7 +127,7 @@ describe('backend transport', () => {
 
   it('maps workspace service calls to fixed owner-only routes', async () => {
     const workspaceId = `workspace-${'a'.repeat(32)}`
-    const service = { name: 'web', argv: ['/bin/echo'], cwd: '.', ports: [], restart: 'never', state: 'registered', exitCode: null, restarts: 0, health: 'unknown' }
+    const service = { name: 'web', argv: ['/bin/echo'], cwd: '.', ports: [], restart: 'never', state: 'registered', exitCode: null, restarts: 0, health: 'unknown', memoryLimitMb: null, cpuQuotaPercent: null, tasksMax: null, filesystemIsolation: 'none', networkIsolation: 'host' }
     const fetcher = vi.fn<BackendFetch>(async (url, init) => response(
       url.pathname.endsWith('/preview') ? { preview: { ticket: `wprev-${'d'.repeat(32)}`, mode: 'read-only', expiresAt: '2026-09-27T00:10:00Z' } }
         : url.pathname.endsWith('/logs') ? { text: 'x', truncated: false }

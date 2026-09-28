@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — service controls in the desktop panel
+
+- The service row now reports the controls the server applied (`memoryLimitMb`, `cpuQuotaPercent`, `tasksMax`, `filesystemIsolation`, `networkIsolation`), and a service without declared controls says so instead of implying isolation. The panel can declare all five when registering a service, refuses an out-of-range value or a network-isolated service with a port before any request, and its description no longer claims that every service runs unconfined.
+
 ## Unreleased — network isolation for workspace services
 
 - A workspace service definition may declare `networkIsolation: "isolated"`. The service then runs with no network namespace route (`bwrap --unshare-net`), which composes with the filesystem confinement and the resource scope. A definition that declares ports or a loopback health target is refused, because an isolated service could never answer them, and a host where the probe cannot demonstrate an unreachable network refuses to start the service. Verified end to end with a real service whose connection attempt returned `ENETUNREACH`.

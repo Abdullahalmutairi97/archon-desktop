@@ -30,6 +30,11 @@ export function WorkspaceServices({
   const [logs, setLogs] = useState<{ name: string; text: string; truncated: boolean }>(EMPTY_LOGS)
   const [previewName, setPreviewName] = useState<string | null>(null)
   const [codeServerPort, setCodeServerPort] = useState('4173')
+  const [memoryLimit, setMemoryLimit] = useState('')
+  const [cpuQuota, setCpuQuota] = useState('')
+  const [tasksMax, setTasksMax] = useState('')
+  const [filesystemIsolation, setFilesystemIsolation] = useState<'none' | 'workspace-only'>('none')
+  const [networkIsolation, setNetworkIsolation] = useState<'host' | 'isolated'>('host')
   const previewBox = useRef<HTMLDivElement | null>(null)
   const lock = useRef(false)
   const identity = `${workspaceId}:${generation}`
@@ -79,6 +84,14 @@ export function WorkspaceServices({
     return () => { observer.disconnect(); window.removeEventListener('resize', send) }
   }, [preview, previewName])
 
+  function optionalNumber(text: string, minimum: number, maximum: number): number | null | undefined {
+    const trimmed = text.trim()
+    if (!trimmed) return null
+    const value = Number(trimmed)
+    if (!Number.isInteger(value) || value < minimum || value > maximum) return undefined
+    return value
+  }
+
   function buildDefinition(): WorkspaceServiceDefinitionInput | null {
     const argv = [executable.trim(), ...argsText.split('\n').map((line) => line.trim()).filter(Boolean)]
     if (!/^[a-z][a-z0-9-]{0,31}$/u.test(name) || argv.length === 0 || !argv[0]) return null
@@ -88,17 +101,34 @@ export function WorkspaceServices({
       if (!/^[a-z][a-z0-9-]{0,15}$/u.test(portName) || !Number.isInteger(value) || value < 1 || value > 65535) return null
       ports = [{ name: portName, port: value }]
     }
+    const memoryLimitMb = optionalNumber(memoryLimit, 16, 65536)
+    const cpuQuotaPercent = optionalNumber(cpuQuota, 1, 1600)
+    const tasksMaxValue = optionalNumber(tasksMax, 4, 4096)
+    if (memoryLimitMb === undefined || cpuQuotaPercent === undefined || tasksMaxValue === undefined) return null
+    if (networkIsolation === 'isolated' && ports.length > 0) return null
     return {
       name, argv, cwd: cwd.trim() || '.', env: [], ports,
-      health: null, dependsOn: [], restart: 'never', memoryLimitMb: null,
+      health: null, dependsOn: [], restart: 'never', memoryLimitMb,
+      cpuQuotaPercent, tasksMax: tasksMaxValue, filesystemIsolation, networkIsolation,
     }
+  }
+
+  function controlSummary(service: WorkspaceServiceDto): string {
+    const parts: string[] = []
+    if (service.memoryLimitMb !== null) parts.push(`memory ${service.memoryLimitMb} MB`)
+    if (service.cpuQuotaPercent !== null) parts.push(`cpu ${service.cpuQuotaPercent}%`)
+    if (service.tasksMax !== null) parts.push(`tasks ${service.tasksMax}`)
+    if (service.filesystemIsolation === 'workspace-only') parts.push('filesystem: workspace only')
+    if (service.networkIsolation === 'isolated') parts.push('network: none')
+    // Nothing declared means the process runs with the owner's full filesystem and network.
+    return parts.length > 0 ? parts.join(' · ') : 'no declared controls (full host access)'
   }
 
   async function define(): Promise<void> {
     if (lock.current || !pairingAvailable) return
     const definition = buildDefinition()
     if (definition === null) {
-      setMessage({ kind: 'error', text: 'Service name must be a lowercase slug, executable is required, and a port needs a name and number.' })
+      setMessage({ kind: 'error', text: 'Check the service name, executable and port, and use whole numbers inside the allowed ranges. An isolated service cannot declare a port.' })
       return
     }
     const requested = identity
@@ -249,7 +279,7 @@ export function WorkspaceServices({
       <div><h4>Workspace services</h4><span>Checkout {workspaceId} · generation {generation}</span></div>
       <button type="button" onClick={() => { void refresh() }} disabled={!pairingAvailable || busy}>Refresh</button>
     </div>
-    <p>A registered service runs a bounded argv array in this checkout as the backend owner. It is not isolated. Starting executes the registered command; a chat URL or parsed log port never authorizes access.</p>
+    <p>A registered service runs a bounded argv array in this checkout as the backend owner. Declared controls are applied through one user scope and each is refused unless the backend probe observed real enforcement on this host: memory, CPU quota, task limit, workspace-only filesystem confinement and no network. A service without declared controls keeps full host access. Starting executes the registered command; a chat URL or parsed log port never authorizes access.</p>
     {!pairingAvailable && <p role="status">Local same-user pairing is unavailable, so services are disabled.</p>}
     <ul className="workspace-services-list">
       {services.length === 0 && <li>No services registered.</li>}
@@ -258,6 +288,7 @@ export function WorkspaceServices({
         <span className={`service-health service-health-${service.health}`}>health: {service.health}</span>
         <code>{service.name}</code>
         <span className="service-argv">{service.argv.join(' ')}</span>
+        <span className="service-controls" aria-label={`Applied controls for ${service.name}`}>{controlSummary(service)}</span>
         {service.state !== 'running' && <button type="button" onClick={() => { void startService(service.name) }} disabled={busy || !pairingAvailable}>Start</button>}
         {service.state === 'running' && <button type="button" onClick={() => setPending({ action: 'stop', name: service.name })} disabled={busy}>Stop…</button>}
         <button type="button" onClick={() => { void viewLogs(service.name) }} disabled={busy}>Logs</button>
@@ -277,6 +308,17 @@ export function WorkspaceServices({
       <label><span>Working directory</span><input value={cwd} onChange={(e) => setCwd(e.currentTarget.value)} placeholder="." /></label>
       <label><span>Port name</span><input value={portName} onChange={(e) => setPortName(e.currentTarget.value)} placeholder="http" /></label>
       <label><span>Port</span><input value={portValue} onChange={(e) => setPortValue(e.currentTarget.value)} inputMode="numeric" placeholder="4173" /></label>
+      <label><span>Memory limit MB (blank for none)</span><input value={memoryLimit} onChange={(e) => setMemoryLimit(e.currentTarget.value)} inputMode="numeric" placeholder="256" /></label>
+      <label><span>CPU quota % (blank for none)</span><input value={cpuQuota} onChange={(e) => setCpuQuota(e.currentTarget.value)} inputMode="numeric" placeholder="50" /></label>
+      <label><span>Task limit (blank for none)</span><input value={tasksMax} onChange={(e) => setTasksMax(e.currentTarget.value)} inputMode="numeric" placeholder="64" /></label>
+      <label><span>Filesystem</span><select value={filesystemIsolation} onChange={(e) => setFilesystemIsolation(e.currentTarget.value as 'none' | 'workspace-only')}>
+        <option value="none">none (host access)</option>
+        <option value="workspace-only">workspace only (read-only host)</option>
+      </select></label>
+      <label><span>Network</span><select value={networkIsolation} onChange={(e) => setNetworkIsolation(e.currentTarget.value as 'host' | 'isolated')}>
+        <option value="host">host</option>
+        <option value="isolated">isolated (no network, no port)</option>
+      </select></label>
       <button type="button" onClick={() => { void define() }} disabled={!pairingAvailable || busy}>Register</button>
     </fieldset>
     <div className="workspace-services-codeserver">

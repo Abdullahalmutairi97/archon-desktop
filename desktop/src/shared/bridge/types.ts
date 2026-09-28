@@ -282,6 +282,19 @@ export interface WorkspaceServiceDefinitionInput {
   dependsOn: readonly string[]
   restart: 'never' | 'on-failure'
   memoryLimitMb: number | null
+  /** Optional for older callers: an omitted control defaults to the uncontrolled profile. */
+  cpuQuotaPercent?: number | null
+  tasksMax?: number | null
+  filesystemIsolation?: 'none' | 'workspace-only'
+  networkIsolation?: 'host' | 'isolated'
+}
+
+/** A definition with every control resolved, as the preload bridge hands it to main. */
+export interface ResolvedWorkspaceServiceDefinition extends WorkspaceServiceDefinitionInput {
+  cpuQuotaPercent: number | null
+  tasksMax: number | null
+  filesystemIsolation: 'none' | 'workspace-only'
+  networkIsolation: 'host' | 'isolated'
 }
 
 export interface WorkspaceServiceDto {
@@ -294,6 +307,12 @@ export interface WorkspaceServiceDto {
   exitCode: number | null
   restarts: number
   health: 'unknown' | 'starting' | 'healthy' | 'unhealthy'
+  /** Declared controls the server applied; each was probe-verified before a start. */
+  memoryLimitMb: number | null
+  cpuQuotaPercent: number | null
+  tasksMax: number | null
+  filesystemIsolation: 'none' | 'workspace-only'
+  networkIsolation: 'host' | 'isolated'
 }
 
 export interface WorkspaceServiceLogsDto {

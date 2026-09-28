@@ -1107,4 +1107,11 @@ class WorkspaceServiceManager:
             "exitCode": runtime["exitCode"] if runtime else None,
             "restarts": runtime["restarts"] if runtime else 0,
             "health": runtime["health"] if runtime else "unknown",
+            # Declared controls are reported so a client can show what the server
+            # actually applied; each one is probe-verified before a start.
+            "memoryLimitMb": entry.get("memoryLimitMb"),
+            "cpuQuotaPercent": entry.get("cpuQuotaPercent"),
+            "tasksMax": entry.get("tasksMax"),
+            "filesystemIsolation": entry.get("filesystemIsolation", "none"),
+            "networkIsolation": entry.get("networkIsolation", "host"),
         }

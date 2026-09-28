@@ -42,6 +42,7 @@ import type {
   WorkspaceConsoleNamedKey,
   WorkspaceConsoleAttachEventDto,
   WorkspaceServiceDto,
+  ResolvedWorkspaceServiceDefinition,
   WorkspaceServiceDefinitionInput,
 } from './types'
 
@@ -1201,8 +1202,19 @@ function parseWorkspaceServicePorts(value: unknown): readonly { name: string; po
   }))
 }
 
-function parseWorkspaceServiceDefinition(value: unknown): WorkspaceServiceDefinitionInput {
-  const record = exactObject(value, ['name', 'argv', 'cwd', 'env', 'ports', 'health', 'dependsOn', 'restart', 'memoryLimitMb'])
+const WORKSPACE_SERVICE_CONTROL_DEFAULTS = Object.freeze({
+  cpuQuotaPercent: null, tasksMax: null, filesystemIsolation: 'none', networkIsolation: 'host',
+})
+
+function parseWorkspaceServiceDefinition(value: unknown): ResolvedWorkspaceServiceDefinition {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return fail()
+  // Resource and isolation controls are optional for older callers and default
+  // to the uncontrolled profile, so an omitted field never implies enforcement.
+  const record = exactObject(
+    { ...WORKSPACE_SERVICE_CONTROL_DEFAULTS, ...(value as Record<string, unknown>) },
+    ['name', 'argv', 'cwd', 'env', 'ports', 'health', 'dependsOn', 'restart', 'memoryLimitMb',
+      'cpuQuotaPercent', 'tasksMax', 'filesystemIsolation', 'networkIsolation'],
+  )
   const name = workspaceServiceName(record.name)
   if (!Array.isArray(record.argv) || record.argv.length < 1 || record.argv.length > MAX_WORKSPACE_SERVICE_ARGV) return fail()
   const argv = Object.freeze(record.argv.map((item) => {
@@ -1230,14 +1242,33 @@ function parseWorkspaceServiceDefinition(value: unknown): WorkspaceServiceDefini
   if (record.restart !== 'never' && record.restart !== 'on-failure') return fail()
   if (record.memoryLimitMb !== null && (typeof record.memoryLimitMb !== 'number'
     || !Number.isInteger(record.memoryLimitMb) || record.memoryLimitMb < 16 || record.memoryLimitMb > 65536)) return fail()
+  if (record.cpuQuotaPercent !== null && (typeof record.cpuQuotaPercent !== 'number'
+    || !Number.isInteger(record.cpuQuotaPercent) || record.cpuQuotaPercent < 1 || record.cpuQuotaPercent > 1600)) return fail()
+  if (record.tasksMax !== null && (typeof record.tasksMax !== 'number'
+    || !Number.isInteger(record.tasksMax) || record.tasksMax < 4 || record.tasksMax > 4096)) return fail()
+  if (record.filesystemIsolation !== 'none' && record.filesystemIsolation !== 'workspace-only') return fail()
+  if (record.networkIsolation !== 'host' && record.networkIsolation !== 'isolated') return fail()
+  if (record.networkIsolation === 'isolated'
+    && ((record.ports as readonly unknown[]).length > 0 || record.health !== null)) {
+    // An isolated service has no network, so a declared port or health target
+    // could never answer; refuse it here rather than let the server reject it.
+    return fail()
+  }
   return Object.freeze({
     name, argv, cwd: record.cwd, env, ports, health, dependsOn,
     restart: record.restart, memoryLimitMb: record.memoryLimitMb as number | null,
-  })
+    cpuQuotaPercent: record.cpuQuotaPercent as number | null,
+    tasksMax: record.tasksMax as number | null,
+    filesystemIsolation: record.filesystemIsolation as ResolvedWorkspaceServiceDefinition['filesystemIsolation'],
+    networkIsolation: record.networkIsolation as ResolvedWorkspaceServiceDefinition['networkIsolation'],
+  }) satisfies WorkspaceServiceDefinitionInput
 }
 
 function parseWorkspaceServiceDto(value: unknown): WorkspaceServiceDto {
-  const record = exactObject(value, ['name', 'argv', 'cwd', 'ports', 'restart', 'state', 'exitCode', 'restarts', 'health'])
+  const record = exactObject(value, [
+    'name', 'argv', 'cwd', 'ports', 'restart', 'state', 'exitCode', 'restarts', 'health',
+    'memoryLimitMb', 'cpuQuotaPercent', 'tasksMax', 'filesystemIsolation', 'networkIsolation',
+  ])
   const name = workspaceServiceName(record.name)
   if (!Array.isArray(record.argv)
     || record.argv.some((item) => typeof item !== 'string' || item.length > MAX_WORKSPACE_SERVICE_ARG_LENGTH)) return fail()
@@ -1248,11 +1279,24 @@ function parseWorkspaceServiceDto(value: unknown): WorkspaceServiceDto {
   if (record.exitCode !== null && (typeof record.exitCode !== 'number' || !Number.isInteger(record.exitCode))) return fail()
   if (typeof record.restarts !== 'number' || !Number.isInteger(record.restarts) || record.restarts < 0) return fail()
   if (typeof record.health !== 'string' || !WORKSPACE_SERVICE_HEALTH.has(record.health)) return fail()
+  if (record.memoryLimitMb !== null && (typeof record.memoryLimitMb !== 'number'
+    || !Number.isInteger(record.memoryLimitMb) || record.memoryLimitMb < 16 || record.memoryLimitMb > 65536)) return fail()
+  if (record.cpuQuotaPercent !== null && (typeof record.cpuQuotaPercent !== 'number'
+    || !Number.isInteger(record.cpuQuotaPercent) || record.cpuQuotaPercent < 1 || record.cpuQuotaPercent > 1600)) return fail()
+  if (record.tasksMax !== null && (typeof record.tasksMax !== 'number'
+    || !Number.isInteger(record.tasksMax) || record.tasksMax < 4 || record.tasksMax > 4096)) return fail()
+  if (record.filesystemIsolation !== 'none' && record.filesystemIsolation !== 'workspace-only') return fail()
+  if (record.networkIsolation !== 'host' && record.networkIsolation !== 'isolated') return fail()
   return Object.freeze({
     name, argv: Object.freeze(record.argv as string[]), cwd: record.cwd, ports,
     restart: record.restart, state: record.state as WorkspaceServiceDto['state'],
     exitCode: record.exitCode as number | null, restarts: record.restarts,
     health: record.health as WorkspaceServiceDto['health'],
+    memoryLimitMb: record.memoryLimitMb as number | null,
+    cpuQuotaPercent: record.cpuQuotaPercent as number | null,
+    tasksMax: record.tasksMax as number | null,
+    filesystemIsolation: record.filesystemIsolation as WorkspaceServiceDto['filesystemIsolation'],
+    networkIsolation: record.networkIsolation as WorkspaceServiceDto['networkIsolation'],
   })
 }
 

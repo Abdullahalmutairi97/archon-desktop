@@ -558,7 +558,12 @@ async def test_declared_resource_controls_reach_the_user_scope(tmp_path):
     row = _ledger_rows(tmp_path)[0]
     assert row["cpuQuotaPercent"] == 50 and row["tasksMax"] == 64 and row["memoryLimitMb"] == 256
     listed = [item for item in await manager.list(WORKSPACE_ID) if item["name"] == "bounded"][0]
-    assert set(listed) == {"name", "argv", "cwd", "ports", "restart", "state", "exitCode", "restarts", "health"}
+    assert set(listed) == {
+        "name", "argv", "cwd", "ports", "restart", "state", "exitCode", "restarts", "health",
+        "memoryLimitMb", "cpuQuotaPercent", "tasksMax", "filesystemIsolation", "networkIsolation",
+    }
+    assert listed["memoryLimitMb"] == 256 and listed["cpuQuotaPercent"] == 50 and listed["tasksMax"] == 64
+    assert listed["filesystemIsolation"] == "none" and listed["networkIsolation"] == "host"
     await manager.shutdown()
 
 
