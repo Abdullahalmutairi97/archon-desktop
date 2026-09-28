@@ -178,7 +178,12 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    the same roadmap item: resource definitions and assignments, managed installation
    requests, a real update/rollback pipeline (this ledger installs nothing), and stopping
    or restarting *running* work when a cached resource cannot be revoked — the check
-   reports a live task, it never kills one.
+   reports a live task, it never kills one. Declarative resource definitions and their
+   scope assignments now exist too, with the fixed precedence
+   `agent > workspace > project`, an effective-configuration view that reports declared
+   against measured digests (`current`/`drifted`/`unobserved`/`configuration-only`), and the
+   effective list recorded in every attempt snapshot. Still missing from that roadmap item:
+   install requests and the managed installation/update pipeline.
 
 9. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
    unstarted; the operator deferred these earlier — confirm before starting).

@@ -74,6 +74,11 @@ from .diagnostic_capture import (
     DiagnosticCaptureError,
     DiagnosticCaptureUnavailable,
 )
+from .resource_definitions import (
+    ResourceDefinitionError,
+    ResourceDefinitionLedger,
+    ResourceDefinitionUnavailable,
+)
 from .resource_snapshots import (
     ResourcePinLedger,
     ResourceSnapshotError,
@@ -449,6 +454,26 @@ class SecretInvokeRequest(BaseModel):
     attempt_id: str = Field(alias="attemptId", min_length=1, max_length=128)
 
 
+class ResourceDefinitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9._-]{0,63}$")
+    kind: str = Field(pattern=r"^(runtime|extension|tool|mcp)$")
+    version: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+    # Required for a runtime or an extension: an artefact a person can check by digest.
+    digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    source: str | None = Field(default=None, max_length=256)
+    licence: str | None = Field(default=None, max_length=64)
+    note: str | None = Field(default=None, max_length=256)
+
+
+class ResourceAssignmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    definition: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9._-]{0,63}$")
+    note: str | None = Field(default=None, max_length=256)
+
+
 class ResourcePinRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -732,6 +757,7 @@ def create_app(
     diagnostic_capture: DiagnosticCapture | None = None
     resource_snapshots: ResourceSnapshotStore | None = None
     resource_pins: ResourcePinLedger | None = None
+    resource_definitions: ResourceDefinitionLedger | None = None
     secret_broker: SecretBroker | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
@@ -909,6 +935,25 @@ def create_app(
     snapshot_root = settings.data_dir.expanduser().resolve() / "resource-snapshots"
     resource_snapshots = ResourceSnapshotStore(snapshot_root / "attempts")
     resource_pins = ResourcePinLedger(snapshot_root / "pins")
+    # Declarative resource definitions and their scope assignments. Metadata only:
+    # nothing here installs or downloads an artefact.
+    resource_definitions = ResourceDefinitionLedger(snapshot_root / "definitions")
+
+    def observed_definition_digests() -> dict[str, str | None]:
+        """Digest this host reports for each recorded definition, where it can be measured."""
+        rows = {row["name"]: row for row in resource_definitions.definitions()}
+        manifests = {row.get("id"): row.get("executable_digest") for row in registry.describe()}
+        extensions = describe_language_profiles(settings.code_server_extensions_dir)
+        measured: dict[str, str] = {}
+        for profile in extensions.get("profiles", []):
+            for entry in [*profile.get("extensions", []), *profile.get("debuggers", [])]:
+                digest = entry.get("pinnedInstalledSha256") or entry.get("measuredSha256")
+                if isinstance(entry.get("extensionId"), str) and isinstance(digest, str):
+                    measured[entry["extensionId"]] = digest
+        return {
+            name: (manifests.get(name) or measured.get(name) or measured.get(row.get("source") or ""))
+            for name, row in rows.items()
+        }
 
     def record_attempt_snapshot(attempt: dict[str, Any]) -> None:
         manifests = registry.describe()
@@ -916,7 +961,17 @@ def create_app(
         pin_row = resource_pins.pin_for(str(runtime_id)) if runtime_id else None
         manifest = next((row for row in manifests if row.get("id") == runtime_id), None)
         observed = (manifest or {}).get("executable_digest")
+        try:
+            effective = resource_definitions.effective(
+                agent=str(runtime_id) if runtime_id else None,
+                workspace=attempt.get("workspace_id"),
+                project=attempt.get("project_id"),
+                observed=observed_definition_digests(),
+            )["definitions"]
+        except (ResourceDefinitionError, ValueError):
+            effective = []
         resource_snapshots.record(
+            definitions=effective,
             task_id=attempt.get("task_id"),
             attempt_id=attempt.get("attempt_id"),
             approval_mode=attempt.get("approval_mode"),
@@ -1054,6 +1109,7 @@ def create_app(
             app.state.diagnostic_capture = diagnostic_capture
             app.state.resource_snapshots = resource_snapshots
             app.state.resource_pins = resource_pins
+            app.state.resource_definitions = resource_definitions
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -1731,6 +1787,123 @@ def create_app(
         if resource_snapshots is None:
             raise HTTPException(status_code=503, detail="Resource snapshots are unavailable")
         return resource_snapshots
+
+    def resource_definition_service() -> ResourceDefinitionLedger:
+        if resource_definitions is None:
+            raise HTTPException(status_code=503, detail="Resource definitions are unavailable")
+        return resource_definitions
+
+    def observed_definition_map() -> dict[str, str | None]:
+        """Digest measured now for each recorded definition, where it can be measured."""
+        rows = {row["name"]: row for row in resource_definition_service().definitions()}
+        manifests = {row.get("id"): row.get("executable_digest") for row in registry.describe()}
+        measured: dict[str, str] = {}
+        try:
+            extensions = describe_language_profiles(settings.code_server_extensions_dir)
+        except Exception:
+            extensions = {"profiles": []}
+        for profile in extensions.get("profiles", []):
+            for entry in [*profile.get("extensions", []), *profile.get("debuggers", [])]:
+                digest = entry.get("pinnedInstalledSha256") or entry.get("measuredSha256")
+                if isinstance(entry.get("extensionId"), str) and isinstance(digest, str):
+                    measured[entry["extensionId"]] = digest
+        return {
+            name: (manifests.get(name) or measured.get(name) or measured.get(row.get("source") or ""))
+            for name, row in rows.items()
+        }
+
+    @app.get("/api/local/resources/definitions", dependencies=[Depends(require_local_owner)])
+    async def local_resource_definitions():
+        """Declared resources. Metadata only: nothing is installed or downloaded."""
+        try:
+            return JSONResponse(
+                content={"definitions": resource_definition_service().definitions(),
+                         "note": ("A definition records a version and digest a person accepted. It is "
+                                  "not evidence that the artefact is installed or loaded.")},
+                headers={"Cache-Control": "no-store"},
+            )
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.put("/api/local/resources/definitions/{name}", status_code=201,
+             dependencies=[Depends(require_local_owner)])
+    async def local_resource_definition_put(name: str, payload: ResourceDefinitionRequest):
+        try:
+            if payload.name != name:
+                raise HTTPException(status_code=400, detail="Definition name must match the request path")
+            return JSONResponse(
+                status_code=201,
+                content={"definition": resource_definition_service().define(**payload.model_dump())},
+                headers={"Cache-Control": "no-store"},
+            )
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.delete("/api/local/resources/definitions/{name}", dependencies=[Depends(require_local_owner)])
+    async def local_resource_definition_delete(name: str):
+        try:
+            resource_definition_service().remove(name)
+            return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/local/resources/assignments", dependencies=[Depends(require_local_owner)])
+    async def local_resource_assignments():
+        try:
+            return JSONResponse(
+                content={"assignments": resource_definition_service().assignments()},
+                headers={"Cache-Control": "no-store"},
+            )
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.put("/api/local/resources/assignments/{scope}/{scope_id}", status_code=201,
+             dependencies=[Depends(require_local_owner)])
+    async def local_resource_assignment_put(scope: str, scope_id: str, payload: ResourceAssignmentRequest):
+        try:
+            assigned = resource_definition_service().assign(
+                scope=scope, scope_id=scope_id, definition=payload.definition, note=payload.note,
+            )
+            return JSONResponse(status_code=201, content={"assignment": assigned},
+                                headers={"Cache-Control": "no-store"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.delete("/api/local/resources/assignments/{scope}/{scope_id}",
+                dependencies=[Depends(require_local_owner)])
+    async def local_resource_assignment_delete(scope: str, scope_id: str):
+        try:
+            resource_definition_service().unassign(scope=scope, scope_id=scope_id)
+            return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/local/resources/effective", dependencies=[Depends(require_local_owner)])
+    async def local_resource_effective(agent: str | None = None, workspace_id: str | None = None,
+                                       project_id: str | None = None):
+        """The declared resources in effect for one scope, narrowest scope first."""
+        try:
+            return JSONResponse(
+                content=resource_definition_service().effective(
+                    agent=agent, workspace=workspace_id, project=project_id,
+                    observed=observed_definition_map(),
+                ),
+                headers={"Cache-Control": "no-store"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     def resource_pin_service() -> ResourcePinLedger:
         if resource_pins is None:

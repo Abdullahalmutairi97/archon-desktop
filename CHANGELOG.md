@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — declarative resource definitions, assignments and effective configuration
+
+- Add `PUT/GET/DELETE /api/local/resources/definitions` (owner credential) for declarative resource records: a name, a kind (`runtime`, `extension`, `tool`, `mcp`), a version, and for an artefact kind a sha256 digest, with optional source, licence and note. A definition is metadata: nothing is installed, downloaded or executed, and updating a digest keeps the previous one as history. A definition that is still assigned cannot be removed.
+- Add `PUT/GET/DELETE /api/local/resources/assignments` binding a recorded definition to a scope (`agent`, `workspace`, `project`), and `GET /api/local/resources/effective` resolving the definitions in effect for a scope with the fixed precedence `agent > workspace > project`, narrowest first. A narrower scope may only name a definition that exists, so an assignment cannot widen what a broader scope declares. Each row reports the declared digest against the digest measured on this host, as `current`, `drifted`, `unobserved` (nothing measured) or `configuration-only`; nothing measured is never reported as current.
+- Every attempt snapshot now carries the effective definitions (name, kind, version, declared and observed digest, state, scope) alongside the runtime identity, so the configuration a turn ran under is recorded with the attempt. States read back from the ledger are re-sanitised, so a tampered snapshot cannot introduce an unknown state.
+
 ## Unreleased — a changed runtime identity blocks resuming a conversation
 
 - A conversation can only continue under the runtime identity its attempts ran with. `GET /api/local/resources/sessions` (owner credential) reports, per conversation, the identity its newest attempt snapshot recorded, the digest installed now, and whether a resume is allowed; `POST /api/tasks` refuses a resume with 409 when an attempt recorded a different executable digest, or when a recorded identity has no installed digest to match against. A conversation with no recorded identity is still allowed and reported as `unrecorded`, so an absence of evidence is never reported as verification.

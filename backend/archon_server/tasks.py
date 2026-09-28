@@ -1293,6 +1293,7 @@ class TaskEngine:
                         "approval_mode": task.get("approval_mode"),
                         "workspace_id": task.get("workspace_id"),
                         "workspace_generation": task.get("workspace_generation"),
+                        "project_id": task.get("project_id"),
                     })
                 except Exception:
                     logger.exception("resource snapshot failed")

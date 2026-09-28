@@ -124,6 +124,31 @@ def _manifest_facts(manifest: Mapping[str, Any] | None) -> dict[str, Any] | None
     }
 
 
+
+_DEFINITION_STATES = {"current", "drifted", "unobserved", "configuration-only"}
+_DEFINITION_SCOPES = {"agent", "workspace", "project"}
+
+
+def _definition_rows(definitions: Iterable[Any]) -> list[dict[str, Any]]:
+    """Keep the declared-resource facts of an attempt, and drop anything else."""
+    rows: list[dict[str, Any]] = []
+    for row in list(definitions)[:32]:
+        if not isinstance(row, Mapping):
+            continue
+        state = row.get("state")
+        rows.append({
+            "name": row.get("name") if isinstance(row.get("name"), str) else None,
+            "kind": row.get("kind") if isinstance(row.get("kind"), str) else None,
+            "version": row.get("version") if isinstance(row.get("version"), str) else None,
+            "digest": row.get("digest") if isinstance(row.get("digest"), str) else None,
+            "observedDigest": row.get("observedDigest") if isinstance(row.get("observedDigest"), str) else None,
+            # An unknown state is never trusted from the ledger.
+            "state": state if state in _DEFINITION_STATES else "unobserved",
+            "scope": row.get("scope") if row.get("scope") in _DEFINITION_SCOPES else None,
+            "scopeId": row.get("scopeId") if isinstance(row.get("scopeId"), str) else None,
+        })
+    return rows
+
 class ResourceSnapshotStore:
     """One immutable snapshot per task attempt, in a private directory."""
 
@@ -153,6 +178,7 @@ class ResourceSnapshotStore:
         manifests: Iterable[Mapping[str, Any]] = (),
         runtime_id: Any = None,
         pins: Mapping[str, Any] | None = None,
+        definitions: Iterable[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         """Write the snapshot for one attempt, or refuse because it already exists."""
         task = self._identifier(task_id, "task_id")
@@ -183,6 +209,10 @@ class ResourceSnapshotStore:
                 "pinnedAt": (pins or {}).get("pinnedAt") if isinstance(pins, Mapping) else None,
                 "drifted": True if isinstance(pins, Mapping) and pins.get("drifted") is True else False,
             },
+            # The declared resources in effect for this attempt, narrowest scope first.
+            # Declarations are metadata; a state of "current" means the declaration's
+            # digest matches what this host measured, not that a runtime loaded it.
+            "definitions": _definition_rows(definitions),
             "note": (
                 "Recorded once, when the attempt started. It states the identity this server "
                 "observed; it is not a claim that the runtime authenticated or ran correctly."
@@ -282,6 +312,8 @@ class ResourceSnapshotStore:
             raise ResourceSnapshotUnavailable("The snapshot runtime row is malformed")
         if not isinstance(document.get("runtimeManifests"), list):
             raise ResourceSnapshotUnavailable("The snapshot manifest list is malformed")
+        if not isinstance(document.get("definitions", []), list):
+            raise ResourceSnapshotUnavailable("The snapshot definition list is malformed")
         return document
 
     @staticmethod
@@ -299,6 +331,7 @@ class ResourceSnapshotStore:
             "workspaceGeneration": document.get("workspaceGeneration"),
             "approvalMode": document.get("approvalMode"),
             "pin": dict(document.get("pin") or {}) if isinstance(document.get("pin"), Mapping) else {},
+            "definitions": _definition_rows(document.get("definitions") or []),
             "note": document.get("note"),
         }
 
