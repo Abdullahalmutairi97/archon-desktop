@@ -60,34 +60,8 @@ _CPU_QUOTA_MIN_PERCENT = 1
 _CPU_QUOTA_MAX_PERCENT = 1600
 _FILESYSTEM_PROFILES = frozenset({"none", "workspace-only"})
 _NETWORK_PROFILES = frozenset({"host", "isolated"})
-# A confined service sees the host read-only and may write only inside its
-# workspace, so a service cannot modify host files outside the checkout.
-_FILESYSTEM_PROBE_SCRIPT = (
-    "import pathlib\n"
-    "denied=False\n"
-    "allowed=False\n"
-    "try:\n"
-    " pathlib.Path('/etc/.archon-isolation-probe').write_text('x')\n"
-    "except OSError:\n"
-    " denied=True\n"
-    "target=pathlib.Path(__import__('sys').argv[1])/'.archon-isolation-probe'\n"
-    "try:\n"
-    " target.write_text('x')\n"
-    " target.unlink()\n"
-    " allowed=True\n"
-    "except OSError:\n"
-    " allowed=False\n"
-    "print('denied=%s allowed=%s' % (denied, allowed))\n"
-)
-# A network-isolated service must not reach the network at all. The probe runs
-# inside the same namespace the service would get and requires a connection
-# attempt to fail there, because an accepted-but-ignored option would leak.
-_NETWORK_PROBE_SCRIPT = (
-    "import socket\n"
-    "s=socket.socket(); s.settimeout(3)\n"
-    "code=s.connect_ex(('1.1.1.1', 443))\n"
-    "print('connect=%d' % code)\n"
-)
+# The filesystem and network probes live in `sandbox.py`, because the runtime
+# confinement uses the same mechanics.
 _TASKS_MAX_MIN = 4
 _TASKS_MAX_MAX = 4096
 # A 5% quota must throttle a busy loop quickly, so `nr_throttled` is the signal:

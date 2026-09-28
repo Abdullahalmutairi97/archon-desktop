@@ -132,16 +132,19 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    host that provides them (setuid `chrome-sandbox` or unprivileged user namespaces;
    a protected Linux secret-service backend). Both are recorded in
    `docs/releases/p2d-fresh-builds.md`. Re-run the native check on such a host.
-5. **P1 evidence remainder** — the explicit resume path is now covered end to end
-   through the admission API (`backend/tests/test_resume_evidence.py`). Still open:
-   the migration import/rollback shapes beyond the snapshot cases, and duplicate
-   project *names*, which live in the separate Hermes projects database that the
-   Archon migration never reads.
+5. **P1 evidence remainder** — the explicit resume path and the snapshot
+   restore/import procedure are now covered end to end
+   (`backend/tests/test_resume_evidence.py`, `test_migration_restore_evidence.py`).
+   The one shape a reviewer may still ask for is duplicate project *names*, which live
+   in the separate Hermes projects database that the Archon migration never reads.
 6. **P5 remainder** — event normalization is done (bounded diagnostics for
-   unreadable or unhandled native records). An approval binding for the adapters
-   themselves is still open, and no tool/MCP adapter consumes the broker yet, so the
-   two-channel bypass check (named tool versus shell/direct HTTP) is not
-   demonstrated.
+   unreadable or unhandled native records). The two-channel bypass check is now
+   *measured*, not demonstrated: the environment channel is filtered and the server
+   clears its dumpable flag so `/proc/<server>/environ` is denied to other same-uid
+   processes, but ledger-retarget (reproduced), the pairing socket and direct provider
+   reachability stay open for anything running as the service account — see
+   `docs/releases/p5-same-uid-exposure-evidence.md`. Closing it needs an enforced OS
+   boundary around every workspace-capable process or real upstream scopes.
 7. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
    unstarted; the operator deferred these earlier — confirm before starting).
 
@@ -155,6 +158,12 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
 - Baseline parity with the frozen v0.3.0 app: the build manifest still says
   `baselineParity: unverified`.
 - Real provider turns under any new isolation profile: not run.
+- Broker isolation against a same-uid process: not achieved. The named-tool and
+  environment channels are filtered and `/proc/<server>/environ` is denied; the ledger,
+  the pairing socket and direct provider access are not.
+- Debug session under the workspace IDE: never exercised. `ms-python.debugpy` is pinned
+  and installed, but Archon has no debug-launch surface and code-server exposes no
+  session flag, so no breakpoint, DAP message or adapter activation has been observed.
 
 ## Practical notes
 

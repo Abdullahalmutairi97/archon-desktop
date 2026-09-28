@@ -4,12 +4,18 @@ import uvicorn
 
 from .app import create_app
 from .config import Settings
+from .hardening import disable_process_dumpability
 from .security import validate_server_security
 
 
 def main() -> None:
     settings = Settings()
     validate_server_security(settings)
+    # The server holds provider credentials in its own environment, and Linux lets any
+    # same-uid process read /proc/<pid>/environ. Clear the dumpable flag before the
+    # listener starts; a host that refuses the call keeps running, and the evidence
+    # record states that this channel is then not closed.
+    disable_process_dumpability()
     uvicorn.run(
         create_app(settings), host=settings.bind_host, port=settings.bind_port,
         timeout_graceful_shutdown=5, proxy_headers=False,

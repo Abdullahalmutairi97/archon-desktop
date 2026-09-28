@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — restore and import evidence
+
+- Add `backend/tests/test_migration_restore_evidence.py`: restore the pre-migration snapshot produced by a mixed-shape legacy database, reopen the restored copy with the current code and require the current schema version, every row/status/native session id/project mapping/tombstone, its own pre-migration copy, an identical `sqlite_master` and migration ledger against a directly migrated database, and an unchanged snapshot file; then drive the hash-checked frozen published-v1 reader through the same procedure so the older binary opens the restored copy and refuses the migrated one.
+
+## Unreleased — same-uid exposure measured and one channel closed
+
+- Clear the server process's dumpable flag at startup (`hardening.py`), so Linux denies `/proc/<server>/environ` and `/proc/<server>/mem` to other same-uid processes: the credential cannot be read out of the server environment any more, while `/proc/<server>/stat` stays readable for runner supervision. Verified with a hardened child plus an unhardened control, and end to end against the real entry point (`PermissionError`, errno 13).
+- Record the rest of the channel honestly in [P5 same-uid exposure evidence](docs/releases/p5-same-uid-exposure-evidence.md): a same-uid process can still write the broker ledger and make the broker send the stored credential to an origin of its choosing (reproduced), reach the pairing socket, and reach a provider origin directly. `docs/security.md`, the P5 roadmap box and `HANDOFF.md` now say so instead of implying shell/direct-HTTP prevention.
+
 ## Unreleased — frozen kit re-verification
 
 - Re-verify the frozen v0.3.0 kit on this host: 88/88 kit tests pass, the frozen archive still hashes to `36d3ae03…e549b`, a rebuilt candidate hashes to `e409eaf5…b856`, and the canonical comparison reports `frozen.ok: true` with the expected two-by-design differences. Also correct the handoff: `current/testing/canonical-compare.cjs` is a Node script, so it must be run with `node`, not `python3`.

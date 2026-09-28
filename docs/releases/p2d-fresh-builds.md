@@ -93,3 +93,15 @@ Limits: one host, one architecture, Linux only; no Windows or macOS behaviour an
 no statement about the frozen v0.3.0 baseline. The harness needs a display
 (`xvfb-run` is used when `DISPLAY` is unset) and is deliberately not part of the
 GitHub Actions jobs, so CI does not run these native checks.
+
+## Re-verification 2026-09-28 (later commit)
+
+After the P3/P4/P5 slices landed, the same harness was re-run against a package
+built from commit `0ab955c`:
+
+- `npm run package:portable` → `Archon-Desktop-Reconstruction-0.3.0-reconstruction.9-linux-x64.tar.gz`,
+  sha256 `d05121a93724527ed875d7b486d63135f627c0ea510d89698a058b085089d7b9`.
+- `node scripts/native-hostile-frame-check.mjs` against the extracted package:
+  **13 of 13 checks pass** (the report now also lists the `languageProfiles`
+  namespace among the top-frame bridges), and the sandbox gate is again recorded
+  `blocked-on-host` for the reasons above.
