@@ -4,15 +4,23 @@ You are continuing work another agent started. Read this whole file before actin
 
 ## Repository and remote
 
-- Working tree: `/home/archonminipc/projects/cookie-project/workspace/work/phase2c6-integration`
+- Working tree: `/home/archonminipc/projects/archon-desktop-phase-2c6` — a `git worktree` of
+  `~/projects/archon-desktop` checked out on the remote branch itself, so its history **matches**
+  the remote and ordinary fast-forward `git push origin HEAD:refs/heads/codex/phase-2c6-exact-file-approvals`
+  is correct. Check `git merge-base --is-ancestor origin/<branch> HEAD` before pushing.
 - Remote: `Abdullahalmutairi97/archon-desktop` (private), branch `codex/phase-2c6-exact-file-approvals`, PR **#28**.
-- The local git history is an **imported reconstruction**: its ancestry does **not** match the remote. **Never `git push`.** Publish with the API publisher (below), which rebuilds the remote tree from your local `HEAD` and the remote tree and preserves file modes.
+- **Do not publish from the old tree** at
+  `/home/archonminipc/projects/cookie-project/workspace/work/phase2c6-integration`. Its history is an
+  imported reconstruction that does not match the remote, and it stops several commits behind the
+  remote head; the API publisher (`scripts/publish-to-remote.py`) rebuilds the remote tree from that
+  tree's `HEAD`, which would silently revert everything published after it. The publisher remains
+  only for a tree whose ancestry cannot be pushed.
 
 ### Publish
 
 ```bash
 git -C <repo> add -A && git -C <repo> commit -m "..."
-python3 scripts/publish-to-remote.py Abdullahalmutairi97/archon-desktop codex/phase-2c6-exact-file-approvals
+git -C <repo> push origin HEAD:refs/heads/codex/phase-2c6-exact-file-approvals
 ```
 Then check CI and mergeability:
 
@@ -46,6 +54,42 @@ Do not merge, deploy or release. Target: every change is committed, published, a
   npm run build:candidate -- "$ARCHON_V030_ASAR" /tmp/archon-v030-candidate.asar
   ```
 - `umask 0022` matters: a `0002` umask makes a permission-ancestry test fail.
+
+## Session of 2026-09-28 (afternoon) — what changed
+
+Worked in the worktree above; every slice was checked with the full backend suite and the full
+desktop gate and pushed; the live views and the owner/branch labels were also checked in the built
+Electron app.
+
+- **Sandbox escape closed (security).** The `workspace-only` view (services and the runtime profile)
+  bound the host read-only, but `connect()` on a unix socket needs no write access:
+  `systemd-run --user` over the session bus wrote outside the sandbox (reproduced), and the docker
+  socket, libvirt, the IDE socket, `~/.ssh` and the server's `.prime.env` were reachable; a
+  daemonizing runtime (Prime 0.9.6) outlived its run. Every confined view now owns a PID namespace,
+  hides `/run`, `/tmp`, `/var/tmp`, `/dev` and the account's home, and re-exposes only the program's
+  install tree; the probe fails a view that leaves host sockets reachable or lets a process survive.
+  Evidence: `docs/releases/p3-host-isolation-evidence.md`.
+- **Live app views (P2C).** Chat, Sessions, Tasks, Projects and the sidebar show live server data in
+  Electron (the browser preview keeps the labelled demo): read a transcript, continue a
+  conversation, start a new one; new bridge op `sessions.messages`, `tasks.submit` gains
+  `sessionId`/`runtime`.
+- **Workspace owner and HEAD.** `?include=checkout` adds `owner_id` and the checkout's HEAD state,
+  read from `.git/HEAD` without running Git; Server work shows them instead of `unavailable`.
+- **Preview streaming.** The gateway streams responses (24 MiB per-response cap that aborts,
+  60 s idle, 2 s binding re-check); `x-archon-preview-truncated` is gone.
+- **Detached writers.** A lease handover refuses while a same-user process writes in the checkout;
+  `quiesce` stops only writers that provably descend from the workspace's own terminal or service.
+- **RTL.** The last physical left/right style rules use logical sides. The title bar and frame stay
+  LTR on purpose (`.titlebar, .workspace-frame { direction: ltr }` keeps the physical navigation-side
+  preference); content, sidebar items and the new views mirror.
+
+How the app was checked (repeat this for UI work): an isolated backend (`ARCHON_DESKTOP_DATA_DIR`
+in a fresh 0700 directory under `/tmp` — the runner journal refuses a group-writable ancestry — a
+test token, and fake `prime-agent`/`pi` executables that print Prime JSON events), a project and
+two conversations seeded over the API, then the built app launched with Electron 44.4.5 under
+`xvfb-run` with an isolated `XDG_*` profile and `--remote-debugging-port`, driven over the DevTools
+protocol (`window.archon.connection.save`, clicks, `Page.captureScreenshot`). Kill the Xvfb process
+group at the end. Node 24 is required for the driver (Node 22's `fetch`/`WebSocket` hung).
 
 ## Progress since this handoff was written
 
@@ -119,7 +163,14 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    sandboxed fake runtime is exercised in `backend/tests/test_runtime_isolation.py`.
    What remains is qualification: run a real provider turn inside the profile, then
    record the result. Until that happens, do not describe the profile as qualified
-   or turn it on by default.
+   or turn it on by default. Findings so far (2026-09-28): a bare Pi 0.87.1 and Prime
+   0.9.6 turn both failed inside the old view (`EROFS` on `settings.json.lock` in their
+   native homes); the runtime's native home is now shown through a discarded write layer
+   (`bwrap --tmp-overlay`), and with that one Pi turn on `deepseek-flash` returned `READY` —
+   in the earlier, unmasked-home view, not the final one. Prime also writes
+   `session-artifacts` beside its `--session-dir` and still fails there; a runtime whose
+   settings load packages from outside its install tree needs
+   `ARCHON_DESKTOP_RUNTIME_ISOLATION_READABLE_PATHS`. The network namespace is shared.
 2. **P4 debug flow** — blocked on evidence only a human can produce. The server cannot
    start a session (no code-server session flag, no DAP implementation), so the report
    states the adapter artefact, the unsupported features and the IDE launch inspection,
@@ -132,16 +183,28 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    dropped with the binding; code-server now binds a private unix socket (0600 inside a 0700
    state directory) instead of a loopback port, so only this account and only the preview
    gateway reach it, and another local account is denied (`docs/releases/p4-ide-listener-evidence.md`).
-   Still open: the preview view has not been exercised against a socket target in a real
-   window, and a preview cannot stream, so a response is buffered up to the 24 MiB cap.
+   Responses now stream (24 MiB per response, aborted rather than truncated; 60 s idle;
+   re-checked against the binding every 2 s). Still open: the preview view has not been
+   exercised against a socket target in a real window (the desktop's services and preview
+   bridge need local-owner pairing, which the verification harness does not set up yet); the
+   route reads the whole request body before its 512 KiB check; the `path` parameter arrives
+   URL-decoded, so `%3F`/`%23` change meaning; a client that stops reading holds its own
+   connection (uvicorn has no write timeout).
 
 4. **P3 resource accounting and lease remainder** — the owner-only resources summary now
    covers services, terminals and agent tasks bound to the checkout and names what it
    cannot see, and a lease handover now refuses while this server's own writers are alive
    or an agent task is active, with an explicit `quiesce` path that stops them and
-   verifies the checkout is quiet. Still open: fence the writers the lease does not reach:
-   kernels, debugger/run tasks (no implementation exists to fence yet) and existing
-   detached tmux children, which a later handover does not revoke.
+   verifies the checkout is quiet. Detached same-user writers (cwd in the checkout or a
+   checkout file open for writing) now block a handover too, and `quiesce` stops only those
+   proven to descend from the workspace's own tmux server, pane or service. Decision taken
+   and worth confirming with the owner: processes that hide their `/proc` details (7 of 162
+   same-uid processes on this host: the user manager, ssh-agent, postgrest…) are reported as
+   `unknown` but do not block unless they descend from the workspace's own terminal or
+   service — making them block would make every handover on this host impossible. Still
+   open: kernels and debugger/run tasks (no implementation to fence), other users' and root
+   processes, writes through closed-descriptor memory maps, other mount namespaces, and a
+   writer whose Archon parent exited and which left its session (blocks, never killed).
 5. **P2D blocked gates** — the Chromium OS sandbox and the native keyring need a
    host that provides them (setuid `chrome-sandbox` or unprivileged user namespaces;
    a protected Linux secret-service backend). Both are recorded in
@@ -211,6 +274,11 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
 
 ### Gates that must not be reported as passed
 
+- Confined views (a service's `workspace-only` and the runtime profile): host IPC hiding, private
+  scratch/devices, no survivors and write denial are probe-verified; the network namespace is still
+  shared unless `networkIsolation: "isolated"` is declared, so loopback/LAN services and abstract unix
+  sockets stay reachable and the host outside the hidden locations stays readable. Not a boundary
+  against a hostile process.
 - Chromium OS sandbox on this host: blocked (`chrome-sandbox` is not setuid, and
   `kernel.apparmor_restrict_unprivileged_userns=1`).
 - Native keyring persistence on this host: blocked (Electron selects no protected
