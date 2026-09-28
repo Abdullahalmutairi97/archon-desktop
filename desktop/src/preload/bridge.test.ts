@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createDesktopBridge } from './bridge'
-import { BRIDGE_CHANNELS, LANGUAGE_PROFILES_CHANNELS, WORKSPACE_CONSOLE_CHANNELS, WORKSPACE_PREVIEW_CHANNELS, WORKSPACE_SERVICES_CHANNELS } from '../shared/bridge/validation'
+import { BRIDGE_CHANNELS, BROWSER_CHANNELS, LANGUAGE_PROFILES_CHANNELS, WORKSPACE_CONSOLE_CHANNELS, WORKSPACE_PREVIEW_CHANNELS, WORKSPACE_SERVICES_CHANNELS } from '../shared/bridge/validation'
 
 describe('preload bridge', () => {
   it('exposes only frozen finite methods and forwards canonical IPC calls', async () => {
@@ -12,7 +12,11 @@ describe('preload bridge', () => {
     expect(Object.isFrozen(bridge.api)).toBe(true)
     expect(Object.isFrozen(bridge.localCodex)).toBe(true)
     expect(Object.keys(bridge).sort()).toEqual([
-      'api', 'connection', 'languageProfiles', 'localCodex', 'workspaceConsole', 'workspacePreview', 'workspaceServices',
+      'api', 'browser', 'connection', 'languageProfiles', 'localCodex', 'workspaceConsole', 'workspacePreview', 'workspaceServices',
+    ])
+    expect(Object.isFrozen(bridge.browser)).toBe(true)
+    expect(Object.keys(bridge.browser!).sort()).toEqual([
+      'back', 'bounds', 'close', 'forward', 'navigate', 'open', 'openExternal', 'reload', 'subscribe',
     ])
     expect(Object.keys(bridge.connection).sort()).toEqual(['describe', 'disconnect', 'probe', 'save'])
     expect(Object.keys(bridge.api)).toEqual(['invoke'])
@@ -174,6 +178,60 @@ describe('preload bridge', () => {
     ])
     expect(() => bridge.workspacePreview.open({ workspaceId, name: 'web', expectedGeneration: 3, portName: 'Bad', bounds })).toThrow(TypeError)
     expect(() => bridge.workspacePreview.bounds({ x: 0, y: 0, width: 0, height: 10 })).toThrow(TypeError)
+  })
+
+  it('exposes fixed browser calls, refuses non-web addresses before IPC and validates state', async () => {
+    const state = { open: true, url: 'https://example.com/', title: 'Example', canGoBack: false, canGoForward: false, loading: true, error: null }
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === BROWSER_CHANNELS.bounds || channel === BROWSER_CHANNELS.close || channel === BROWSER_CHANNELS.openExternal) return true
+      return state
+    })
+    let emitted: ((event: unknown, ...args: unknown[]) => void) | undefined
+    const on = vi.fn((_channel: string, listener: (event: unknown, ...args: unknown[]) => void) => { emitted = listener })
+    const removeListener = vi.fn()
+    const browser = createDesktopBridge({ invoke, on, removeListener }).browser!
+    const bounds = { x: 10, y: 20, width: 640, height: 480 }
+
+    await expect(browser.open({ url: 'https://example.com/', bounds })).resolves.toEqual(state)
+    await expect(browser.navigate({ url: 'https://example.com/' })).resolves.toEqual(state)
+    await expect(browser.back()).resolves.toEqual(state)
+    await expect(browser.forward()).resolves.toEqual(state)
+    await expect(browser.reload()).resolves.toEqual(state)
+    await expect(browser.bounds(bounds)).resolves.toBe(true)
+    await expect(browser.close()).resolves.toBe(true)
+    await expect(browser.openExternal({ url: 'https://example.com/' })).resolves.toBe(true)
+    expect(invoke.mock.calls).toEqual([
+      [BROWSER_CHANNELS.open, { url: 'https://example.com/', bounds }],
+      [BROWSER_CHANNELS.navigate, { url: 'https://example.com/' }],
+      [BROWSER_CHANNELS.back, {}],
+      [BROWSER_CHANNELS.forward, {}],
+      [BROWSER_CHANNELS.reload, {}],
+      [BROWSER_CHANNELS.bounds, { bounds }],
+      [BROWSER_CHANNELS.close, {}],
+      [BROWSER_CHANNELS.openExternal, { url: 'https://example.com/' }],
+    ])
+
+    invoke.mockClear()
+    expect(() => browser.open({ url: 'javascript:alert(1)', bounds })).toThrow(TypeError)
+    expect(() => browser.navigate({ url: 'file:///etc/passwd' })).toThrow(TypeError)
+    expect(() => browser.openExternal({ url: 'data:text/html,hi' })).toThrow(TypeError)
+    expect(invoke).not.toHaveBeenCalled()
+
+    // A page state from main with a hostile address never reaches the renderer.
+    invoke.mockResolvedValueOnce({ ...state, url: 'javascript:alert(1)' })
+    await expect(browser.reload()).rejects.toThrow(TypeError)
+
+    const received: unknown[] = []
+    const unsubscribe = browser.subscribe((next) => received.push(next))
+    expect(on).toHaveBeenCalledWith(BROWSER_CHANNELS.state, expect.any(Function))
+    emitted?.({}, state)
+    emitted?.({}, { ...state, url: 'file:///etc/passwd' })
+    emitted?.({}, { ...state, extra: true })
+    emitted?.({}, state, state)
+    expect(received).toEqual([state])
+    unsubscribe()
+    unsubscribe()
+    expect(removeListener).toHaveBeenCalledTimes(1)
   })
 
   it('rejects unlisted operations and malformed payloads before IPC', async () => {

@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   BRIDGE_CHANNELS,
+  BROWSER_CHANNELS,
+  browserHttpUrl,
   LANGUAGE_PROFILES_CHANNELS,
   LOCAL_CODEX_CHANNELS,
   parseLanguageProfilesBackendResponse,
   parseLanguageProfilesRequest,
   parseBridgeRequest,
   parseBridgeResponse,
+  parseBrowserRequest,
+  parseBrowserResponse,
+  parseBrowserState,
   parseLocalCodexEvent,
   parseLocalCodexRequest,
   parseLocalCodexResponse,
@@ -869,5 +874,79 @@ describe('language profile report validation', () => {
       sessionExercised: false, breakpointVerified: false, note: 'ok', extra: 1,
     } })
     expect(() => parseLanguageProfilesBackendResponse(LANGUAGE_PROFILES_CHANNELS.list, unknownKey)).toThrow(TypeError)
+  })
+})
+
+describe('browser view IPC validation', () => {
+  const bounds = { x: 0, y: 40, width: 480, height: 600 }
+  const state = { open: true, url: 'https://example.com/docs', title: 'Docs', canGoBack: true, canGoForward: false, loading: false, error: null }
+
+  it('keeps only bounded http(s) addresses without credentials', () => {
+    expect(browserHttpUrl('https://example.com')).toBe('https://example.com/')
+    expect(browserHttpUrl('http://127.0.0.1:4173/app?q=1#top')).toBe('http://127.0.0.1:4173/app?q=1#top')
+    for (const hostile of [
+      'javascript:alert(1)', 'JAVASCRIPT:alert(1)', 'file:///etc/passwd', 'data:text/html,<script>1</script>',
+      'blob:https://example.com/uuid', 'about:blank', 'chrome://settings', 'ftp://example.com/', 'mailto:a@example.com',
+      'https://user:pass@example.com/', 'https://example.com/\nx', ' https://example.com/', 'https://exa mple.com/',
+      'https://', '', `https://example.com/${'a'.repeat(2048)}`, 42, null, {},
+    ]) {
+      expect(browserHttpUrl(hostile)).toBeNull()
+    }
+  })
+
+  it('accepts only the fixed channels with exact payloads', () => {
+    expect(parseBrowserRequest(BROWSER_CHANNELS.open, [{ url: 'https://example.com', bounds }]))
+      .toEqual({ url: 'https://example.com/', bounds })
+    expect(parseBrowserRequest(BROWSER_CHANNELS.navigate, [{ url: 'http://localhost:3000/' }])).toEqual({ url: 'http://localhost:3000/' })
+    expect(parseBrowserRequest(BROWSER_CHANNELS.openExternal, [{ url: 'https://example.com/a' }])).toEqual({ url: 'https://example.com/a' })
+    expect(parseBrowserRequest(BROWSER_CHANNELS.bounds, [bounds])).toEqual({ bounds })
+    for (const channel of [BROWSER_CHANNELS.back, BROWSER_CHANNELS.forward, BROWSER_CHANNELS.reload, BROWSER_CHANNELS.close]) {
+      expect(parseBrowserRequest(channel, [{}])).toEqual({})
+      expect(() => parseBrowserRequest(channel, [{ url: 'https://example.com/' }])).toThrow(TypeError)
+    }
+  })
+
+  it('refuses hostile, overlong and extra-key browser payloads', () => {
+    const invalid: Array<[string, unknown[]]> = [
+      [BROWSER_CHANNELS.open, [{ url: 'javascript:alert(1)', bounds }]],
+      [BROWSER_CHANNELS.open, [{ url: 'file:///etc/passwd', bounds }]],
+      [BROWSER_CHANNELS.open, [{ url: 'https://example.com/', bounds, preload: '/tmp/x.js' }]],
+      [BROWSER_CHANNELS.open, [{ url: 'https://example.com/', bounds: { ...bounds, width: 0 } }]],
+      [BROWSER_CHANNELS.open, [{ url: 'https://example.com/', bounds: { ...bounds, x: 1.5 } }]],
+      [BROWSER_CHANNELS.open, [{ url: 'https://example.com/' }]],
+      [BROWSER_CHANNELS.navigate, [{ url: `https://example.com/${'a'.repeat(2100)}` }]],
+      [BROWSER_CHANNELS.navigate, [{ url: 'data:text/html,hi' }]],
+      [BROWSER_CHANNELS.navigate, [{ url: 'https://example.com/', partition: 'persist:app' }]],
+      [BROWSER_CHANNELS.navigate, [{ url: 'https://example.com/' }, { extra: true }]],
+      [BROWSER_CHANNELS.openExternal, [{ url: 'file:///home/user/.ssh/id_rsa' }]],
+      [BROWSER_CHANNELS.openExternal, [{ url: 'smb://attacker/share' }]],
+      [BROWSER_CHANNELS.bounds, [{ ...bounds, extra: 1 }]],
+      [BROWSER_CHANNELS.state, [state]],
+      ['archon:browser:execute-javascript', [{ code: '1' }]],
+    ]
+    for (const [channel, args] of invalid) {
+      expect(() => parseBrowserRequest(channel, args), channel).toThrow(TypeError)
+    }
+  })
+
+  it('validates state from main before it reaches the renderer', () => {
+    expect(parseBrowserState(state)).toEqual(state)
+    expect(parseBrowserState({ ...state, open: false, url: '', title: '' })).toMatchObject({ open: false, url: '' })
+    expect(parseBrowserResponse(BROWSER_CHANNELS.back, state)).toEqual(state)
+    expect(parseBrowserResponse(BROWSER_CHANNELS.close, false)).toBe(false)
+    expect(parseBrowserResponse(BROWSER_CHANNELS.openExternal, true)).toBe(true)
+    for (const hostile of [
+      { ...state, url: 'javascript:alert(1)' },
+      { ...state, url: 'file:///etc/passwd' },
+      { ...state, title: 'x'.repeat(301) },
+      { ...state, error: 'e'.repeat(201) },
+      { ...state, loading: 'yes' },
+      { ...state, html: '<p>page content</p>' },
+      { open: true, url: '' },
+    ]) {
+      expect(() => parseBrowserState(hostile)).toThrow(TypeError)
+    }
+    expect(() => parseBrowserResponse(BROWSER_CHANNELS.bounds, 'true')).toThrow(TypeError)
+    expect(() => parseBrowserResponse(BROWSER_CHANNELS.state, state)).toThrow(TypeError)
   })
 })

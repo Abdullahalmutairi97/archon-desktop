@@ -65,6 +65,9 @@ export function WorkspaceServices({
     return () => window.clearInterval(timer)
   }, [refresh])
 
+  // The native preview is drawn over the window; it must not outlive this panel.
+  useEffect(() => () => { void Promise.resolve().then(() => preview.close()).catch(() => undefined) }, [preview])
+
   useEffect(() => {
     if (!previewName) return
     const box = previewBox.current

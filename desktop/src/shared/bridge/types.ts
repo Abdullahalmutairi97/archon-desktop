@@ -498,6 +498,34 @@ export interface WorkspacePreviewBridge {
   close(): Promise<boolean>
 }
 
+/** What the renderer may know about the native browser view; never page content. */
+export interface BrowserViewState {
+  /** False once main has closed the view (tab hidden, preview opened, window change). */
+  open: boolean
+  /** The current http(s) address, or '' when none is known or it exceeds the bound. */
+  url: string
+  title: string
+  canGoBack: boolean
+  canGoForward: boolean
+  loading: boolean
+  /** A bounded description of the last failed main-frame load, or null. */
+  error: string | null
+}
+
+/** One sandboxed in-app browser page rendered by main in its own WebContentsView. */
+export interface BrowserViewBridge {
+  open(input: { url: string; bounds: WorkspacePreviewBounds }): Promise<BrowserViewState>
+  navigate(input: { url: string }): Promise<BrowserViewState>
+  back(): Promise<BrowserViewState>
+  forward(): Promise<BrowserViewState>
+  reload(): Promise<BrowserViewState>
+  bounds(input: WorkspacePreviewBounds): Promise<boolean>
+  close(): Promise<boolean>
+  /** Hand an http(s) address to the system browser. */
+  openExternal(input: { url: string }): Promise<boolean>
+  subscribe(listener: (state: BrowserViewState) => void): () => void
+}
+
 export interface WorkspaceServicesBridge {
   list(input: { workspaceId: string }): Promise<readonly WorkspaceServiceDto[]>
   define(input: { workspaceId: string; definition: WorkspaceServiceDefinitionInput }): Promise<WorkspaceServiceDto>
@@ -642,6 +670,8 @@ export interface DesktopBridge {
   readonly workspaceServices: WorkspaceServicesBridge
   readonly languageProfiles: LanguageProfilesBridge
   readonly workspacePreview: WorkspacePreviewBridge
+  /** Absent in an older preload; the renderer then says the browser is unavailable. */
+  readonly browser?: BrowserViewBridge
 }
 
 /** Renderer-safe projection of a main-owned project registration. */

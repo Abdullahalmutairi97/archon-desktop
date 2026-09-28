@@ -1,5 +1,6 @@
 import type {
   BridgeError,
+  BrowserViewState,
   ConnectionDescription,
   ConnectionProbeResult,
   ConnectionSaveResult,
@@ -122,6 +123,21 @@ export const WORKSPACE_PREVIEW_CHANNELS = Object.freeze({
 } as const)
 
 export type WorkspacePreviewInvokeChannel = (typeof WORKSPACE_PREVIEW_CHANNELS)[keyof typeof WORKSPACE_PREVIEW_CHANNELS]
+
+/** Fixed IPC surface for the in-app browser view; `state` is the main-to-renderer event. */
+export const BROWSER_CHANNELS = Object.freeze({
+  open: 'archon:browser:open',
+  navigate: 'archon:browser:navigate',
+  back: 'archon:browser:back',
+  forward: 'archon:browser:forward',
+  reload: 'archon:browser:reload',
+  bounds: 'archon:browser:bounds',
+  close: 'archon:browser:close',
+  openExternal: 'archon:browser:open-external',
+  state: 'archon:browser:state',
+} as const)
+
+export type BrowserInvokeChannel = Exclude<(typeof BROWSER_CHANNELS)[keyof typeof BROWSER_CHANNELS], typeof BROWSER_CHANNELS.state>
 
 export type LocalCodexInvokeChannel = Exclude<(typeof LOCAL_CODEX_CHANNELS)[keyof typeof LOCAL_CODEX_CHANNELS], typeof LOCAL_CODEX_CHANNELS.event>
 
@@ -1366,6 +1382,106 @@ export function parseWorkspacePreviewResponse(channel: unknown, value: unknown):
     case WORKSPACE_PREVIEW_CHANNELS.close:
       if (value !== true) return fail()
       return true
+    default:
+      return fail()
+  }
+}
+
+export const MAX_BROWSER_URL_LENGTH = 2048
+export const MAX_BROWSER_TITLE_LENGTH = 300
+export const MAX_BROWSER_ERROR_LENGTH = 200
+const BROWSER_URL_FORBIDDEN = /[\u0000-\u0020\u007f-\u009f]/u
+
+/**
+ * The only addresses the in-app browser may load or navigate to: bounded,
+ * absolute http(s) URLs with a host and no embedded credentials. Returns the
+ * canonical href, or null for anything else (javascript:, file:, data:, blob:…).
+ */
+export function browserHttpUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_BROWSER_URL_LENGTH) return null
+  if (BROWSER_URL_FORBIDDEN.test(value)) return null
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return null
+  }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname) return null
+  if (parsed.username || parsed.password) return null
+  const href = parsed.href
+  return href.length <= MAX_BROWSER_URL_LENGTH ? href : null
+}
+
+function browserUrlField(value: unknown): string {
+  return browserHttpUrl(value) ?? fail()
+}
+
+function emptyBrowserArgument(value: unknown): Readonly<Record<string, never>> {
+  if (value !== undefined) exactObject(value, [])
+  return Object.freeze({})
+}
+
+/** Validate fixed browser IPC input; main re-validates every URL it is given. */
+export function parseBrowserRequest(channel: unknown, args: readonly unknown[]): Readonly<Record<string, unknown>> {
+  const safeArgs = readLocalArray(args, 1)
+  if (safeArgs.length !== 1 || channel === BROWSER_CHANNELS.state
+    || !Object.values(BROWSER_CHANNELS).includes(channel as BrowserInvokeChannel)) return fail()
+  const value = safeArgs[0]
+  switch (channel) {
+    case BROWSER_CHANNELS.open: {
+      const record = exactObject(value, ['url', 'bounds'])
+      return Object.freeze({ url: browserUrlField(record.url), bounds: workspacePreviewBounds(record.bounds) })
+    }
+    case BROWSER_CHANNELS.navigate:
+    case BROWSER_CHANNELS.openExternal: {
+      const record = exactObject(value, ['url'])
+      return Object.freeze({ url: browserUrlField(record.url) })
+    }
+    case BROWSER_CHANNELS.bounds:
+      return Object.freeze({ bounds: workspacePreviewBounds(value) })
+    case BROWSER_CHANNELS.back:
+    case BROWSER_CHANNELS.forward:
+    case BROWSER_CHANNELS.reload:
+    case BROWSER_CHANNELS.close:
+      return emptyBrowserArgument(value)
+    default:
+      return fail()
+  }
+}
+
+/** Validate one browser view state before it crosses to the renderer. */
+export function parseBrowserState(value: unknown): BrowserViewState {
+  const record = exactObject(value, ['open', 'url', 'title', 'canGoBack', 'canGoForward', 'loading', 'error'])
+  if (typeof record.open !== 'boolean' || typeof record.canGoBack !== 'boolean'
+    || typeof record.canGoForward !== 'boolean' || typeof record.loading !== 'boolean') return fail()
+  if (record.url !== '' && browserHttpUrl(record.url) === null) return fail()
+  if (typeof record.title !== 'string' || record.title.length > MAX_BROWSER_TITLE_LENGTH) return fail()
+  if (record.error !== null && (typeof record.error !== 'string' || record.error.length > MAX_BROWSER_ERROR_LENGTH)) return fail()
+  return Object.freeze({
+    open: record.open,
+    url: record.url as string,
+    title: record.title,
+    canGoBack: record.canGoBack,
+    canGoForward: record.canGoForward,
+    loading: record.loading,
+    error: record.error as string | null,
+  })
+}
+
+/** Normalize browser results returned by the main process. */
+export function parseBrowserResponse(channel: unknown, value: unknown): unknown {
+  switch (channel) {
+    case BROWSER_CHANNELS.open:
+    case BROWSER_CHANNELS.navigate:
+    case BROWSER_CHANNELS.back:
+    case BROWSER_CHANNELS.forward:
+    case BROWSER_CHANNELS.reload:
+      return parseBrowserState(value)
+    case BROWSER_CHANNELS.bounds:
+    case BROWSER_CHANNELS.close:
+    case BROWSER_CHANNELS.openExternal:
+      if (typeof value !== 'boolean') return fail()
+      return value
     default:
       return fail()
   }

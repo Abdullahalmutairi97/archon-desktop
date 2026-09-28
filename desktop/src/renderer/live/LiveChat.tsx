@@ -25,6 +25,7 @@ import {
   type TrackedTask,
 } from './liveModels'
 import { checkoutChoices, type CheckoutChoice } from './LiveWorkbench'
+import { extractBrowserLinks, type BrowserLink } from './browserLinks'
 import { Markdown } from './Markdown'
 import { ShareDialog } from './LiveSharing'
 import type { LiveScope, LiveServer } from './useLiveServer'
@@ -38,6 +39,28 @@ const MAX_PROMPT_LENGTH = 8_000
 export const TRANSCRIPT_LIMIT = 200
 /** Recent server tasks inspected for work already running in a conversation. */
 const TASK_WINDOW = 100
+
+/** Receives the web links of the conversation shown, keyed `generation:sessionId`. */
+export type ConversationLinksListener = (key: string, links: readonly BrowserLink[]) => void
+
+/** Report a conversation's links (newest first) whenever they change. */
+function useConversationLinks(
+  onLinks: ConversationLinksListener | undefined,
+  key: string,
+  task: TrackedTask | null,
+  messages: readonly SessionMessageRecord[],
+): void {
+  const resultText = task?.resultText ?? null
+  const replyText = task?.replyText ?? null
+  const links = useMemo(() => extractBrowserLinks([
+    resultText,
+    replyText,
+    ...messages.filter((message) => message.role === 'assistant' && message.kind === 'text').map((message) => message.content).reverse(),
+  ]), [resultText, replyText, messages])
+  useEffect(() => { onLinks?.(key, links) }, [onLinks, key, links])
+}
+
+const NO_MESSAGES: readonly SessionMessageRecord[] = []
 
 type TrackerState = {
   task: TrackedTask
@@ -224,6 +247,7 @@ function LiveConversation({
   onNewConversation,
   onDeleted,
   onRename,
+  onLinks,
 }: {
   scope: LiveScope
   sessionId: string
@@ -234,6 +258,7 @@ function LiveConversation({
   onNewConversation(projectId: string | null): void
   onDeleted(projectId: string | null): void
   onRename(sessionId: string, name: string | null): void
+  onLinks?: ConversationLinksListener
 }) {
   const { bridge } = scope
   const tracker = useTaskTracker(bridge, pollDelayMs)
@@ -328,6 +353,8 @@ function LiveConversation({
     const list = listRef.current
     if (list) list.scrollTop = list.scrollHeight
   }, [messageCount, trackedTask?.replyText])
+
+  useConversationLinks(onLinks, `${scope.generation}:${sessionId}`, trackedTask, transcript.state === 'ready' ? transcript.messages : NO_MESSAGES)
 
   const runtime: LiveRuntime | null = session?.runtime ?? null
   const entries = useMemo(
@@ -561,6 +588,7 @@ function NewConversation({
   onConversationChanged,
   onOpenSession,
   onOpenTasks,
+  onLinks,
 }: {
   scope: LiveScope
   projects: readonly LiveProject[]
@@ -570,6 +598,7 @@ function NewConversation({
   onConversationChanged(): void
   onOpenSession(sessionId: string): void
   onOpenTasks(): void
+  onLinks?: ConversationLinksListener
 }) {
   const { bridge } = scope
   const tracker = useTaskTracker(bridge, pollDelayMs)
@@ -612,6 +641,7 @@ function NewConversation({
   }, [bridge, projects])
 
   const trackedTask = tracker.state?.task ?? null
+  useConversationLinks(onLinks, `${scope.generation}:`, trackedTask, NO_MESSAGES)
   useEffect(() => {
     if (!trackedTask || !isTerminalStatus(trackedTask.status) || handledTerminal.current === trackedTask.id) return
     handledTerminal.current = trackedTask.id
@@ -720,6 +750,7 @@ export function LiveChatView({
   onNewConversation,
   onOpenConnection,
   onOpenTasks,
+  onLinks,
 }: {
   server: LiveServer
   sessionId: string | null
@@ -729,6 +760,8 @@ export function LiveChatView({
   onNewConversation(projectId: string | null): void
   onOpenConnection(): void
   onOpenTasks(): void
+  /** Receives the web links in the shown conversation for the workbench browser. */
+  onLinks?: ConversationLinksListener
 }) {
   const { scope, status, refresh } = server
   if (!scope || status === 'rejected' || status === 'error') {
@@ -752,6 +785,7 @@ export function LiveChatView({
         onNewConversation(projectId)
       }}
       onRename={server.renameSession}
+      onLinks={onLinks}
     />
   }
   return <NewConversation
@@ -764,5 +798,6 @@ export function LiveChatView({
     onConversationChanged={refresh}
     onOpenSession={onOpenSession}
     onOpenTasks={onOpenTasks}
+    onLinks={onLinks}
   />
 }
