@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import sqlite3
 import uuid
 import re
@@ -14,6 +15,8 @@ from .hermes_runner import RunnerCancelled
 from .runner_journal import JournalEntry, RunnerJournal
 from .runtimes import RuntimeRegistry
 
+
+logger = logging.getLogger(__name__)
 
 MAX_EVENT_TEXT = 4096
 MAX_RUNNER_ENVELOPE_BYTES = 64 * 1024
@@ -1197,12 +1200,16 @@ class TaskEngine:
         registry: RuntimeRegistry | None = None,
         preflight: Callable[[dict[str, Any]], None] | None = None,
         journal: RunnerJournal | None = None,
+        diagnostic_sink: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.store = store
         self.runner = runner
         self.registry = registry
         self.preflight = preflight
         self.journal = journal
+        # Optional sink for runner diagnostic records. It must never break a turn:
+        # a capture failure is a diagnostic-capture problem, not a task failure.
+        self.diagnostic_sink = diagnostic_sink
         self.poll_seconds = poll_seconds
         # Retain the constructor argument for callers; started work is no longer
         # replayed automatically after a provider error.
@@ -1228,6 +1235,17 @@ class TaskEngine:
 
         async def emit(event_type: str, data: dict[str, Any]) -> None:
             nonlocal emitted_event_count
+            if event_type == "diagnostic" and self.diagnostic_sink is not None:
+                try:
+                    self.diagnostic_sink({
+                        "kind": data.get("kind") if isinstance(data, dict) else None,
+                        "detail": data.get("detail") if isinstance(data, dict) else None,
+                        "task_id": task["id"],
+                        "attempt_id": attempt_id,
+                        "runtime": data.get("runtime") if isinstance(data, dict) else None,
+                    })
+                except Exception:
+                    logger.exception("diagnostic capture failed")
             # Hermes announces its session id on stderr as soon as it has one,
             # long before the task finishes. Persist it the moment it arrives so
             # the row is addressable while it is still running — otherwise every

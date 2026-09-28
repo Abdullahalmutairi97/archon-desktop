@@ -142,7 +142,10 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    (`backend/tests/test_resume_evidence.py`, `test_migration_restore_evidence.py`).
    The one shape a reviewer may still ask for is duplicate project *names*, which live
    in the separate Hermes projects database that the Archon migration never reads.
-6. **P5 remainder** — event normalization and the approval binding are done
+6. **P5 remainder** — event normalization, the approval binding and bounded
+   diagnostic *records* are done (owner-only `GET/DELETE /api/local/diagnostics`, redacted,
+   capped and expiring; raw output capture stays disabled by design). Encryption of that
+   ledger at rest is not implemented. Originally: event normalization and the approval binding are done
    (bounded diagnostics for unreadable or unhandled native records; the Codex
    approval broker binds each prompt to its request id, process generation and exact
    action, and denies stale, replayed, unauthorized and expired decisions). What is

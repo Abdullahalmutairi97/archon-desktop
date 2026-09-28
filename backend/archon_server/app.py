@@ -69,6 +69,11 @@ from .sandbox import RuntimeConfinement
 from .runner_ownership import RunnerOwnershipLock
 from .local_codex_event_journal import LocalCodexEventJournal, LocalCodexEventJournalError
 from .debug_profiles import describe_debug_readiness
+from .diagnostic_capture import (
+    DiagnosticCapture,
+    DiagnosticCaptureError,
+    DiagnosticCaptureUnavailable,
+)
 from .language_profiles import describe_profiles as describe_language_profiles
 from .local_pairing import LocalPairingBroker, UnixSocketPairingServer
 from .services.local_codex_worker import (
@@ -700,6 +705,7 @@ def create_app(
     runner_outbox: RunnerOutbox | None = None
     runner_results: RunnerResultLedger | None = None
     workspace_write_leases: WorkspaceWriteLease | None = None
+    diagnostic_capture: DiagnosticCapture | None = None
     secret_broker: SecretBroker | None = None
     coordinator_runner_state = store.runner_generation_state(LOCAL_TASK_RUNNER_ID)
     try:
@@ -866,8 +872,14 @@ def create_app(
                                    projects=catalog, cwd=task.get('cwd'), session=session)
         task['cwd'] = revalidate_workspace(task.get('cwd'), admitted.authorized_roots)
 
+    # Bounded, redacted, expiring capture of runner diagnostics; the engine sink
+    # never fails a turn, and no raw process output is stored.
+    diagnostic_capture = DiagnosticCapture(
+        settings.data_dir.expanduser().resolve() / "diagnostic-capture"
+    )
     engine = TaskEngine(store, selected_runner, settings.worker_poll_seconds, settings.quota_retry_seconds,
-                        registry=registry, preflight=preflight, journal=journal)
+                        registry=registry, preflight=preflight, journal=journal,
+                        diagnostic_sink=diagnostic_capture.record_mapping)
     for adapter in selected_runner.values():
         if isinstance(adapter, (PrimeRunner, PiRunner)):
             adapter.preflight = preflight
@@ -914,6 +926,7 @@ def create_app(
         nonlocal runner_results
         nonlocal workspace_write_leases
         nonlocal secret_broker
+        nonlocal diagnostic_capture
         runner_ownership.acquire()
         try:
             if pairing_broker is not None:
@@ -980,6 +993,7 @@ def create_app(
             app.state.runner_results = runner_results
             app.state.workspace_write_leases = workspace_write_leases
             app.state.secret_broker = secret_broker
+            app.state.diagnostic_capture = diagnostic_capture
             app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "ownership": ownership, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "workspace_terminals": local_workspace_terminals, "workspace_services": local_workspace_services, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
             # Consume durable runner events before any worker can recover an
             # inflight task or claim queued work.
@@ -1560,6 +1574,31 @@ def create_app(
         if secret_broker is None:
             raise HTTPException(status_code=503, detail="The secret broker is unavailable")
         return secret_broker
+
+    @app.get("/api/local/diagnostics", dependencies=[Depends(require_local_owner)])
+    async def local_diagnostics(limit: int = Query(32, ge=1, le=64)):
+        """Bounded diagnostic records for this server. Never raw process output."""
+        broker = diagnostic_capture
+        if broker is None:
+            raise HTTPException(status_code=503, detail="Diagnostic capture is unavailable")
+        try:
+            return JSONResponse(
+                content={**broker.status(), "entries": broker.list(limit)},
+                headers={"Cache-Control": "no-store"},
+            )
+        except (DiagnosticCaptureUnavailable, DiagnosticCaptureError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.delete("/api/local/diagnostics", dependencies=[Depends(require_local_owner)])
+    async def local_diagnostics_clear():
+        """Drop every captured record, including unexpired ones."""
+        broker = diagnostic_capture
+        if broker is None:
+            raise HTTPException(status_code=503, detail="Diagnostic capture is unavailable")
+        try:
+            return JSONResponse(content={"removed": broker.clear()}, headers={"Cache-Control": "no-store"})
+        except (DiagnosticCaptureUnavailable, DiagnosticCaptureError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/local/secrets/references", dependencies=[Depends(require_local_owner)])
     async def local_secret_references():

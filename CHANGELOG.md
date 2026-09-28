@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — bounded diagnostic capture
+
+- Add a private, redacted, expiring capture of runner diagnostics: `GET /api/local/diagnostics` (owner credential) returns the newest records with `rawCapture: false`, the caps and the TTL, and `DELETE` clears them. The task engine forwards every `diagnostic` event a runner emits to the ledger, and a failing sink can never fail a turn. Each record is capped, control characters are stripped and credential-shaped spans (assignments, bearer tokens, long opaque tokens) are redacted before the write; the ledger is 0600 with a bounded entry count, expires records after a TTL on read and write, and refuses an unsafe, malformed or oversized file. Raw process output is deliberately not stored, because a runtime's text cannot be proven free of credentials.
+
 ## Unreleased — aggregate resource accounting
 
 - Extend `GET /api/local/workspaces/{id}/resources`: the service block now reports the sums of declared CPU quota, task limit and the confined/isolated service counts for running services beside the memory reservation; the report adds the workspace identity and generation, the count of agent tasks bound to that checkout (queued/running/cancelling, using the same cwd predicate the file-write guard uses), and an explicit `unaccounted` list — language servers inside the IDE process, REPL kernels inside a runtime task, and native processes started outside the service manager — with a note that counts are observations, not reservations.
