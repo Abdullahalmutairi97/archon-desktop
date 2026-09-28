@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — network isolation for workspace services
+
+- A workspace service definition may declare `networkIsolation: "isolated"`. The service then runs with no network namespace route (`bwrap --unshare-net`), which composes with the filesystem confinement and the resource scope. A definition that declares ports or a loopback health target is refused, because an isolated service could never answer them, and a host where the probe cannot demonstrate an unreachable network refuses to start the service. Verified end to end with a real service whose connection attempt returned `ENETUNREACH`.
+
 ## Unreleased — workspace-only filesystem confinement for services
 
 - A workspace service definition may declare `filesystemIsolation: "workspace-only"`. The service then runs inside a mount namespace where the host filesystem is read-only and only the workspace root is writable (`bwrap --die-with-parent --ro-bind / / --dev-bind /dev /dev --proc /proc --bind <root> <root>`), which composes with the CPU, memory and task scope. A behavioural probe must observe a denied host write and an allowed workspace write before any service starts, and a host without that confinement is refused rather than started unconfined. Verified end to end with a real service process: its workspace write succeeded and its `/tmp` write was denied. Network confinement is still not implemented.

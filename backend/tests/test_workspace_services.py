@@ -30,7 +30,8 @@ WORKSPACE_ID = "workspace-0123456789abcdef0123456789abcdef"
 def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 4096,
              memory_enforcement: bool | None = None, cpu_enforcement: bool | None = None,
              tasks_enforcement: bool | None = None,
-             filesystem_enforcement: bool | None = None) -> WorkspaceServiceManager:
+             filesystem_enforcement: bool | None = None,
+             network_enforcement: bool | None = None) -> WorkspaceServiceManager:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(exist_ok=True)
     database = Database(tmp_path / "database.sqlite3")
@@ -55,6 +56,7 @@ def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 40
         cpu_enforcement=cpu_enforcement,
         tasks_enforcement=tasks_enforcement,
         filesystem_enforcement=filesystem_enforcement,
+        network_enforcement=network_enforcement,
     )
 
 
@@ -699,3 +701,79 @@ async def test_filesystem_isolation_definitions_are_validated(tmp_path):
 async def test_this_host_confines_a_service_to_its_workspace():
     """Evidence test: the probe must observe a denied host write and an allowed workspace write."""
     assert await WorkspaceServiceManager._probe_filesystem_enforcement() is True
+
+
+@pytest.mark.asyncio
+async def test_network_isolated_service_runs_without_a_network_namespace_route(tmp_path):
+    manager, launches = _recording_manager(tmp_path, network_enforcement=True)
+    await manager.define(WORKSPACE_ID, _definition(
+        name="offline", argv=["/bin/sleep", "5"], networkIsolation="isolated",
+    ))
+    await manager.start(WORKSPACE_ID, "offline")
+    command = launches[-1]
+    assert command[0] == "bwrap" and "--unshare-net" in command
+    # No filesystem confinement was requested, so the filesystem stays as it was.
+    assert "--ro-bind" not in command
+    assert command[command.index("--", command.index("--proc")) + 1:] == ["/bin/sleep", "5"]
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_both_confinements_share_one_namespace_invocation(tmp_path):
+    manager, launches = _recording_manager(tmp_path, network_enforcement=True, filesystem_enforcement=True)
+    await manager.define(WORKSPACE_ID, _definition(
+        name="sealed", argv=["/bin/sleep", "5"],
+        filesystemIsolation="workspace-only", networkIsolation="isolated",
+    ))
+    await manager.start(WORKSPACE_ID, "sealed")
+    command = launches[-1]
+    assert command.count("bwrap") == 1
+    assert "--ro-bind" in command and "--unshare-net" in command
+    workspace = tmp_path / "workspace"
+    assert command[command.index("--bind") + 1:command.index("--bind") + 3] == [str(workspace), str(workspace)]
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_network_isolation_fails_closed_when_unavailable(tmp_path):
+    manager = _manager(tmp_path, network_enforcement=False)
+    await manager.define(WORKSPACE_ID, _definition(
+        name="offline", argv=["/bin/echo"], networkIsolation="isolated",
+    ))
+    with pytest.raises(WorkspaceServiceUnavailable) as refused:
+        await manager.start(WORKSPACE_ID, "offline")
+    assert "Network isolation" in str(refused.value)
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_network_isolation_definitions_are_validated(tmp_path):
+    manager = _manager(tmp_path)
+    for value in ("none", "off", "", True, 1, None):
+        with pytest.raises(ValueError):
+            await manager.define(WORKSPACE_ID, _definition(name="bad", networkIsolation=value))
+    # A port or health target can never be reached without a network.
+    for overrides in (
+        {"ports": [{"name": "http", "port": 4173}]},
+        {"ports": [{"name": "http", "port": 4173}], "health": {"port": "http", "path": "/"}},
+    ):
+        with pytest.raises(ValueError):
+            await manager.define(WORKSPACE_ID, _definition(
+                name="bad", networkIsolation="isolated", **overrides,
+            ))
+    await manager.define(WORKSPACE_ID, _definition(name="plain"))
+    assert _ledger_rows(tmp_path)[0]["networkIsolation"] == "host"
+    await manager.define(WORKSPACE_ID, _definition(name="offline", networkIsolation="isolated"))
+    rows = {row["name"]: row for row in _ledger_rows(tmp_path)}
+    assert rows["offline"]["networkIsolation"] == "isolated"
+    await manager.shutdown()
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bubblewrap is unavailable on this host",
+)
+@pytest.mark.asyncio
+async def test_this_host_blocks_network_access_inside_the_sandbox():
+    """Evidence test: the probe must observe an unreachable network in the sandbox."""
+    assert await WorkspaceServiceManager._probe_network_enforcement() is True

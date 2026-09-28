@@ -54,6 +54,7 @@ _MEMORY_PROBE_SCRIPT = (
 _CPU_QUOTA_MIN_PERCENT = 1
 _CPU_QUOTA_MAX_PERCENT = 1600
 _FILESYSTEM_PROFILES = frozenset({"none", "workspace-only"})
+_NETWORK_PROFILES = frozenset({"host", "isolated"})
 # A confined service sees the host read-only and may write only inside its
 # workspace, so a service cannot modify host files outside the checkout.
 _FILESYSTEM_PROBE_SCRIPT = (
@@ -72,6 +73,15 @@ _FILESYSTEM_PROBE_SCRIPT = (
     "except OSError:\n"
     " allowed=False\n"
     "print('denied=%s allowed=%s' % (denied, allowed))\n"
+)
+# A network-isolated service must not reach the network at all. The probe runs
+# inside the same namespace the service would get and requires a connection
+# attempt to fail there, because an accepted-but-ignored option would leak.
+_NETWORK_PROBE_SCRIPT = (
+    "import socket\n"
+    "s=socket.socket(); s.settimeout(3)\n"
+    "code=s.connect_ex(('1.1.1.1', 443))\n"
+    "print('connect=%d' % code)\n"
 )
 _TASKS_MAX_MIN = 4
 _TASKS_MAX_MAX = 4096
@@ -202,6 +212,7 @@ class WorkspaceServiceManager:
         cpu_enforcement: bool | None = None,
         tasks_enforcement: bool | None = None,
         filesystem_enforcement: bool | None = None,
+        network_enforcement: bool | None = None,
     ):
         if not isinstance(owner_id, str) or not owner_id.strip() or len(owner_id) > 200:
             raise ValueError("owner_id is invalid")
@@ -221,6 +232,7 @@ class WorkspaceServiceManager:
         self._cpu_enforcement = cpu_enforcement
         self._tasks_enforcement = tasks_enforcement
         self._filesystem_enforcement = filesystem_enforcement
+        self._network_enforcement = network_enforcement
         self._lock = asyncio.Lock()
         self._runtime: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -286,6 +298,10 @@ class WorkspaceServiceManager:
             runtime = self._runtime.get((workspace_id, name))
             if runtime is not None and runtime["state"] in {"starting", "running"}:
                 raise WorkspaceServiceConflict("Service is already running")
+            if entry.get("networkIsolation") == "isolated" and not await self._ensure_network_enforcement():
+                raise WorkspaceServiceUnavailable(
+                    "Network isolation is unavailable on this host; the service was not started"
+                )
             if entry.get("filesystemIsolation") == "workspace-only" and not await self._ensure_filesystem_enforcement():
                 raise WorkspaceServiceUnavailable(
                     "Workspace-only filesystem isolation is unavailable on this host; the service was not started"
@@ -601,17 +617,58 @@ class WorkspaceServiceManager:
 
         return await asyncio.to_thread(run)
 
+    async def _ensure_network_enforcement(self) -> bool:
+        """Probe once whether a sandboxed service really cannot reach the network."""
+        if self._network_enforcement is None:
+            self._network_enforcement = await self._probe_network_enforcement()
+        return self._network_enforcement
+
     @staticmethod
-    def _bubblewrap_argv(writable_root: Path) -> list[str]:
+    async def _probe_network_enforcement() -> bool:
+        if shutil.which("bwrap") is None or shutil.which("python3") is None:
+            return False
+
+        def run() -> bool:
+            try:
+                result = subprocess.run(
+                    [
+                        "bwrap", "--die-with-parent", "--ro-bind", "/", "/",
+                        "--dev-bind", "/dev", "/dev", "--proc", "/proc",
+                        "--unshare-net", "--", "python3", "-c", _NETWORK_PROBE_SCRIPT,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return False
+            if result.returncode != 0:
+                return False
+            marker = [line for line in result.stdout.splitlines() if line.startswith("connect=")]
+            if not marker:
+                return False
+            try:
+                code = int(marker[-1].split("=", 1)[1])
+            except ValueError:
+                return False
+            # Any non-zero code means the network was unreachable inside the sandbox.
+            return code != 0
+
+        return await asyncio.to_thread(run)
+
+    @staticmethod
+    def _bubblewrap_argv(writable_root: Path, *, confine_filesystem: bool = True,
+                         isolate_network: bool = False) -> list[str]:
         """Confinement that leaves the host read-only and one directory writable."""
-        return [
-            "bwrap",
-            "--die-with-parent",
-            "--ro-bind", "/", "/",
-            "--dev-bind", "/dev", "/dev",
-            "--proc", "/proc",
-            "--bind", str(writable_root), str(writable_root),
-        ]
+        argv = ["bwrap", "--die-with-parent"]
+        if confine_filesystem:
+            argv += ["--ro-bind", "/", "/", "--bind", str(writable_root), str(writable_root)]
+        else:
+            argv += ["--bind", "/", "/"]
+        argv += ["--dev-bind", "/dev", "/dev", "--proc", "/proc"]
+        if isolate_network:
+            argv.append("--unshare-net")
+        return argv
 
     def _scope_properties(self, entry: dict[str, Any]) -> list[str]:
         """Build the cgroup properties for every resource control a service declares."""
@@ -635,12 +692,17 @@ class WorkspaceServiceManager:
         writable_root: Path | None = None,
     ) -> None:
         command = list(entry["argv"])
-        # A workspace-only service runs inside a mount namespace where the host is
-        # read-only and only its workspace is writable. `start()` refuses to launch
-        # at all when that confinement is not enforced on this host.
-        if entry.get("filesystemIsolation") == "workspace-only":
+        # Confinement requested by the definition runs the service inside a mount
+        # and/or network namespace. `start()` refuses to launch at all when the
+        # requested confinement is not enforced on this host.
+        confine_filesystem = entry.get("filesystemIsolation") == "workspace-only"
+        isolate_network = entry.get("networkIsolation") == "isolated"
+        if confine_filesystem or isolate_network:
             root = writable_root or Path(runtime.get("writableRoot") or cwd)
-            command = [*self._bubblewrap_argv(root), "--chdir", str(cwd), "--", *command]
+            command = [
+                *self._bubblewrap_argv(root, confine_filesystem=confine_filesystem, isolate_network=isolate_network),
+                "--chdir", str(cwd), "--", *command,
+            ]
         # Enforce declared resource controls with a user-scoped cgroup. This host
         # provides systemd-run and cgroup v2; a declared control is never silently
         # ignored by falling back to an unbounded process.
@@ -808,7 +870,8 @@ class WorkspaceServiceManager:
         if not isinstance(definition, dict):
             raise ValueError("definition must be an object")
         allowed = {"name", "argv", "cwd", "env", "ports", "health", "dependsOn", "restart",
-                   "memoryLimitMb", "cpuQuotaPercent", "tasksMax", "filesystemIsolation"}
+                   "memoryLimitMb", "cpuQuotaPercent", "tasksMax", "filesystemIsolation",
+                   "networkIsolation"}
         if set(definition) - allowed or "name" not in definition or "argv" not in definition:
             raise ValueError("definition has unsupported or missing fields")
         name = cls._validate_name(definition["name"])
@@ -878,6 +941,14 @@ class WorkspaceServiceManager:
         restart = definition.get("restart", "never")
         if restart not in _ALLOWED_RESTART:
             raise ValueError("restart must be 'never' or 'on-failure'")
+        network = definition.get("networkIsolation", "host")
+        if not isinstance(network, str) or network not in _NETWORK_PROFILES:
+            raise ValueError("networkIsolation must be 'host' or 'isolated'")
+        if network == "isolated" and (normalized_ports or health is not None):
+            # An isolated service has no network, so a loopback port or health
+            # target could never be reached; refuse the definition instead of
+            # accepting a port that silently never answers.
+            raise ValueError("a network-isolated service cannot declare ports or a health target")
         memory = definition.get("memoryLimitMb")
         if memory is not None and (isinstance(memory, bool) or not isinstance(memory, int)
                                    or not 16 <= memory <= 65536):
@@ -906,6 +977,7 @@ class WorkspaceServiceManager:
             "cpuQuotaPercent": cpu_quota,
             "tasksMax": tasks_max,
             "filesystemIsolation": isolation,
+            "networkIsolation": network,
         }
 
     @staticmethod

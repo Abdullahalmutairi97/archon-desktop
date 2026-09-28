@@ -70,7 +70,9 @@ A service definition can declare `memoryLimitMb`, `cpuQuotaPercent` and `tasksMa
 
 A service may also declare `filesystemIsolation: "workspace-only"`. It then runs inside a bubblewrap mount namespace where the host filesystem is read-only and only the workspace root is writable, and the probe requires a denied write to `/etc` plus an allowed write inside the workspace before any service starts. Composition with the resource scope was verified, and the confinement was reproduced end to end with a real service whose command wrote a file inside its workspace (present) and attempted `/tmp/archon-outside-probe` (denied, absent on the host).
 
-Network confinement is still not implemented for services: a private network namespace would break the loopback health probe and the preview gateway, so a service keeps host network access. That, the loopback conflict above, and the missing agent-runtime profile remain the open work.
+A service may also declare `networkIsolation: "isolated"`. It then runs with `bwrap --unshare-net`, and such a definition may not declare ports or a loopback health target, because it could never answer them; that removes the probe/preview conflict by construction instead of leaving an unreachable port. The probe requires a connection attempt inside the sandbox to fail, and the confinement composes with the filesystem profile and the resource scope. Reproduced end to end with a real service whose connection attempt returned `ENETUNREACH` (101).
+
+The remaining open work is the agent-runtime profile: a sandboxed Prime or Pi child process, which neither the runtime adapters nor the child-environment allowlists implement today.
 
 ## Reproduction
 

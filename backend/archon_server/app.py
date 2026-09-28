@@ -334,6 +334,7 @@ class WorkspaceServiceDefinitionRequest(BaseModel):
     cpuQuotaPercent: int | None = Field(default=None, strict=True, ge=1, le=1600)
     tasksMax: int | None = Field(default=None, strict=True, ge=4, le=4096)
     filesystemIsolation: Literal["none", "workspace-only"] = "none"
+    networkIsolation: Literal["host", "isolated"] = "host"
 
 
 class WorkspaceServiceConfirmRequest(BaseModel):
