@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from archon_server.app import create_app
 from archon_server.config import Settings
 from archon_server.local_pairing import LOCAL_PAIRING_AUDIENCE
-from archon_server.services.workspace_terminal import WorkspaceTerminalService
 from archon_server.workspace_write_lease import (
     WorkspaceWriteLease,
     WorkspaceWriteLeaseBusy,
@@ -23,10 +22,50 @@ WORKSPACE_ID = "workspace-0123456789abcdef0123456789abcdef"
 
 
 def _fake_tmux(tmp_path):
-    """A minimal tmux stand-in: enough for the terminal service to create a session."""
-    from tests.test_workspace_terminal import _fake_tmux as build
+    """A self-contained tmux stand-in: enough for the terminal service to run.
 
-    return build(tmp_path)
+    Defined here rather than imported from another test module, because CI runs
+    pytest from a temporary working directory where `tests` is not importable.
+    It tracks session names in a state file so `list-sessions` reports them.
+    """
+    import sys as _sys
+
+    state_file = tmp_path / "fake-tmux-state.json"
+    script = tmp_path / "fake-tmux"
+    script.write_text(
+        "#!" + _sys.executable + "\n"
+        "import json, os, socket, sys\n"
+        f"state_file = {str(state_file)!r}\n"
+        "args = sys.argv[1:]\n"
+        "if len(args) < 3 or args[0] != '-S':\n"
+        "    print('bad argv', file=sys.stderr); raise SystemExit(64)\n"
+        "socket_path, action = args[1], args[2]\n"
+        "try:\n"
+        "    with open(state_file, encoding='utf-8') as handle: state = json.load(handle)\n"
+        "except FileNotFoundError:\n"
+        "    state = {}\n"
+        "sessions = state.setdefault(socket_path, [])\n"
+        "if action == 'new-session':\n"
+        "    name = args[args.index('-s') + 1] if '-s' in args else 'session'\n"
+        "    os.makedirs(os.path.dirname(socket_path), exist_ok=True)\n"
+        "    if not os.path.exists(socket_path):\n"
+        "        listener = socket.socket(socket.AF_UNIX); listener.bind(socket_path); listener.close()\n"
+        "        os.chmod(socket_path, 0o600)\n"
+        "    if name not in sessions: sessions.append(name)\n"
+        "elif action == 'list-sessions':\n"
+        "    for name in sessions: print(name)\n"
+        "elif action == 'list-panes':\n"
+        "    for name in sessions: print('%s|1|1|%%0' % name)\n"
+        "elif action == 'send-keys':\n"
+        "    pass\n"
+        "elif action == 'kill-session':\n"
+        "    target = args[args.index('-t') + 1].lstrip('=') if '-t' in args else ''\n"
+        "    sessions[:] = [name for name in sessions if name != target]\n"
+        "with open(state_file, 'w', encoding='utf-8') as handle: json.dump(state, handle)\n"
+        "raise SystemExit(0)\n"
+    )
+    script.chmod(0o755)
+    return script
 
 
 def test_write_lease_is_exclusive_and_releasable(tmp_path):
