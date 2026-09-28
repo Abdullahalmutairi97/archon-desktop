@@ -66,7 +66,7 @@ function LiveSidebarContent({ view, collapsed, live, onView }: {
     <div className="sidebar-section-head"><span className="sidebar-section-label">SERVER CONVERSATIONS</span></div>
     <nav className="primary-navigation" aria-label="Server conversations">
       {liveItems.map((item) => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} aria-label={item.label} title={item.label} aria-current={view === item.id ? 'page' : undefined} onClick={() => onView(item.id)}>
-        <Icon name={item.icon} /><span className="nav-label">{item.label}</span>
+        <Icon name={item.icon} /><span className="nav-label">{item.label}</span>{item.id === 'chat' && !collapsed && <kbd title="New conversation">Ctrl N</kbd>}
       </button>)}
     </nav>
     {note && <p className="live-sidebar-note">{note}</p>}
@@ -132,7 +132,7 @@ export function Sidebar({
           aria-label={item.label}
           aria-current={view === item.id ? 'page' : undefined}
           onClick={() => item.id === 'codex' ? onNewSession() : onView(item.id)}
-        ><Icon name={item.icon} /><span className="nav-label">{item.label}</span>{item.shortcut && !collapsed && <kbd>{item.shortcut}</kbd>}</button>)}
+        ><Icon name={item.icon} /><span className="nav-label">{item.label}</span>{item.shortcut && !collapsed && !live && <kbd>{item.shortcut}</kbd>}</button>)}
       </nav>
 
       {live && <LiveSidebarContent view={view} collapsed={collapsed} live={live} onView={onView} />}

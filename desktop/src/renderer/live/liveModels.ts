@@ -22,6 +22,8 @@ export type LiveSession = {
   preview: string | null
   runtime: LiveRuntime | null
   projectId: string | null
+  /** Absolute server directory the conversation runs in; only for verified ownership. */
+  cwd: string | null
   /** Epoch seconds, or null when the server gave no usable time. */
   lastActive: number | null
   messageCount: number | null
@@ -120,6 +122,14 @@ export function liveProjects(rows: readonly JsonRecord[]): LiveProject[] {
   })
 }
 
+/** A canonical absolute server path, or null; it is only compared and displayed. */
+export function serverDirectory(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 1_000 || !value.startsWith('/') || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return null
+  if (value === '/') return value
+  if (value.endsWith('/')) return null
+  return value.slice(1).split('/').every((part) => part.length > 0 && part !== '.' && part !== '..') ? value : null
+}
+
 export function liveSessions(rows: readonly JsonRecord[]): LiveSession[] {
   const seen = new Set<string>()
   return rows.flatMap((row) => {
@@ -137,6 +147,7 @@ export function liveSessions(rows: readonly JsonRecord[]): LiveSession[] {
       preview: displayLine(row.preview, MAX_PREVIEW_LENGTH),
       runtime: ownership === 'verified' && (row.runtime === 'prime' || row.runtime === 'pi') ? row.runtime : null,
       projectId: projectId(row.project_id),
+      cwd: ownership === 'verified' ? serverDirectory(row.cwd) : null,
       lastActive: positiveSeconds(row.last_active),
       messageCount,
       active: row.active === true,

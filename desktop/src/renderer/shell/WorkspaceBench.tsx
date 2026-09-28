@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { documentKeyId, makeDocumentKey, type ExecutionScope } from '../../shared/domain/identity'
 import { queueCounts } from '../../shared/domain/queue'
-import { FIXTURE_ACTIVITY, FIXTURE_TASKS, runtimeLabel } from './fixtures'
+import { FIXTURE_ACTIVITY, FIXTURE_TASKS } from './fixtures'
 import type { BenchId } from './shortcuts'
 import { Icon, type IconName } from './Icon'
 import { BrandMark } from './BrandMark'
@@ -11,7 +11,6 @@ const tabs: { id: BenchId; label: string; icon: IconName }[] = [
   { id: 'files', label: 'Files', icon: 'folder' },
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
   { id: 'browser', label: 'Browser', icon: 'browser' },
-  { id: 'ide', label: 'IDE', icon: 'code' },
 ]
 
 const fixtureFiles = [
@@ -116,13 +115,6 @@ export function WorkspaceBench({
           <div className="browser-toolbar"><span className="browser-dots"><i /><i /><i /></span><div className="address-bar"><Icon name="settings" /> preview://fixture/reconstruction</div></div>
           <div className="browser-page"><BrandMark className="browser-mark" /><span className="eyebrow">SYNTHETIC BROWSER PANEL</span><h3>Nothing is connected</h3><p>This sample page is part of the renderer fixture. It does not navigate or load remote content.</p><button className="text-button" onClick={() => onSelect('activity')}>Return to activity</button></div>
         </div>
-      </section>}
-
-      {active === 'ide' && <section className="bench-panel ide-panel" aria-labelledby="ide-heading">
-        <div className="panel-title-row"><div><span className="eyebrow">EDITOR SURFACE</span><h2 id="ide-heading">IDE</h2></div><span className="fixture-tag">FIXTURE</span></div>
-        <div className="ide-context"><span className="ide-language-dot" />{runtimeLabel(scope.runtime)}<span className="context-separator">/</span>{scope.root.split('/').filter(Boolean).at(-1)}</div>
-        <div className="ide-editor"><div className="editor-tab"><Icon name="code" />{activeFile.label}<span className="editor-readonly">Read only</span></div><pre data-document-key={activeDocumentId}>{filePreviews[activeFile.path].split('\n').map((line, index) => <span className="code-line" key={`${index}-${line}`}><i>{String(index + 1).padStart(2, '0')}</i>{line || ' '}{'\n'}</span>)}</pre></div>
-        <div className="bench-note"><Icon name="code" /><p>Document identity includes runtime, connection, session, root, and path. Edits are not persisted.</p></div>
       </section>}
 
       <section className="queue-panel" aria-label="Synthetic task queue">

@@ -10,6 +10,7 @@ import { readShellPreferences, saveShellPreferences, type ShellPreferences } fro
 import { LiveChatView } from '../live/LiveChat'
 import { runtimeLabel as liveRuntimeLabel } from '../live/liveModels'
 import { LiveProjectsView, LiveSessionsView, LiveTasksView } from '../live/LiveViews'
+import { LiveWorkbench } from '../live/LiveWorkbench'
 import { useLiveServer } from '../live/useLiveServer'
 import { FIXTURE_PROJECTS, FIXTURE_SESSIONS, FIXTURE_TASKS, runtimeLabel, sessionForId } from './fixtures'
 import { Icon } from './Icon'
@@ -33,7 +34,8 @@ export function App() {
   const bridge = window.archon as DesktopBridge | undefined
   const live = Boolean(bridge)
   const [preferences, setPreferences] = useState<ShellPreferences>(() => readShellPreferences())
-  const [view, setView] = useState<WorkspaceView>('codex')
+  // With the desktop bridge the app opens on server conversations; the browser preview keeps Local Codex.
+  const [view, setView] = useState<WorkspaceView>(() => window.archon ? 'chat' : 'codex')
   const [selectedSessionId, setSelectedSessionId] = useState(DEFAULT_SESSION_ID)
   const [selectedProjectId, setSelectedProjectId] = useState(FIXTURE_PROJECTS[0].id)
   const [localCodexSelectionRequest, setLocalCodexSelectionRequest] = useState<{ requestId: number; projectId: string } | undefined>()
@@ -89,16 +91,16 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const action = resolveShellShortcut(event, { appearanceOpen, paletteOpen, benchOpen: demo && benchOpen })
-      // The workbench is a fixture surface; with the desktop bridge it is not offered.
-      if (!action || (live && action.type === 'open-bench')) return
+      const action = resolveShellShortcut(event, { appearanceOpen, paletteOpen, benchOpen: (demo || (live && view === 'chat')) && benchOpen })
+      if (!action) return
       event.preventDefault()
       switch (action.type) {
         case 'toggle-sidebar':
           setPreferences((value) => ({ ...value, sidebarCollapsed: !value.sidebarCollapsed }))
           break
         case 'new-session':
-          openLocalCodex()
+          if (live) startLiveConversation(null)
+          else openLocalCodex()
           break
         case 'open-appearance':
           setPaletteOpen(false)
@@ -124,7 +126,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [appearanceOpen, benchOpen, demo, live, openDemoBench, openLocalCodex, paletteOpen])
+  }, [appearanceOpen, benchOpen, demo, live, openDemoBench, openLocalCodex, paletteOpen, startLiveConversation, view])
 
   const showProject = (projectId: string) => {
     setSelectedProjectId(projectId)
@@ -180,6 +182,7 @@ export function App() {
             {demo && view === 'projects' && <span className="scope-pill"><i className={`runtime-dot runtime-${currentProject.runtime}`} />{currentProject.location} · {currentProject.runtime === 'codex' ? 'Local Codex' : currentProject.runtime === 'pi' ? 'Pi' : 'Prime'}</span>}
             {live && view === 'chat' && liveSession && <span className="scope-pill"><i className={`runtime-dot runtime-${liveSession.runtime ?? 'unverified'}`} />Server · {liveRuntimeLabel(liveSession.runtime)}</span>}
             {demo && <button className="icon-button view-action-button" aria-label="Open workbench activity" title="Open demo workbench" onClick={() => openDemoBench('activity')}><Icon name="activity" /></button>}
+            {live && view === 'chat' && liveServer.scope && <button className="icon-button view-action-button" aria-label={benchOpen ? 'Close workbench' : 'Open workbench'} aria-pressed={benchOpen} title="Workbench · Ctrl 1–4" onClick={() => setBenchOpen((open) => !open)}><Icon name="activity" /></button>}
           </div>
         </div>
 
@@ -213,6 +216,15 @@ export function App() {
         <div className="local-codex-route" hidden={view !== 'codex'}><LocalCodexPanel bridge={window.archon} active={view === 'codex'} selectionRequest={localCodexSelectionRequest} /></div>
       </main>
       {demo && <WorkspaceBench active={activeBench} open={benchOpen} scope={currentSession.scope} onSelect={setActiveBench} onClose={() => setBenchOpen(false)} />}
+      {live && view === 'chat' && benchOpen && liveServer.scope && <LiveWorkbench
+        scope={liveServer.scope}
+        session={liveSession}
+        projects={liveServer.projects}
+        active={activeBench}
+        onSelect={setActiveBench}
+        onClose={() => setBenchOpen(false)}
+        onOpenServerWork={() => setView('server')}
+      />}
     </div>
 
     <div className="reconstruction-ribbon" aria-label="Reconstruction and fixture status">

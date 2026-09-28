@@ -77,17 +77,6 @@ describe('reconstruction preview shell', () => {
     expect(screen.queryByRole('dialog', { name: 'Quick actions' })).not.toBeInTheDocument()
   })
 
-  it('keeps IDE fixture text aligned with the selected local Codex scope', () => {
-    render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: 'Preview/demo' }))
-    fireEvent.click(screen.getByRole('button', { name: /Local planning draft/ }))
-    fireEvent.keyDown(window, { key: '5', code: 'Digit5', ctrlKey: true })
-
-    expect(screen.getByRole('tab', { name: /IDE/ })).toHaveAttribute('aria-selected', 'true')
-    expect(document.querySelector('.ide-context')).toHaveTextContent('THIS PC · Local Codex')
-    expect(document.querySelector('.ide-editor pre')).not.toHaveTextContent('Server fixture · Prime')
-  })
-
   it('opens an honest connection view in the browser preview', () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Connection' }))
@@ -146,6 +135,9 @@ describe('reconstruction preview shell', () => {
     const bridge = { localCodex, connection: { describe: vi.fn(async () => ({ configured: false, serverUrl: null, storageMode: 'unavailable', generation: 0 })) } } as unknown as DesktopBridge
     Object.defineProperty(window, 'archon', { value: bridge, configurable: true })
     render(<App />)
+    // With the desktop bridge the app opens on server conversations.
+    expect(screen.getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-current', 'page')
+    fireEvent.click(screen.getByRole('button', { name: 'Local Codex' }))
     await screen.findByRole('option', { name: project.name })
     fireEvent.change(screen.getByLabelText('Local prompt'), { target: { value: 'Inspect the local project' } })
     fireEvent.click(screen.getByRole('button', { name: 'Start Codex turn' }))

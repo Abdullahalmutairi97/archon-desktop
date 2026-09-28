@@ -21,6 +21,7 @@ import {
   type RuntimeChoice,
   type TrackedTask,
 } from './liveModels'
+import { checkoutChoices, type CheckoutChoice } from './LiveWorkbench'
 import type { LiveScope, LiveServer } from './useLiveServer'
 import { LiveUnavailable } from './LiveViews'
 import './LiveViews.css'
@@ -506,6 +507,9 @@ function NewConversation({
   const [runtimes, setRuntimes] = useState<RuntimeState>({ state: 'loading' })
   const [projectId, setProjectId] = useState(preferredProjectId ?? '')
   const [runtime, setRuntime] = useState<LiveRuntime | ''>('')
+  // '' runs in the project source; otherwise a checkout of that project (Prime only on the server).
+  const [checkoutId, setCheckoutId] = useState('')
+  const [checkouts, setCheckouts] = useState<readonly CheckoutChoice[]>([])
   const [prompt, setPrompt] = useState('')
   const [submission, setSubmission] = useState<'idle' | 'submitting' | 'unknown'>('idle')
   const [sentPrompt, setSentPrompt] = useState<string | null>(null)
@@ -528,6 +532,16 @@ function NewConversation({
     return () => { current = false }
   }, [bridge])
 
+  useEffect(() => {
+    let current = true
+    void Promise.resolve().then(() => bridge.api.invoke('workspaces.list', {})).then((result) => {
+      if (current) setCheckouts(checkoutChoices(result.workspaces, projects))
+    }).catch(() => {
+      if (current) setCheckouts([])
+    })
+    return () => { current = false }
+  }, [bridge, projects])
+
   const trackedTask = tracker.state?.task ?? null
   useEffect(() => {
     if (!trackedTask || !isTerminalStatus(trackedTask.status) || handledTerminal.current === trackedTask.id) return
@@ -539,14 +553,21 @@ function NewConversation({
 
   const choices = runtimes.state === 'ready' ? runtimes.choices : []
   const selectedProject = projects.find((project) => project.id === projectId) ?? null
-  const selectedRuntime = choices.find((choice) => choice.id === runtime) ?? choices[0] ?? null
+  const projectCheckouts = checkouts.filter((choice) => !!selectedProject && choice.projectId === selectedProject.id)
+  const selectedCheckout = projectCheckouts.find((choice) => choice.id === checkoutId) ?? null
+  // The server runs a checkout conversation with Prime only.
+  const selectedRuntime = selectedCheckout
+    ? choices.find((choice) => choice.id === 'prime') ?? null
+    : choices.find((choice) => choice.id === runtime) ?? choices[0] ?? null
   const locked = submission !== 'idle' || (!!trackedTask && !isTerminalStatus(trackedTask.status))
   const canStart = !locked && !!selectedProject && !!selectedRuntime && prompt.trim().length > 0 && prompt.length <= MAX_PROMPT_LENGTH
 
   async function start(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     if (!canStart || !selectedProject || !selectedRuntime || submitLock.current) return
-    const frozen = { projectId: selectedProject.id, prompt, runtime: selectedRuntime.id }
+    const frozen = selectedCheckout
+      ? { projectId: selectedProject.id, prompt, workspaceId: selectedCheckout.id, workspaceGeneration: selectedCheckout.generation }
+      : { projectId: selectedProject.id, prompt, runtime: selectedRuntime.id }
     submitLock.current = true
     setSubmission('submitting')
     try {
@@ -576,8 +597,15 @@ function NewConversation({
           {projects.map((project) => <option key={project.id} value={project.id}>{project.name}{project.primaryPath ? ` · ${project.primaryPath}` : ''}</option>)}
         </select>
 
+        <label htmlFor="live-new-checkout">Run in</label>
+        <select id="live-new-checkout" value={selectedCheckout?.id ?? ''} onChange={(event) => setCheckoutId(event.currentTarget.value)} disabled={locked || !selectedProject}>
+          <option value="">Project source{selectedProject?.primaryPath ? ` · ${selectedProject.primaryPath}` : ''}</option>
+          {projectCheckouts.map((choice) => <option key={choice.id} value={choice.id}>Checkout · {choice.label}</option>)}
+        </select>
+        {selectedCheckout && <p className="live-task-note">Files, terminal and previews in the workbench use this same checkout. The server runs checkout conversations with Prime.</p>}
+
         <label htmlFor="live-new-runtime">Runtime</label>
-        <select id="live-new-runtime" value={selectedRuntime?.id ?? ''} onChange={(event) => setRuntime(event.currentTarget.value === 'pi' ? 'pi' : event.currentTarget.value === 'prime' ? 'prime' : '')} disabled={locked || !choices.length}>
+        <select id="live-new-runtime" value={selectedRuntime?.id ?? ''} onChange={(event) => setRuntime(event.currentTarget.value === 'pi' ? 'pi' : event.currentTarget.value === 'prime' ? 'prime' : '')} disabled={locked || !choices.length || !!selectedCheckout}>
           {!choices.length && <option value="">{runtimes.state === 'loading' ? 'Checking runtimes…' : runtimes.state === 'error' ? 'Runtimes could not be read' : 'No available runtime'}</option>}
           {choices.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
         </select>

@@ -1,0 +1,30 @@
+/* Live workbench beside a server conversation. Logical sides only, so the panel mirrors in RTL. */
+.live-bench { flex-basis: 480px; width: 480px; max-width: 44vw; }
+.live-bench-content { display: flex; flex-direction: column; gap: 12px; padding: 14px; overflow: auto; }
+.live-bench-empty { margin: 0; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: calc(11px * var(--font-scale)); line-height: 1.5; }
+.live-bench-empty p { margin: 0 0 10px; }
+.live-bench-empty button,
+.live-activity-tasks button { font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding-block: 6px; padding-inline: 10px; cursor: pointer; }
+.live-bench-checkout { display: grid; gap: 6px; font-size: calc(11px * var(--font-scale)); }
+.live-bench-checkout label { color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; font-size: calc(9px * var(--font-scale)); }
+.live-bench-checkout select { font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding-block: 6px; padding-inline: 8px; }
+.live-bench-checkout code { color: var(--muted); overflow-wrap: anywhere; text-align: start; }
+.live-bench-note { margin: 0; color: #d2aa72; line-height: 1.5; }
+.live-activity { display: grid; gap: 10px; font-size: calc(11px * var(--font-scale)); }
+.live-activity-summary { display: flex; justify-content: space-between; color: var(--muted); }
+.live-activity-working { color: var(--accent); }
+.live-activity-tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.live-activity-tasks button { display: grid; gap: 2px; width: 100%; text-align: start; }
+.live-activity-tasks button[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); }
+.live-activity-tasks button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-activity-tasks small { color: var(--muted); }
+.live-activity-events { display: grid; gap: 4px; }
+.live-activity-row { padding-block: 5px; padding-inline: 8px; border-inline-start: 2px solid var(--line); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+.live-activity-tool { border-inline-start-color: var(--accent); }
+.live-activity-tool-end { color: var(--muted); }
+.live-activity-diagnostic { border-inline-start-color: #d2aa72; color: var(--muted); }
+.live-activity-error { border-inline-start-color: #d27272; }
+.live-activity-answer { border-inline-start-color: #7fb88a; background: var(--surface-2); border-radius: 4px; }
+/* The workbench is narrow: stack the file list above its preview. */
+.live-bench .workspace-file-browser-grid { grid-template-columns: minmax(0, 1fr); }
+.live-bench .workspace-file-list-pane { max-block-size: 260px; overflow: auto; }

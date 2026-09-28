@@ -4,7 +4,7 @@ import { PrimeTaskPanel } from './PrimeTaskPanel'
 import { RuntimeCompatibility } from './RuntimeCompatibility'
 import { WorkspaceFileBrowser, type WorkspaceReadOnlyFilePort } from './WorkspaceFileBrowser'
 import { WorkspaceConsole } from './WorkspaceConsole'
-import { LanguageProfiles } from './LanguageProfiles'
+import { workspaceFilePort } from './workspaceFilePort'
 import { WorkspaceServices } from './WorkspaceServices'
 import './ServerCollections.css'
 
@@ -275,18 +275,7 @@ function WorkspaceSection({
   const provisionLock = useRef(false)
   const headLock = useRef(false)
   const localCodexLock = useRef(false)
-  const readOnlyFilePort = useMemo<WorkspaceReadOnlyFilePort>(() => ({
-    list: (workspaceId, path, limit) => bridge.api.invoke('workspaces.files.list', { workspaceId, path, limit }),
-    read: (workspaceId, path, maxBytes) => bridge.api.invoke('workspaces.files.read', { workspaceId, path, maxBytes }),
-    search: (workspaceId, query) => bridge.api.invoke('workspaces.files.search', { workspaceId, query }),
-    write: (workspaceId, path, expectedContent, content) => bridge.api.invoke('workspaces.files.write', {
-      workspaceId, path, expectedContent, content,
-    }),
-    create: (workspaceId, path, content) => bridge.api.invoke('workspaces.files.create', {
-      workspaceId, path, content,
-    }),
-    diff: (workspaceId, path) => bridge.api.invoke('workspaces.files.diff', { workspaceId, path }),
-  }), [bridge])
+  const readOnlyFilePort = useMemo<WorkspaceReadOnlyFilePort>(() => workspaceFilePort(bridge), [bridge])
   const selectedProjectId = choices.some((choice) => choice.id === projectId) ? projectId : choices[0]?.id ?? ''
   const revisionIsCommit = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(revision)
   const activeWorkspaceId = state === 'ready' && records.some((record) => record.workspace_id === selectedWorkspaceId)
@@ -474,13 +463,6 @@ function WorkspaceSection({
       key={`services:${activeConsoleWorkspaceId}:${activeConsoleGeneration}`}
       bridge={bridge.workspaceServices}
       preview={bridge.workspacePreview}
-      workspaceId={activeConsoleWorkspaceId}
-      generation={activeConsoleGeneration}
-      pairingAvailable={localCodexPairingAvailable}
-    />}
-    {activeConsoleWorkspaceId && activeConsoleGeneration !== null && <LanguageProfiles
-      key={`profiles:${activeConsoleWorkspaceId}:${activeConsoleGeneration}`}
-      bridge={bridge.languageProfiles}
       workspaceId={activeConsoleWorkspaceId}
       generation={activeConsoleGeneration}
       pairingAvailable={localCodexPairingAvailable}

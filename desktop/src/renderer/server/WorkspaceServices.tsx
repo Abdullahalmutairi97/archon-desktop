@@ -189,27 +189,6 @@ export function WorkspaceServices({
     }
   }
 
-  async function registerCodeServer(): Promise<void> {
-    if (lock.current || !pairingAvailable) return
-    const requested = identity
-    lock.current = true
-    setBusy(true)
-    setMessage(null)
-    try {
-      await bridge.codeServer({ workspaceId })
-      if (identityRef.current !== requested) return
-      // The IDE runs without its own login, so the server binds a private unix
-      // socket instead of a loopback port that any local process could reach.
-      setMessage({ kind: 'status', text: 'Registered code-server on a private socket. Start it, then open a preview.' })
-      await refresh()
-    } catch {
-      if (identityRef.current === requested) setMessage({ kind: 'error', text: 'Could not register code-server. Check the executable is installed at the configured path.' })
-    } finally {
-      lock.current = false
-      if (identityRef.current === requested) setBusy(false)
-    }
-  }
-
   async function openPreview(target: string): Promise<void> {
     if (lock.current || !pairingAvailable) return
     const requested = identity
@@ -317,13 +296,6 @@ export function WorkspaceServices({
       </select></label>
       <button type="button" onClick={() => { void define() }} disabled={!pairingAvailable || busy}>Register</button>
     </fieldset>
-    <div className="workspace-services-codeserver">
-      <span className="workspace-services-hint">
-        The IDE binds a private unix socket in the server state root, not a loopback port, and only
-        the preview gateway can reach it. Start it, then open a preview.
-      </span>
-      <button type="button" onClick={() => { void registerCodeServer() }} disabled={!pairingAvailable || busy}>Register code-server</button>
-    </div>
     {previewName && <div className="workspace-preview" aria-label="Service preview">
       <div className="workspace-preview-heading"><span>Preview · {previewName}</span>
         <button type="button" onClick={() => { void closePreview() }}>Close preview</button>

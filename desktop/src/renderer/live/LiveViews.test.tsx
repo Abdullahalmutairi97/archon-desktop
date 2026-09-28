@@ -73,7 +73,7 @@ function defaults(operation: string): unknown {
 function serverFor(bridge: DesktopBridge, rows: readonly JsonRecord[] = [verifiedSession, nativePiSession, reviewSession]): LiveServer {
   return {
     status: 'ready',
-    scope: { bridge, generation: 4, serverUrl: 'https://archon.example' },
+    scope: { bridge, generation: 4, serverUrl: 'https://archon.example', localPairingAvailable: false },
     projects: liveProjects([project]),
     sessions: liveSessions(rows),
     refreshing: false,

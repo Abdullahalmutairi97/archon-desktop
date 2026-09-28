@@ -1,5 +1,5 @@
 /** Pure keyboard mapping for the authored desktop shell. */
-export type BenchId = 'activity' | 'files' | 'terminal' | 'browser' | 'ide'
+export type BenchId = 'activity' | 'files' | 'terminal' | 'browser'
 
 export type ShortcutState = {
   appearanceOpen: boolean
@@ -22,7 +22,6 @@ const benchByDigit: Record<string, BenchId> = {
   '2': 'files',
   '3': 'terminal',
   '4': 'browser',
-  '5': 'ide',
 }
 
 export function resolveShellShortcut(
@@ -45,7 +44,7 @@ export function resolveShellShortcut(
   if (normalized === ',') return { type: 'open-appearance' }
   if (normalized === 'k') return { type: 'open-palette' }
 
-  const digit = /^Digit[1-5]$/.test(event.code) ? event.code.slice(-1) : event.key
+  const digit = /^Digit[1-4]$/.test(event.code) ? event.code.slice(-1) : event.key
   const bench = benchByDigit[digit]
   return bench ? { type: 'open-bench', bench } : null
 }

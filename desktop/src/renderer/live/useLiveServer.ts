@@ -10,6 +10,8 @@ export type LiveScope = {
   bridge: DesktopBridge
   generation: number
   serverUrl: string | null
+  /** Same-user pairing is active, so terminals and services can be used. */
+  localPairingAvailable: boolean
 }
 
 export type LiveStatus = 'checking' | 'unavailable' | 'disconnected' | 'loading' | 'ready' | 'rejected' | 'error'
@@ -66,6 +68,7 @@ export function useLiveServer(bridge: DesktopBridge | undefined, routeKey: strin
   const generation = description?.generation ?? -1
   const validGeneration = Number.isSafeInteger(generation) && generation >= 0
   const serverUrl = description?.serverUrl ?? null
+  const localPairingAvailable = description?.localPairingAvailable === true
 
   useEffect(() => {
     const requestId = ++collectionSerial.current
@@ -105,8 +108,8 @@ export function useLiveServer(bridge: DesktopBridge | undefined, routeKey: strin
   }, [])
 
   const scope = useMemo<LiveScope | null>(
-    () => bridge && configured && validGeneration ? { bridge, generation, serverUrl } : null,
-    [bridge, configured, generation, validGeneration, serverUrl],
+    () => bridge && configured && validGeneration ? { bridge, generation, serverUrl, localPairingAvailable } : null,
+    [bridge, configured, generation, validGeneration, serverUrl, localPairingAvailable],
   )
 
   const current = collections && scope && collections.bridge === scope.bridge && collections.generation === scope.generation
