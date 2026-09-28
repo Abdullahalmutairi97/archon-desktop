@@ -743,6 +743,9 @@ function localCodexRequestDetails(request: LocalCodexProxyRequest): {
     case 'workspace.services.list':
       if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)) break
       return { method: 'GET', path: `/api/local/workspaces/${request.workspaceId}/services` }
+    case 'workspace.languageProfiles.list':
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)) break
+      return { method: 'GET', path: `/api/local/workspaces/${request.workspaceId}/language-profiles` }
     case 'workspace.services.define':
       if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
         || !/^[a-z][a-z0-9-]{0,31}$/u.test(request.definition.name)) break

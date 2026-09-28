@@ -23,6 +23,7 @@ export type LocalCodexProxyRequest =
   | { operation: 'workspace.terminals.attach.input'; workspaceId: string; sessionId: string; attachId: string; events: readonly WorkspaceConsoleKeyEvent[] }
   | { operation: 'workspace.terminals.attach.detach'; workspaceId: string; sessionId: string; attachId: string }
   | { operation: 'workspace.services.list'; workspaceId: string }
+  | { operation: 'workspace.languageProfiles.list'; workspaceId: string }
   | { operation: 'workspace.services.define'; workspaceId: string; definition: WorkspaceServiceDefinitionInput }
   | { operation: 'workspace.services.codeServer'; workspaceId: string; port: number }
   | { operation: 'workspace.services.remove'; workspaceId: string; name: string; confirm: boolean }

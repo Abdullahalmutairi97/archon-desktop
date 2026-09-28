@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createDesktopBridge } from './bridge'
-import { BRIDGE_CHANNELS, WORKSPACE_CONSOLE_CHANNELS, WORKSPACE_PREVIEW_CHANNELS, WORKSPACE_SERVICES_CHANNELS } from '../shared/bridge/validation'
+import { BRIDGE_CHANNELS, LANGUAGE_PROFILES_CHANNELS, WORKSPACE_CONSOLE_CHANNELS, WORKSPACE_PREVIEW_CHANNELS, WORKSPACE_SERVICES_CHANNELS } from '../shared/bridge/validation'
 
 describe('preload bridge', () => {
   it('exposes only frozen finite methods and forwards canonical IPC calls', async () => {
@@ -11,7 +11,9 @@ describe('preload bridge', () => {
     expect(Object.isFrozen(bridge.connection)).toBe(true)
     expect(Object.isFrozen(bridge.api)).toBe(true)
     expect(Object.isFrozen(bridge.localCodex)).toBe(true)
-    expect(Object.keys(bridge).sort()).toEqual(['api', 'connection', 'localCodex', 'workspaceConsole', 'workspacePreview', 'workspaceServices'])
+    expect(Object.keys(bridge).sort()).toEqual([
+      'api', 'connection', 'languageProfiles', 'localCodex', 'workspaceConsole', 'workspacePreview', 'workspaceServices',
+    ])
     expect(Object.keys(bridge.connection).sort()).toEqual(['describe', 'disconnect', 'probe', 'save'])
     expect(Object.keys(bridge.api)).toEqual(['invoke'])
     expect(Object.isFrozen(bridge.workspaceConsole)).toBe(true)
@@ -182,5 +184,48 @@ describe('preload bridge', () => {
     expect(() => unsafeBridge.api.invoke('arbitrary.path', {})).toThrow(TypeError)
     expect(() => unsafeBridge.api.invoke('tasks.list', { limit: 10000 })).toThrow(TypeError)
     expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('exposes the read-only language profile report with a validated request', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const report = {
+      extensionsDirectory: '/home/user/.local/share/code-server/extensions',
+      profiles: [{
+        profile: 'python', label: 'Python', languageIds: ['python'],
+        extensions: [{
+          extensionId: 'ms-python.python', version: '2026.4.0', marketplace: 'open-vsx', declaredLicence: 'MIT',
+          licenceSha256: 'b'.repeat(64), vsixSha256: 'c'.repeat(64), vsixBytes: 6826731,
+          downloadUrl: 'https://open-vsx.org/api/ms-python/python/2026.4.0/file/x.vsix',
+          targetPlatform: null, pinnedInstalledSha256: 'd'.repeat(64), state: 'installed', reason: null,
+          installedVersion: '2026.4.0', installedDirectory: 'ms-python.python-2026.4.0',
+          measuredSha256: 'd'.repeat(64), measuredFiles: 2381, installedLicenceField: 'MIT',
+        }],
+        debuggers: [],
+        unsupported: [{ feature: 'pylance-language-server', reason: 'proprietary and absent' }],
+      }],
+      unpinnedInstalled: [],
+      pinsVerified: false,
+      note: 'artefact record',
+    }
+    const invoke = vi.fn(async () => report)
+    const bridge = createDesktopBridge({ invoke })
+
+    await expect(bridge.languageProfiles.list({ workspaceId })).resolves.toMatchObject({ pinsVerified: false })
+    expect(invoke).toHaveBeenCalledWith(LANGUAGE_PROFILES_CHANNELS.list, { workspaceId })
+
+    // A malformed request never reaches IPC, and the bridge fails before it
+    // returns a promise so a renderer cannot treat the call as in flight.
+    invoke.mockClear()
+    expect(() => bridge.languageProfiles.list({ workspaceId: 'nope' })).toThrow(TypeError)
+    expect(() => bridge.languageProfiles.list({ workspaceId, extra: 1 } as unknown as { workspaceId: string }))
+      .toThrow(TypeError)
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unvalidated language profile response instead of passing it on', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const invoke = vi.fn(async () => ({ extensionsDirectory: '/x', profiles: [], unpinnedInstalled: [], pinsVerified: false, note: 'x', injected: true }))
+    const bridge = createDesktopBridge({ invoke })
+    await expect(bridge.languageProfiles.list({ workspaceId })).rejects.toThrow(TypeError)
   })
 })

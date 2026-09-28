@@ -315,6 +315,64 @@ export interface WorkspaceServiceDto {
   networkIsolation: 'host' | 'isolated'
 }
 
+export type LanguageProfileExtensionState = 'installed' | 'modified' | 'unverified' | 'missing'
+
+export interface LanguageProfileExtensionDto {
+  extensionId: string
+  version: string
+  marketplace: string
+  declaredLicence: string
+  licenceSha256: string
+  vsixSha256: string
+  vsixBytes: number
+  downloadUrl: string
+  targetPlatform: string | null
+  pinnedInstalledSha256: string
+  state: LanguageProfileExtensionState
+  reason: string | null
+  installedVersion: string | null
+  installedDirectory: string | null
+  measuredSha256: string | null
+  measuredFiles: number | null
+  installedLicenceField: string | null
+}
+
+export interface LanguageProfileUnsupportedDto {
+  feature: string
+  reason: string
+}
+
+export interface LanguageProfileDto {
+  profile: string
+  label: string
+  languageIds: readonly string[]
+  extensions: readonly LanguageProfileExtensionDto[]
+  debuggers: readonly LanguageProfileExtensionDto[]
+  unsupported: readonly LanguageProfileUnsupportedDto[]
+}
+
+export interface LanguageProfileUnpinnedDto {
+  extensionId: string
+  installedVersion: string | null
+  installedLicenceField: string | null
+  measuredSha256: string | null
+  state: 'unpinned'
+  reason: string
+}
+
+/** Owner-scoped, read-only artefact report; it never claims a working feature. */
+export interface LanguageProfilesDto {
+  extensionsDirectory: string
+  profiles: readonly LanguageProfileDto[]
+  unpinnedInstalled: readonly LanguageProfileUnpinnedDto[]
+  pinsVerified: boolean
+  note: string
+}
+
+export interface LanguageProfilesBridge {
+  list(input: { workspaceId: string }): Promise<LanguageProfilesDto>
+}
+
 export interface WorkspaceServiceLogsDto {
   text: string
   truncated: boolean
@@ -454,6 +512,7 @@ export interface DesktopBridge {
   readonly localCodex: LocalCodexBridge
   readonly workspaceConsole: WorkspaceConsoleBridge
   readonly workspaceServices: WorkspaceServicesBridge
+  readonly languageProfiles: LanguageProfilesBridge
   readonly workspacePreview: WorkspacePreviewBridge
 }
 

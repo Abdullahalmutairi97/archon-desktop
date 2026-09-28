@@ -157,6 +157,30 @@ describe('backend transport', () => {
     ])
   })
 
+  it('reads the language profile report from one fixed owner-only route', async () => {
+    const workspaceId = `workspace-${'a'.repeat(32)}`
+    const report = {
+      extensionsDirectory: '/home/user/.local/share/code-server/extensions', profiles: [],
+      unpinnedInstalled: [], pinsVerified: false, note: 'artefact record',
+    }
+    const fetcher = vi.fn<BackendFetch>(async () => response({ ...report }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invokeLocalCodex({
+      operation: 'workspace.languageProfiles.list', workspaceId,
+    })).resolves.toMatchObject({ pinsVerified: false })
+    expect(fetcher.mock.calls.map(([url, init]) => [url.pathname, init?.method])).toEqual([
+      [`/api/local/workspaces/${workspaceId}/language-profiles`, 'GET'],
+    ])
+
+    // An invalid workspace id never reaches the network.
+    fetcher.mockClear()
+    await expect(transport.invokeLocalCodex({
+      operation: 'workspace.languageProfiles.list', workspaceId: 'nope',
+    })).rejects.toThrow()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
   it('does not retry ambiguous line input', async () => {
     const fetcher = vi.fn<BackendFetch>(async () => { throw new Error('request may have reached server') })
     const transport = new BackendTransport({ ...localConnection, fetch: fetcher })

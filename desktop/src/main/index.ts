@@ -26,6 +26,7 @@ import {
 import { registerLocalCodex } from './registerLocalCodex'
 import { registerWorkspaceConsole } from './registerWorkspaceConsole'
 import { registerWorkspacePreview } from './registerWorkspacePreview'
+import { registerLanguageProfiles } from './registerLanguageProfiles'
 import { registerWorkspaceServices } from './registerWorkspaceServices'
 import { WorkspacePreviewController } from './workspacePreview'
 import type { LocalCodexIpcController } from './registerLocalCodex'
@@ -45,6 +46,7 @@ let localCodexOwnerLease: CodexOwnerLease | undefined
 let unregisterLocalCodex: (() => void) | undefined
 let unregisterWorkspaceConsole: (() => void) | undefined
 let unregisterWorkspaceServices: (() => void) | undefined
+let unregisterLanguageProfiles: (() => void) | undefined
 let unregisterWorkspacePreview: (() => void) | undefined
 let workspacePreviewController: WorkspacePreviewController | undefined
 let quitRequested = false
@@ -236,6 +238,14 @@ void app.whenReady().then(async () => {
     guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
     invokePairedLocalCodex: connection.invokePairedLocalCodex,
   })
+  unregisterLanguageProfiles = registerLanguageProfiles({
+    ipc: {
+      handle: (channel, handler) => ipcMain.handle(channel, (event, ...args) => handler(event, ...args)),
+      removeHandler: (channel) => ipcMain.removeHandler(channel),
+    },
+    guard: (event) => trustedFrame.assertTrusted(event as TrustedShellIpcEvent),
+    invokePairedLocalCodex: connection.invokePairedLocalCodex,
+  })
   workspacePreviewController = new WorkspacePreviewController(() => mainWindow)
   unregisterWorkspacePreview = registerWorkspacePreview({
     ipc: {
@@ -273,6 +283,8 @@ app.on('before-quit', () => {
   unregisterWorkspaceConsole = undefined
   unregisterWorkspaceServices?.()
   unregisterWorkspaceServices = undefined
+  unregisterLanguageProfiles?.()
+  unregisterLanguageProfiles = undefined
   unregisterWorkspacePreview?.()
   unregisterWorkspacePreview = undefined
   workspacePreviewController?.close()

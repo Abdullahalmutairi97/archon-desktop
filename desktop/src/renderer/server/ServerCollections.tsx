@@ -3,6 +3,7 @@ import type { ConnectionDescription, DesktopBridge, JsonRecord, LocalCodexProjec
 import { PrimeTaskPanel } from './PrimeTaskPanel'
 import { WorkspaceFileBrowser, type WorkspaceReadOnlyFilePort } from './WorkspaceFileBrowser'
 import { WorkspaceConsole } from './WorkspaceConsole'
+import { LanguageProfiles } from './LanguageProfiles'
 import { WorkspaceServices } from './WorkspaceServices'
 import './ServerCollections.css'
 
@@ -446,6 +447,13 @@ function WorkspaceSection({
       key={`services:${activeConsoleWorkspaceId}:${activeConsoleGeneration}`}
       bridge={bridge.workspaceServices}
       preview={bridge.workspacePreview}
+      workspaceId={activeConsoleWorkspaceId}
+      generation={activeConsoleGeneration}
+      pairingAvailable={localCodexPairingAvailable}
+    />}
+    {activeConsoleWorkspaceId && activeConsoleGeneration !== null && <LanguageProfiles
+      key={`profiles:${activeConsoleWorkspaceId}:${activeConsoleGeneration}`}
+      bridge={bridge.languageProfiles}
       workspaceId={activeConsoleWorkspaceId}
       generation={activeConsoleGeneration}
       pairingAvailable={localCodexPairingAvailable}

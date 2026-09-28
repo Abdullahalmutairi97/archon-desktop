@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   BRIDGE_CHANNELS,
+  LANGUAGE_PROFILES_CHANNELS,
   LOCAL_CODEX_CHANNELS,
+  parseLanguageProfilesBackendResponse,
+  parseLanguageProfilesRequest,
   parseBridgeRequest,
   parseBridgeResponse,
   parseLocalCodexEvent,
@@ -561,5 +564,69 @@ describe('finite desktop bridge validation', () => {
     })
     expect(() => parseLocalCodexEvent(hostile)).toThrow(TypeError)
     expect(invoked).toBe(false)
+  })
+})
+
+
+describe('language profile report validation', () => {
+  const workspaceId = `workspace-${'a'.repeat(32)}`
+
+  function extension(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      extensionId: 'ms-python.python', version: '2026.4.0', marketplace: 'open-vsx', declaredLicence: 'MIT',
+      licenceSha256: 'b'.repeat(64), vsixSha256: 'c'.repeat(64), vsixBytes: 6826731,
+      downloadUrl: 'https://open-vsx.org/api/ms-python/python/2026.4.0/file/x.vsix',
+      targetPlatform: null, pinnedInstalledSha256: 'd'.repeat(64), state: 'installed', reason: null,
+      installedVersion: '2026.4.0', installedDirectory: 'ms-python.python-2026.4.0',
+      measuredSha256: 'd'.repeat(64), measuredFiles: 2381, installedLicenceField: 'MIT',
+      ...overrides,
+    }
+  }
+
+  function report(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      extensionsDirectory: '/home/user/.local/share/code-server/extensions',
+      profiles: [{
+        profile: 'python', label: 'Python', languageIds: ['python'], extensions: [extension()],
+        debuggers: [], unsupported: [{ feature: 'pylance-language-server', reason: 'proprietary and absent' }],
+      }],
+      unpinnedInstalled: [],
+      pinsVerified: false,
+      note: 'Installed means the pinned version is present and its files still hash to the recorded digest.',
+      ...overrides,
+    }
+  }
+
+  it('accepts only the documented request shape for a workspace id', () => {
+    expect(parseLanguageProfilesRequest(LANGUAGE_PROFILES_CHANNELS.list, [{ workspaceId }])).toEqual({ workspaceId })
+    expect(() => parseLanguageProfilesRequest(LANGUAGE_PROFILES_CHANNELS.list, [])).toThrow(TypeError)
+    expect(() => parseLanguageProfilesRequest(LANGUAGE_PROFILES_CHANNELS.list, [{ workspaceId, extra: 1 }])).toThrow(TypeError)
+    expect(() => parseLanguageProfilesRequest(LANGUAGE_PROFILES_CHANNELS.list, [{ workspaceId: 'not-a-workspace' }])).toThrow(TypeError)
+    expect(() => parseLanguageProfilesRequest('archon:workspace-services:list', [{ workspaceId }])).toThrow(TypeError)
+  })
+
+  it('accepts the documented report and rejects unknown, malformed or unbounded rows', () => {
+    const parsed = parseLanguageProfilesBackendResponse(LANGUAGE_PROFILES_CHANNELS.list, report()) as {
+      profiles: { extensions: { extensionId: string; state: string }[] }[]
+    }
+    expect(parsed.profiles[0]?.extensions[0]?.extensionId).toBe('ms-python.python')
+    expect(parsed.profiles[0]?.extensions[0]?.state).toBe('installed')
+
+    // An unknown key anywhere is refused instead of being passed to the renderer.
+    expect(() => parseLanguageProfilesBackendResponse(LANGUAGE_PROFILES_CHANNELS.list, report({ extra: true }))).toThrow(TypeError)
+    expect(() => parseLanguageProfilesBackendResponse(LANGUAGE_PROFILES_CHANNELS.list, report({
+      profiles: [{ profile: 'python', label: 'Python', languageIds: ['python'], extensions: [extension({ injected: 1 })], debuggers: [], unsupported: [] }],
+    }))).toThrow(TypeError)
+    // Digests, states and URLs are bounded and typed.
+    for (const bad of [
+      { licenceSha256: 'short' }, { state: 'working' }, { downloadUrl: 'http://open-vsx.org/x.vsix' },
+      { vsixBytes: -1 }, { reason: 'x'.repeat(2000) }, { extensionId: 'no-namespace' },
+    ]) {
+      expect(() => parseLanguageProfilesBackendResponse(LANGUAGE_PROFILES_CHANNELS.list, report({
+        profiles: [{ profile: 'python', label: 'Python', languageIds: ['python'], extensions: [extension(bad)], debuggers: [], unsupported: [] }],
+      }))).toThrow(TypeError)
+    }
+    expect(() => parseLanguageProfilesBackendResponse(LANGUAGE_PROFILES_CHANNELS.list, report({ pinsVerified: 'no' }))).toThrow(TypeError)
+    expect(() => parseLanguageProfilesBackendResponse('archon:workspace-services:list', report())).toThrow(TypeError)
   })
 })

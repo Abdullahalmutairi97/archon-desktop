@@ -44,6 +44,8 @@ import type {
   WorkspaceServiceDto,
   ResolvedWorkspaceServiceDefinition,
   WorkspaceServiceDefinitionInput,
+  LanguageProfileExtensionDto,
+  LanguageProfilesDto,
 } from './types'
 
 export const BRIDGE_CHANNELS = Object.freeze({
@@ -98,6 +100,12 @@ export const WORKSPACE_SERVICES_CHANNELS = Object.freeze({
 } as const)
 
 export type WorkspaceServicesInvokeChannel = (typeof WORKSPACE_SERVICES_CHANNELS)[keyof typeof WORKSPACE_SERVICES_CHANNELS]
+
+export const LANGUAGE_PROFILES_CHANNELS = Object.freeze({
+  list: 'archon:language-profiles:list',
+} as const)
+
+export type LanguageProfilesInvokeChannel = (typeof LANGUAGE_PROFILES_CHANNELS)[keyof typeof LANGUAGE_PROFILES_CHANNELS]
 
 export const WORKSPACE_PREVIEW_CHANNELS = Object.freeze({
   open: 'archon:workspace-preview:open',
@@ -1572,6 +1580,151 @@ export function parseWorkspaceServicesRequest(channel: unknown, args: readonly u
     default:
       return fail()
   }
+}
+
+const LANGUAGE_PROFILE_STATES = new Set(['installed', 'modified', 'unverified', 'missing'])
+const LANGUAGE_EXTENSION_REQUIRED = Object.freeze([
+  'extensionId', 'version', 'marketplace', 'declaredLicence', 'licenceSha256', 'vsixSha256', 'vsixBytes',
+  'downloadUrl', 'targetPlatform', 'pinnedInstalledSha256', 'state', 'reason',
+])
+const LANGUAGE_EXTENSION_OPTIONAL = Object.freeze([
+  'installedVersion', 'installedDirectory', 'measuredSha256', 'measuredFiles', 'installedLicenceField',
+])
+const MAX_LANGUAGE_PROFILES = 8
+const MAX_LANGUAGE_EXTENSIONS = 16
+const MAX_LANGUAGE_TEXT = 512
+
+function boundedRecord(value: unknown, required: readonly string[], optional: readonly string[]): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return fail()
+  const record = value as Record<string, unknown>
+  if (!required.every((key) => Object.prototype.hasOwnProperty.call(record, key))) return fail()
+  if (Object.keys(record).some((key) => !required.includes(key) && !optional.includes(key))) return fail()
+  return record
+}
+
+function boundedLanguageText(value: unknown, { allowNull = false }: { allowNull?: boolean } = {}): string | null {
+  if (value === null && allowNull) return null
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_LANGUAGE_TEXT
+    || /[\u0000-\u001f\u007f]/u.test(value)) return fail()
+  return value
+}
+
+function parseLanguageProfileExtension(value: unknown): LanguageProfileExtensionDto {
+  const record = boundedRecord(value, LANGUAGE_EXTENSION_REQUIRED, LANGUAGE_EXTENSION_OPTIONAL)
+  const extensionId = boundedLanguageText(record.extensionId) as string
+  if (!/^[A-Za-z0-9-]+\.[A-Za-z0-9-]+$/u.test(extensionId)) return fail()
+  const version = boundedLanguageText(record.version) as string
+  const marketplace = boundedLanguageText(record.marketplace) as string
+  const declaredLicence = boundedLanguageText(record.declaredLicence) as string
+  const licenceSha256 = boundedLanguageText(record.licenceSha256) as string
+  const vsixSha256 = boundedLanguageText(record.vsixSha256) as string
+  const pinnedInstalledSha256 = boundedLanguageText(record.pinnedInstalledSha256) as string
+  if (![licenceSha256, vsixSha256, pinnedInstalledSha256].every((digest) => /^[0-9a-f]{64}$/u.test(digest))) return fail()
+  if (typeof record.vsixBytes !== 'number' || !Number.isInteger(record.vsixBytes) || record.vsixBytes < 0) return fail()
+  const downloadUrl = boundedLanguageText(record.downloadUrl) as string
+  if (!downloadUrl.startsWith('https://')) return fail()
+  const targetPlatform = record.targetPlatform === null
+    ? null
+    : boundedLanguageText(record.targetPlatform, { allowNull: true }) as string
+  if (typeof record.state !== 'string' || !LANGUAGE_PROFILE_STATES.has(record.state)) return fail()
+  const reason = record.reason === null ? null : boundedLanguageText(record.reason, { allowNull: true }) as string
+  const installedVersion = 'installedVersion' in record && record.installedVersion !== null
+    ? boundedLanguageText(record.installedVersion, { allowNull: true }) as string
+    : null
+  const installedDirectory = 'installedDirectory' in record && record.installedDirectory !== null
+    ? boundedLanguageText(record.installedDirectory, { allowNull: true }) as string
+    : null
+  const measuredSha256 = 'measuredSha256' in record && record.measuredSha256 !== null
+    ? boundedLanguageText(record.measuredSha256, { allowNull: true }) as string
+    : null
+  const measuredFiles = 'measuredFiles' in record && record.measuredFiles !== null
+    ? (typeof record.measuredFiles === 'number' && Number.isInteger(record.measuredFiles) && record.measuredFiles >= 0
+        ? record.measuredFiles : fail())
+    : null
+  const installedLicenceField = 'installedLicenceField' in record && record.installedLicenceField !== null
+    ? boundedLanguageText(record.installedLicenceField, { allowNull: true }) as string
+    : null
+  return Object.freeze({
+    extensionId, version, marketplace, declaredLicence, licenceSha256, vsixSha256,
+    vsixBytes: record.vsixBytes, downloadUrl, targetPlatform,
+    pinnedInstalledSha256, state: record.state as LanguageProfileExtensionDto['state'], reason,
+    installedVersion, installedDirectory, measuredSha256, measuredFiles, installedLicenceField,
+  })
+}
+
+function parseLanguageProfilesReport(value: unknown): LanguageProfilesDto {
+  const record = exactObject(value, ['extensionsDirectory', 'profiles', 'unpinnedInstalled', 'pinsVerified', 'note'])
+  const extensionsDirectory = boundedLanguageText(record.extensionsDirectory) as string
+  if (!extensionsDirectory.startsWith('/')) return fail()
+  if (!Array.isArray(record.profiles) || record.profiles.length > MAX_LANGUAGE_PROFILES) return fail()
+  const profiles = record.profiles.map((candidate) => {
+    const profile = exactObject(candidate, ['profile', 'label', 'languageIds', 'extensions', 'debuggers', 'unsupported'])
+    const id = boundedLanguageText(profile.profile) as string
+    const label = boundedLanguageText(profile.label) as string
+    if (!Array.isArray(profile.languageIds) || profile.languageIds.length > MAX_LANGUAGE_EXTENSIONS) return fail()
+    const languageIds = Object.freeze(profile.languageIds.map((item) => boundedLanguageText(item) as string))
+    if (!Array.isArray(profile.extensions) || profile.extensions.length > MAX_LANGUAGE_EXTENSIONS) return fail()
+    if (!Array.isArray(profile.debuggers) || profile.debuggers.length > MAX_LANGUAGE_EXTENSIONS) return fail()
+    if (!Array.isArray(profile.unsupported) || profile.unsupported.length > MAX_LANGUAGE_EXTENSIONS) return fail()
+    const unsupported = Object.freeze(profile.unsupported.map((item) => {
+      const row = exactObject(item, ['feature', 'reason'])
+      return Object.freeze({
+        feature: boundedLanguageText(row.feature) as string,
+        reason: boundedLanguageText(row.reason) as string,
+      })
+    }))
+    return Object.freeze({
+      profile: id, label, languageIds,
+      extensions: Object.freeze(profile.extensions.map(parseLanguageProfileExtension)),
+      debuggers: Object.freeze(profile.debuggers.map(parseLanguageProfileExtension)),
+      unsupported,
+    })
+  })
+  if (!Array.isArray(record.unpinnedInstalled) || record.unpinnedInstalled.length > MAX_LANGUAGE_EXTENSIONS) return fail()
+  const unpinnedInstalled = Object.freeze(record.unpinnedInstalled.map((item) => {
+    const row = exactObject(item, ['extensionId', 'installedVersion', 'installedLicenceField', 'measuredSha256', 'state', 'reason'])
+    if (row.state !== 'unpinned') return fail()
+    return Object.freeze({
+      extensionId: boundedLanguageText(row.extensionId) as string,
+      installedVersion: row.installedVersion === null ? null : boundedLanguageText(row.installedVersion, { allowNull: true }) as string,
+      installedLicenceField: row.installedLicenceField === null
+        ? null : boundedLanguageText(row.installedLicenceField, { allowNull: true }) as string,
+      measuredSha256: row.measuredSha256 === null ? null : boundedLanguageText(row.measuredSha256, { allowNull: true }) as string,
+      state: 'unpinned' as const,
+      reason: boundedLanguageText(row.reason) as string,
+    })
+  }))
+  if (typeof record.pinsVerified !== 'boolean') return fail()
+  return Object.freeze({
+    extensionsDirectory,
+    profiles: Object.freeze(profiles),
+    unpinnedInstalled,
+    pinsVerified: record.pinsVerified,
+    note: boundedLanguageText(record.note) as string,
+  })
+}
+
+/** Normalize only the documented language-profile envelope before it reaches the renderer. */
+export function parseLanguageProfilesBackendResponse(channel: unknown, value: unknown): unknown {
+  if (channel !== LANGUAGE_PROFILES_CHANNELS.list) return fail()
+  return parseLanguageProfilesReport(value)
+}
+
+export function parseLanguageProfilesRequest(
+  channel: unknown,
+  args: readonly unknown[],
+): Readonly<{ workspaceId: string }> {
+  const safeArgs = readLocalArray(args, 1)
+  if (safeArgs.length !== 1 || channel !== LANGUAGE_PROFILES_CHANNELS.list) return fail()
+  const record = exactObject(safeArgs[0], ['workspaceId'])
+  if (!workspaceFileId(record.workspaceId)) return fail()
+  return Object.freeze({ workspaceId: record.workspaceId })
+}
+
+/** Validate the normalized report returned by the preload bridge. */
+export function parseLanguageProfilesResponse(channel: unknown, value: unknown): unknown {
+  if (channel !== LANGUAGE_PROFILES_CHANNELS.list) return fail()
+  return parseLanguageProfilesReport(value)
 }
 
 /** Normalize only the documented service envelopes before they cross into the renderer. */

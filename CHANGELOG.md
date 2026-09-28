@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — language profiles in the desktop
+
+- Add a read-only Language profiles surface for the active checkout: it lists each pinned language profile, the install state of every pinned extension and debugger adapter (with the reason when a state is not `installed`), the capabilities this host cannot provide, and any installed extension that no verified pin covers. The report crosses a fixed validated bridge path (`archon:language-profiles:list` → `GET /api/local/workspaces/{id}/language-profiles`), unknown fields are refused instead of forwarded, and the panel states that the record is not a behavioural qualification.
+
 ## Unreleased — service controls in the desktop panel
 
 - The service row now reports the controls the server applied (`memoryLimitMb`, `cpuQuotaPercent`, `tasksMax`, `filesystemIsolation`, `networkIsolation`), and a service without declared controls says so instead of implying isolation. The panel can declare all five when registering a service, refuses an out-of-range value or a network-isolated service with a port before any request, and its description no longer claims that every service runs unconfined.
