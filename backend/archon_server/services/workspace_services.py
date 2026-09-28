@@ -113,6 +113,10 @@ _MAX_RESTARTS = 3
 _STARTING_GRACE_SECONDS = 1.0
 _HEALTH_INTERVAL_SECONDS = 2.0
 _HEALTH_TIMEOUT_SECONDS = 1.5
+# A unix socket path must fit `sun_path` (108 bytes including the terminator on
+# Linux), so the manager keeps its own socket names short and refuses to plan one
+# that would not fit rather than letting a service fail to bind.
+_MAX_SOCKET_PATH_BYTES = 100
 # Server-constructed environment names a definition may request as a reference.
 _ALLOWED_ENV_REFS = frozenset({"NODE_ENV", "PYTHONUNBUFFERED"})
 _ALLOWED_RESTART = frozenset({"never", "on-failure"})
@@ -140,6 +144,41 @@ class WorkspaceServiceConflict(WorkspaceServiceError):
 
 SpawnProcess = Callable[..., Awaitable[Any]]
 HealthProbe = Callable[[str], Awaitable[bool]]
+# A socket target is probed by path and request path, so the injectable hook has
+# its own signature rather than pretending a socket is a URL.
+SocketHealthProbe = Callable[[str, str], Awaitable[bool]]
+
+
+async def _default_socket_health_probe(socket_path: str, http_path: str) -> bool:
+    """Probe a declared unix-socket health target with a bounded GET.
+
+    A socket target speaks plain HTTP like a loopback port does; the difference is
+    only how the connection is made, so the request is bounded the same way and
+    carries no credentials.
+    """
+    request = (
+        f"GET {http_path} HTTP/1.1\r\nHost: localhost\r\nUser-Agent: archon-service-health\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii", "strict")
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(socket_path), timeout=_HEALTH_TIMEOUT_SECONDS,
+        )
+    except (OSError, asyncio.TimeoutError):
+        return False
+    try:
+        writer.write(request)
+        await asyncio.wait_for(writer.drain(), timeout=_HEALTH_TIMEOUT_SECONDS)
+        head = await asyncio.wait_for(reader.read(64), timeout=_HEALTH_TIMEOUT_SECONDS)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+    return head.startswith(b"HTTP/1.") and b" 200" in head.split(b"\r\n", 1)[0]
 
 
 async def _default_health_probe(url: str) -> bool:
@@ -190,6 +229,7 @@ class WorkspaceServiceManager:
         max_total_memory_mb: int = _DEFAULT_MAX_TOTAL_MEMORY_MB,
         spawn: SpawnProcess | None = None,
         health_probe: HealthProbe | None = None,
+        socket_health_probe: SocketHealthProbe | None = None,
         memory_enforcement: bool | None = None,
         cpu_enforcement: bool | None = None,
         tasks_enforcement: bool | None = None,
@@ -210,6 +250,7 @@ class WorkspaceServiceManager:
         self.max_total_memory_mb = max_total_memory_mb
         self._spawn = spawn or asyncio.create_subprocess_exec
         self._health_probe = health_probe or _default_health_probe
+        self._socket_health_probe = socket_health_probe or _default_socket_health_probe
         self._memory_enforcement = memory_enforcement
         self._cpu_enforcement = cpu_enforcement
         self._tasks_enforcement = tasks_enforcement
@@ -388,12 +429,21 @@ class WorkspaceServiceManager:
                     raise WorkspaceServiceConflict("Unknown port name")
             runtime = self._runtime.get((workspace_id, name))
             state = runtime["state"] if runtime else "registered"
-            return {
-                "port": chosen["port"],
+            target: dict[str, Any] = {
                 "portName": chosen["name"],
                 "generation": workspace["generation"],
                 "state": state,
             }
+            if "port" in chosen:
+                target["port"] = chosen["port"]
+            else:
+                socket_path = self._resolve_socket(workspace, chosen["unixSocket"])
+                # A declared socket that no process bound has nothing to reach, and
+                # saying so is better than forwarding to a path that does not exist.
+                if not socket_path.exists():
+                    raise WorkspaceServiceConflict("The declared socket is not present; is the service listening?")
+                target["unixSocket"] = str(socket_path)
+            return target
 
     async def resource_summary(self, workspace_id: str) -> dict[str, Any]:
         """Report registered/running services and the reserved memory budget."""
@@ -465,6 +515,51 @@ class WorkspaceServiceManager:
 
     # -------------------------------------------------------------- internals
 
+    def socket_path(self, workspace_id: str, name: str) -> Path:
+        """Return the private socket path a gateway-only listener should bind.
+
+        The path lives under this manager's state root, so it is outside any
+        checkout, invisible to the workspace file view, and reachable only by this
+        account once the socket carries a private mode.
+        """
+        if not isinstance(workspace_id, str) or not _WORKSPACE_ID.fullmatch(workspace_id):
+            raise ValueError("workspace_id is invalid")
+        self._validate_name(name)
+        # A readable but bounded token: the full workspace id plus a service name
+        # overflows `sun_path` under a normal home directory.
+        token = workspace_id.split("-", 1)[1][:16]
+        path = (self.state_root / f"{token}-{name}.sock").resolve()
+        if len(str(path).encode()) > _MAX_SOCKET_PATH_BYTES:
+            raise WorkspaceServiceUnavailable(
+                "The socket path would be too long for this host; use a shorter data directory"
+            )
+        return path
+
+    def _prepare_socket_directory(self, workspace: Mapping[str, Any], socket_path: Path) -> None:
+        """Create the socket's parent so only this account can reach the socket.
+
+        A unix socket is exactly as reachable as its path: a 0700 parent directory
+        plus the socket's own mode keeps another local process - including another
+        user - from connecting to a service that speaks plain HTTP.
+        """
+        root = Path(workspace["root"]).resolve()
+        parent = socket_path.parent
+        inside_workspace = True
+        try:
+            parent.resolve().relative_to(root)
+        except ValueError:
+            inside_workspace = False
+        if not inside_workspace:
+            try:
+                parent.resolve().relative_to(self.state_root)
+            except ValueError as exc:
+                raise WorkspaceServiceConflict("Socket directory is outside the permitted roots") from exc
+        try:
+            parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(parent, 0o700)
+        except OSError as exc:
+            raise WorkspaceServiceConflict(f"Socket directory is unavailable: {exc}") from exc
+
     async def _launch(self, workspace: dict[str, Any], entry: dict[str, Any], cwd: Path) -> None:
         env = build_child_env("services")
         for reference in entry["env"]:
@@ -472,7 +567,13 @@ class WorkspaceServiceManager:
             if value is not None:
                 env[reference] = value
         for port in entry["ports"]:
-            env[f"{port['name'].upper().replace('-', '_')}_PORT"] = str(port["port"])
+            prefix = port["name"].upper().replace("-", "_")
+            if "port" in port:
+                env[f"{prefix}_PORT"] = str(port["port"])
+            else:
+                socket_path = self._resolve_socket(workspace, port["unixSocket"])
+                self._prepare_socket_directory(workspace, socket_path)
+                env[f"{prefix}_SOCKET"] = str(socket_path)
         runtime: dict[str, Any] = {
             "state": "starting",
             "startedAt": datetime.now(timezone.utc).isoformat(),
@@ -487,6 +588,7 @@ class WorkspaceServiceManager:
             "logs": deque(),
             "logsTruncated": False,
             "writableRoot": str(workspace["root"]),
+            "workspace": workspace,
         }
         self._runtime[(workspace["workspace_id"], entry["name"])] = runtime
         try:
@@ -695,14 +797,22 @@ class WorkspaceServiceManager:
             runtime["healthTask"] = asyncio.create_task(self._health_loop(runtime, entry))
 
     async def _health_loop(self, runtime: dict[str, Any], entry: dict[str, Any]) -> None:
-        ports = {port["name"]: port["port"] for port in entry["ports"]}
+        targets = {port["name"]: port for port in entry["ports"]}
         health = entry.get("health")
-        if not health or health["port"] not in ports:
+        if not health or health["port"] not in targets:
             return
-        url = f"http://127.0.0.1:{ports[health['port']]}{health['path']}"
+        target = targets[health["port"]]
+        if "port" in target:
+            url = f"http://127.0.0.1:{target['port']}{health['path']}"
+            probe = lambda: self._health_probe(url)  # noqa: E731 - a bound target probe
+        else:
+            socket_path = self._resolve_socket(runtime["workspace"], target["unixSocket"])
+            probe = lambda: self._socket_health_probe(  # noqa: E731 - a bound target probe
+                str(socket_path), health["path"],
+            )
         try:
             while not runtime["stopping"]:
-                healthy = await self._health_probe(url)
+                healthy = await probe()
                 if runtime["stopping"]:
                     return
                 runtime["health"] = "healthy" if healthy else "unhealthy"
@@ -828,8 +938,53 @@ class WorkspaceServiceManager:
             raise ValueError("service name is invalid")
         return name
 
-    @classmethod
-    def _validate_definition(cls, definition: Any) -> dict[str, Any]:
+    def _validate_socket(self, value: Any) -> str:
+        """Accept a socket path the manager can vouch for, and nothing else.
+
+        The path is either workspace-relative (resolved inside the checkout) or
+        absolute and inside this manager's private state root. Anything else -
+        another account's directory, a path that escapes through `..` or a
+        symlink, a control character - is refused, because the gateway opens a
+        connection to this path and the socket mode is what keeps other
+        processes out.
+        """
+        if (not isinstance(value, str) or not value or len(value) > 512
+                or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+            raise ValueError("unixSocket must be a bounded path without control characters")
+        path = Path(value)
+        if not path.is_absolute():
+            if ".." in path.parts:
+                raise ValueError("unixSocket must not traverse outside the workspace")
+            if path.name in {"", ".", ".."}:
+                raise ValueError("unixSocket must name a socket file")
+            return value
+        if ".." in path.parts:
+            raise ValueError("unixSocket must not traverse upward")
+        try:
+            parent = path.parent.resolve()
+            parent.relative_to(self.state_root)
+        except (OSError, ValueError) as exc:
+            raise ValueError("an absolute unixSocket must be inside the service state root") from exc
+        resolved = parent / path.name
+        if len(str(resolved).encode()) > _MAX_SOCKET_PATH_BYTES:
+            raise ValueError("unixSocket is too long for this host")
+        return str(resolved)
+
+    def _resolve_socket(self, workspace: Mapping[str, Any], declared: str) -> Path:
+        """Resolve a declared socket path to the file the gateway will connect to."""
+        if Path(declared).is_absolute():
+            return Path(declared)
+        root = Path(workspace["root"]).resolve()
+        candidate = (root / declared).parent.resolve() / Path(declared).name
+        try:
+            candidate.parent.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("unixSocket resolves outside the workspace") from exc
+        if len(str(candidate).encode()) > _MAX_SOCKET_PATH_BYTES:
+            raise ValueError("unixSocket resolves to a path that is too long for this host")
+        return candidate
+
+    def _validate_definition(self, definition: Any) -> dict[str, Any]:
         if not isinstance(definition, dict):
             raise ValueError("definition must be an object")
         allowed = {"name", "argv", "cwd", "env", "ports", "health", "dependsOn", "restart",
@@ -837,7 +992,7 @@ class WorkspaceServiceManager:
                    "networkIsolation"}
         if set(definition) - allowed or "name" not in definition or "argv" not in definition:
             raise ValueError("definition has unsupported or missing fields")
-        name = cls._validate_name(definition["name"])
+        name = self._validate_name(definition["name"])
         argv = definition["argv"]
         if not isinstance(argv, list) or not 1 <= len(argv) <= _MAX_ARGV:
             raise ValueError("argv must be a bounded non-empty list")
@@ -872,15 +1027,21 @@ class WorkspaceServiceManager:
         normalized_ports = []
         port_names: set[str] = set()
         for item in ports:
-            if not isinstance(item, dict) or set(item) != {"name", "port"}:
-                raise ValueError("each port needs a name and port")
+            if not isinstance(item, dict) or set(item) not in ({"name", "port"}, {"name", "unixSocket"}):
+                raise ValueError("each port needs a name and either a port or a unixSocket")
             if not isinstance(item["name"], str) or not _PORT_NAME.fullmatch(item["name"]) or item["name"] in port_names:
                 raise ValueError("port names must be unique lowercase slugs")
-            if (isinstance(item["port"], bool) or not isinstance(item["port"], int)
-                    or not 1 <= item["port"] <= 65535):
-                raise ValueError("port values must be between 1 and 65535")
             port_names.add(item["name"])
-            normalized_ports.append({"name": item["name"], "port": item["port"]})
+            if "port" in item:
+                if (isinstance(item["port"], bool) or not isinstance(item["port"], int)
+                        or not 1 <= item["port"] <= 65535):
+                    raise ValueError("port values must be between 1 and 65535")
+                normalized_ports.append({"name": item["name"], "port": item["port"]})
+            else:
+                normalized_ports.append({
+                    "name": item["name"],
+                    "unixSocket": self._validate_socket(item["unixSocket"]),
+                })
         health = definition.get("health")
         if health is not None:
             if not isinstance(health, dict) or set(health) != {"port", "path"}:
@@ -896,7 +1057,7 @@ class WorkspaceServiceManager:
             raise ValueError("dependsOn must be a bounded list")
         normalized_depends = []
         for item in depends:
-            cls._validate_name(item)
+            self._validate_name(item)
             if item == name:
                 raise ValueError("a service cannot depend on itself")
             if item not in normalized_depends:

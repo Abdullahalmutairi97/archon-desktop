@@ -77,6 +77,18 @@ def test_the_ide_launch_is_inspected_without_claiming_isolation():
         "filesystemIsolation": "none", "networkIsolation": "host",
     }
     assert "no confirmed resource or filesystem confinement" in row["accountNote"]
+
+    # A socket-bound IDE reports the socket, not a loopback authority.
+    socket_row = describe_debug_readiness([PYTHON_PROFILE], services=[{
+        "name": "code-server",
+        "argv": ["/opt/code-server", "--socket", "/home/owner/.data/ide.sock", "--socket-mode", "600",
+                 "--auth", "none", "."],
+        "state": "running", "ports": [{"name": "http", "unixSocket": "/home/owner/.data/ide.sock"}],
+        "memoryLimitMb": None, "cpuQuotaPercent": None, "tasksMax": None,
+        "filesystemIsolation": "none", "networkIsolation": "host",
+    }])["codeServer"]
+    assert socket_row["bindAddress"] == "/home/owner/.data/ide.sock"
+    assert socket_row["ports"] == [{"name": "http", "unixSocket": "/home/owner/.data/ide.sock"}]
     # An unregistered IDE is reported as absent, not as running.
     assert describe_debug_readiness([PYTHON_PROFILE], services=[] )["codeServer"] is None
     assert describe_debug_readiness([PYTHON_PROFILE], services=[services[1]])["codeServer"] is None

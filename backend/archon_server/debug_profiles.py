@@ -26,7 +26,7 @@ BREAKPOINT_VERIFIED = False
 
 MAX_SERVICES = 32
 _CODE_SERVER_NAME = "code-server"
-_LAUNCH_FLAGS = ("--bind-addr", "--auth", "--disable-telemetry")
+_LAUNCH_FLAGS = ("--bind-addr", "--socket", "--socket-mode", "--auth", "--disable-telemetry")
 
 
 def _adapter_row(profile: str, row: Mapping[str, Any]) -> dict[str, Any]:
@@ -78,7 +78,8 @@ def _code_server_row(services: Iterable[Mapping[str, Any]]) -> dict[str, Any] | 
             "argv": argv,
             "ports": [dict(port) for port in service.get("ports", [])][:4],
             "authMode": "none" if flags.get("--auth") == "none" else "unknown",
-            "bindAddress": flags.get("--bind-addr"),
+            # Either a loopback authority or the private socket the server bound.
+            "bindAddress": flags.get("--bind-addr") or flags.get("--socket"),
             "resourceControls": {
                 key: service.get(key) for key in (
                     "memoryLimitMb", "cpuQuotaPercent", "tasksMax", "filesystemIsolation", "networkIsolation",
@@ -86,7 +87,8 @@ def _code_server_row(services: Iterable[Mapping[str, Any]]) -> dict[str, Any] | 
             },
             "accountNote": (
                 "the IDE runs as the backend owner account with no confirmed resource or "
-                "filesystem confinement, and its listener is unauthenticated on loopback"
+                "filesystem confinement; it runs without its own authentication, so its "
+                "listener must stay private to this account"
             ),
         }
     return None

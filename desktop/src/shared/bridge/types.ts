@@ -267,10 +267,14 @@ export interface WorkspaceConsoleBridge {
   subscribe(listener: (event: WorkspaceConsoleAttachEventDto) => void): () => void
 }
 
-export interface WorkspaceServicePortDto {
-  name: string
-  port: number
-}
+/**
+ * A declared previewable target. A loopback TCP port is what a user declares; a
+ * unix socket is what this server binds for a gateway-only listener such as the
+ * IDE, and it is reachable only by an account that can open the socket file.
+ */
+export type WorkspaceServicePortDto =
+  | { name: string; port: number; unixSocket?: never }
+  | { name: string; unixSocket: string; port?: never }
 
 export interface WorkspaceServiceDefinitionInput {
   name: string
@@ -439,7 +443,7 @@ export interface WorkspacePreviewBridge {
 export interface WorkspaceServicesBridge {
   list(input: { workspaceId: string }): Promise<readonly WorkspaceServiceDto[]>
   define(input: { workspaceId: string; definition: WorkspaceServiceDefinitionInput }): Promise<WorkspaceServiceDto>
-  codeServer(input: { workspaceId: string; port: number }): Promise<WorkspaceServiceDto>
+  codeServer(input: { workspaceId: string }): Promise<WorkspaceServiceDto>
   remove(input: { workspaceId: string; name: string; confirm: boolean }): Promise<boolean>
   start(input: { workspaceId: string; name: string }): Promise<WorkspaceServiceDto>
   stop(input: { workspaceId: string; name: string; confirm: boolean }): Promise<boolean>

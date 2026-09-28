@@ -56,8 +56,10 @@
 .workspace-preview-surface { height: 24rem; margin-top: 0.35rem; border: 1px solid var(--border, #2a2a2a); border-radius: 4px; background: #0b0b0b; }
 .workspace-services-codeserver {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
   margin-top: 0.5rem;
   font-size: 0.8rem;
 }
+.workspace-services-hint { color: var(--muted, #9a9a9a); max-width: 34rem; }

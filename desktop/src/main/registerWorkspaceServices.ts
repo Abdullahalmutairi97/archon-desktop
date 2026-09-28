@@ -27,10 +27,10 @@ function proxyRequest(channel: string, input: Readonly<Record<string, unknown>>)
         definition: input.definition as WorkspaceServiceDefinitionInput,
       }
     case WORKSPACE_SERVICES_CHANNELS.codeServer:
+      // No loopback port: the server binds the IDE to a private unix socket.
       return {
         operation: 'workspace.services.codeServer',
         workspaceId: input.workspaceId as string,
-        port: input.port as number,
       }
     case WORKSPACE_SERVICES_CHANNELS.remove:
       return {

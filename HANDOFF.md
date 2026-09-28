@@ -127,16 +127,13 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    refuses to see flipped. To close the bullet, run a debug session in the workspace IDE
    once and record what was observed; do not turn those constants on without that. Also
    open: Pylance is proprietary and absent, and there is no JavaScript debugger pin.
-3. **P4 preview tickets and IDE listener** — preview tickets are re-validated against the
-   live workspace generation, service and process on every request (with a bounded
-   one-second HTTP cache and a two-second WebSocket watchdog), a service with no running
-   process cannot be previewed, and every definition/start/stop/removal notifies the
-   gateway so tickets die with the binding. Still open: the IDE listener itself. Code-server
-   is registered on loopback TCP with `--auth none`, so any host-local process can reach a
-   full write-capable IDE and bypass the gateway and the write lease. Closing it needs
-   either code-server's own auth (a password the user would have to supply) or a listener
-   only the gateway can reach (code-server `--socket` plus a gateway that can forward over
-   a Unix socket).
+3. **P4 preview tickets and IDE listener** — done as far as this host can show. Tickets are
+   re-validated against the live generation, service and process on every request and
+   dropped with the binding; code-server now binds a private unix socket (0600 inside a 0700
+   state directory) instead of a loopback port, so only this account and only the preview
+   gateway reach it, and another local account is denied (`docs/releases/p4-ide-listener-evidence.md`).
+   Still open: the preview view has not been exercised against a socket target in a real
+   window, and a preview cannot stream, so a response is buffered up to the 24 MiB cap.
 
 4. **P3 resource accounting and lease remainder** — the owner-only resources summary now
    covers services, terminals and agent tasks bound to the checkout and names what it

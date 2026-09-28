@@ -110,7 +110,7 @@ describe('preload bridge', () => {
     await expect(bridge.workspaceServices.list({ workspaceId })).resolves.toEqual([service])
     await expect(bridge.workspaceServices.define({ workspaceId, definition })).resolves.toEqual(service)
     await expect(bridge.workspaceServices.start({ workspaceId, name: 'web' })).resolves.toEqual(service)
-    await expect(bridge.workspaceServices.codeServer({ workspaceId, port: 4173 })).resolves.toEqual(service)
+    await expect(bridge.workspaceServices.codeServer({ workspaceId })).resolves.toEqual(service)
     await expect(bridge.workspaceServices.logs({ workspaceId, name: 'web', lines: 50 })).resolves.toEqual({ text: 'line', truncated: false })
     await expect(bridge.workspaceServices.stop({ workspaceId, name: 'web', confirm: true })).resolves.toBe(true)
     await expect(bridge.workspaceServices.remove({ workspaceId, name: 'web', confirm: true })).resolves.toBe(true)

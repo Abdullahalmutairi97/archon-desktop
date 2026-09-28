@@ -42,6 +42,7 @@ import type {
   WorkspaceConsoleNamedKey,
   WorkspaceConsoleAttachEventDto,
   WorkspaceServiceDto,
+  WorkspaceServicePortDto,
   ResolvedWorkspaceServiceDefinition,
   WorkspaceServiceDefinitionInput,
   LanguageProfileExtensionDto,
@@ -1203,13 +1204,23 @@ function workspaceServiceName(value: unknown): string {
   return value
 }
 
-function parseWorkspaceServicePorts(value: unknown): readonly { name: string; port: number }[] {
+function parseWorkspaceServicePorts(value: unknown): readonly WorkspaceServicePortDto[] {
   if (!Array.isArray(value) || value.length > MAX_WORKSPACE_SERVICE_PORTS) return fail()
   return Object.freeze(value.map((item) => {
-    const port = exactObject(item, ['name', 'port'])
-    if (typeof port.name !== 'string' || !WORKSPACE_SERVICE_PORT_NAME.test(port.name)
-      || typeof port.port !== 'number' || !Number.isInteger(port.port) || port.port < 1 || port.port > 65535) return fail()
-    return Object.freeze({ name: port.name, port: port.port })
+    // A declared target is either a loopback TCP port or a private unix socket the
+    // server bound; the socket form only ever arrives from the server.
+    if (typeof item !== 'object' || item === null || Array.isArray(item)
+      || !('unixSocket' in (item as Record<string, unknown>))) {
+      const port = exactObject(item, ['name', 'port'])
+      if (typeof port.name !== 'string' || !WORKSPACE_SERVICE_PORT_NAME.test(port.name)
+        || typeof port.port !== 'number' || !Number.isInteger(port.port) || port.port < 1 || port.port > 65535) return fail()
+      return Object.freeze({ name: port.name, port: port.port })
+    }
+    const socket = exactObject(item, ['name', 'unixSocket'])
+    if (typeof socket.name !== 'string' || !WORKSPACE_SERVICE_PORT_NAME.test(socket.name)) return fail()
+    if (typeof socket.unixSocket !== 'string' || !socket.unixSocket.startsWith('/')
+      || socket.unixSocket.length > 512 || /[\u0000-\u001f\u007f]/u.test(socket.unixSocket)) return fail()
+    return Object.freeze({ name: socket.name, unixSocket: socket.unixSocket })
   }))
 }
 
@@ -1558,10 +1569,10 @@ export function parseWorkspaceServicesRequest(channel: unknown, args: readonly u
       return Object.freeze({ workspaceId: record.workspaceId, definition: parseWorkspaceServiceDefinition(record.definition) })
     }
     case WORKSPACE_SERVICES_CHANNELS.codeServer: {
-      const record = exactObject(value, ['workspaceId', 'port'])
-      if (!workspaceFileId(record.workspaceId) || typeof record.port !== 'number'
-        || !Number.isInteger(record.port) || record.port < 1024 || record.port > 65535) return fail()
-      return Object.freeze({ workspaceId: record.workspaceId, port: record.port })
+      // The IDE binds a private unix socket, so no loopback port is chosen here.
+      const record = exactObject(value, ['workspaceId'])
+      if (!workspaceFileId(record.workspaceId)) return fail()
+      return Object.freeze({ workspaceId: record.workspaceId })
     }
     case WORKSPACE_SERVICES_CHANNELS.remove:
     case WORKSPACE_SERVICES_CHANNELS.stop: {

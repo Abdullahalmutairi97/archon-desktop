@@ -29,7 +29,6 @@ export function WorkspaceServices({
   const [pending, setPending] = useState<{ action: 'stop' | 'remove'; name: string } | null>(null)
   const [logs, setLogs] = useState<{ name: string; text: string; truncated: boolean }>(EMPTY_LOGS)
   const [previewName, setPreviewName] = useState<string | null>(null)
-  const [codeServerPort, setCodeServerPort] = useState('4173')
   const [memoryLimit, setMemoryLimit] = useState('')
   const [cpuQuota, setCpuQuota] = useState('')
   const [tasksMax, setTasksMax] = useState('')
@@ -192,19 +191,16 @@ export function WorkspaceServices({
 
   async function registerCodeServer(): Promise<void> {
     if (lock.current || !pairingAvailable) return
-    const port = Number(codeServerPort)
-    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
-      setMessage({ kind: 'error', text: 'Choose a loopback port between 1024 and 65535 for code-server.' })
-      return
-    }
     const requested = identity
     lock.current = true
     setBusy(true)
     setMessage(null)
     try {
-      await bridge.codeServer({ workspaceId, port })
+      await bridge.codeServer({ workspaceId })
       if (identityRef.current !== requested) return
-      setMessage({ kind: 'status', text: `Registered code-server on loopback port ${port}. Start it, then open a preview.` })
+      // The IDE runs without its own login, so the server binds a private unix
+      // socket instead of a loopback port that any local process could reach.
+      setMessage({ kind: 'status', text: 'Registered code-server on a private socket. Start it, then open a preview.' })
       await refresh()
     } catch {
       if (identityRef.current === requested) setMessage({ kind: 'error', text: 'Could not register code-server. Check the executable is installed at the configured path.' })
@@ -322,8 +318,10 @@ export function WorkspaceServices({
       <button type="button" onClick={() => { void define() }} disabled={!pairingAvailable || busy}>Register</button>
     </fieldset>
     <div className="workspace-services-codeserver">
-      <label htmlFor="workspace-services-codeserver-port">code-server port</label>
-      <input id="workspace-services-codeserver-port" value={codeServerPort} onChange={(e) => setCodeServerPort(e.currentTarget.value)} inputMode="numeric" disabled={!pairingAvailable || busy} />
+      <span className="workspace-services-hint">
+        The IDE binds a private unix socket in the server state root, not a loopback port, and only
+        the preview gateway can reach it. Start it, then open a preview.
+      </span>
       <button type="button" onClick={() => { void registerCodeServer() }} disabled={!pairingAvailable || busy}>Register code-server</button>
     </div>
     {previewName && <div className="workspace-preview" aria-label="Service preview">

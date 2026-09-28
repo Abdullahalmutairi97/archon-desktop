@@ -755,12 +755,12 @@ function localCodexRequestDetails(request: LocalCodexProxyRequest): {
         body: JSON.stringify(request.definition),
       }
     case 'workspace.services.codeServer':
-      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)
-        || !Number.isInteger(request.port) || request.port < 1024 || request.port > 65535) break
+      if (!/^workspace-[0-9a-f]{32}$/u.test(request.workspaceId)) break
+      // The IDE binds a private unix socket; no loopback port is chosen or sent.
       return {
         method: 'POST',
         path: `/api/local/workspaces/${request.workspaceId}/services/code-server`,
-        body: JSON.stringify({ port: request.port }),
+        body: JSON.stringify({}),
         expectedStatus: 201,
       }
     case 'workspace.services.remove':

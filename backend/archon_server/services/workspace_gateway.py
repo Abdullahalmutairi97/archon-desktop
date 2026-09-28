@@ -11,7 +11,9 @@ from logs never authorizes a proxy target.
 from __future__ import annotations
 
 import asyncio
+import http.client
 import re
+import socket
 import urllib.error
 import urllib.request
 import uuid
@@ -24,7 +26,11 @@ _TICKET = re.compile(r"wprev-[0-9a-f]{32}\Z")
 _DEFAULT_TTL_SECONDS = 600.0
 _MAX_SESSIONS = 8
 _MAX_REQUEST_BYTES = 512 * 1024
-_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+# The largest asset a previewed IDE serves (code-server's workbench bundle) is
+# about 19 MiB, so a 2 MiB cap truncated it and no editor could load. The proxy
+# buffers one response in memory per request and a workspace is limited to eight
+# preview sessions, so this bound is what the gateway may hold at once.
+_MAX_RESPONSE_BYTES = 24 * 1024 * 1024
 _TIMEOUT_SECONDS = 10.0
 # A preview session is re-validated against the live workspace and service, so a
 # ticket cannot outlive a generation change or a stopped service. The result is
@@ -101,6 +107,55 @@ async def _default_forward(
     return await asyncio.to_thread(call)
 
 
+
+
+class _UnixSocketHTTPConnection(http.client.HTTPConnection):
+    """One HTTP connection over a declared unix socket, never a TCP port."""
+
+    def __init__(self, socket_path: str, timeout: float):
+        super().__init__("localhost", timeout=timeout)
+        self._socket_path = socket_path
+
+    def connect(self) -> None:
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self._socket_path)
+
+
+async def _unix_forward(
+    socket_path: str, method: str, path_query: str, headers: dict[str, str], body: bytes, timeout: float,
+) -> dict[str, Any]:
+    """Perform one bounded, non-redirecting request to a declared unix socket.
+
+    The contract matches the loopback forward: the response body is read with the
+    same cap, redirects are never followed, and only the caller's allowlisted
+    headers are sent.
+    """
+
+    def call() -> dict[str, Any]:
+        connection = _UnixSocketHTTPConnection(socket_path, timeout)
+        try:
+            connection.request(method, path_query, body=body if body else None, headers=headers)
+            response = connection.getresponse()
+            collected = {str(key).lower(): str(value) for key, value in response.getheaders()}
+            raw = response.read(_MAX_RESPONSE_BYTES + 1)
+            truncated = len(raw) > _MAX_RESPONSE_BYTES
+            return {
+                "status": int(response.status),
+                "headers": collected,
+                "body": raw[:_MAX_RESPONSE_BYTES],
+                "truncated": truncated,
+                "location": collected.get("location"),
+            }
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+    return await asyncio.to_thread(call)
+
+
 class WorkspacePreviewGateway:
     """Issue and resolve bounded preview tickets for registered services."""
 
@@ -144,7 +199,8 @@ class WorkspacePreviewGateway:
             "ticket": ticket,
             "workspaceId": workspace_id,
             "service": name,
-            "port": target["port"],
+            "port": target.get("port"),
+            "unixSocket": target.get("unixSocket"),
             "portName": target["portName"],
             "generation": target["generation"],
             "mode": "read-only",
@@ -203,7 +259,7 @@ class WorkspacePreviewGateway:
             raise WorkspaceGatewayTicketUnavailable(
                 "Preview binding changed; open a new preview"
             ) from exc
-        if target["port"] != session["port"]:
+        if target.get("port") != session["port"] or target.get("unixSocket") != session["unixSocket"]:
             self._sessions.pop(ticket, None)
             self._authorized.pop(ticket, None)
             raise WorkspaceGatewayTicketUnavailable("Preview binding changed; open a new preview")
@@ -214,14 +270,20 @@ class WorkspacePreviewGateway:
         self._authorized[ticket] = now
         return session
 
-    async def websocket_target(self, ticket: str, *, path: str, query: str) -> str:
-        """Resolve a ticket to the declared port's loopback WebSocket URL."""
+    async def websocket_target(self, ticket: str, *, path: str, query: str) -> dict[str, Any]:
+        """Resolve a ticket to the declared target's WebSocket endpoint.
+
+        A loopback port target answers on `ws://127.0.0.1:<port>`, while a declared
+        unix socket has no authority at all: the caller connects to the socket file
+        and asks for the same request path.
+        """
         session = await self.authorize(ticket)
         target_path = "/" + path if path else "/"
-        url = f"ws://127.0.0.1:{session['port']}{target_path}"
         if query:
-            url += "?" + query
-        return url
+            target_path += "?" + query
+        if session.get("unixSocket"):
+            return {"url": f"ws://localhost{target_path}", "unixSocket": session["unixSocket"]}
+        return {"url": f"ws://127.0.0.1:{session['port']}{target_path}", "unixSocket": None}
 
     def schedule_revalidation(self, ticket: str, on_lost: Callable[[], None]) -> asyncio.Task[None]:
         """Watch one open ticket and call `on_lost` as soon as its binding changes.
@@ -267,14 +329,19 @@ class WorkspacePreviewGateway:
         if len(body) > _MAX_REQUEST_BYTES:
             raise WorkspaceGatewayRequestRejected("Preview request body is too large")
         target_path = "/" + path if path else "/"
-        url = f"http://127.0.0.1:{session['port']}{target_path}"
         if query:
-            url += "?" + query
+            target_path += "?" + query
         forward_headers = {
             key: value for key, value in headers.items()
             if key.lower() in _FORWARD_REQUEST_HEADERS
         }
-        result = await self._forward(method, url, forward_headers, body, _TIMEOUT_SECONDS)
+        if session.get("unixSocket"):
+            result = await _unix_forward(
+                session["unixSocket"], method, target_path, forward_headers, body, _TIMEOUT_SECONDS,
+            )
+        else:
+            url = f"http://127.0.0.1:{session['port']}{target_path}"
+            result = await self._forward(method, url, forward_headers, body, _TIMEOUT_SECONDS)
         response_headers = {
             key: value for key, value in result["headers"].items()
             if key.lower() not in _STRIP_RESPONSE_HEADERS and key.lower() not in _HOP_BY_HOP
@@ -296,10 +363,12 @@ class WorkspacePreviewGateway:
     @staticmethod
     def _rewrite_location(location: str, session: dict[str, Any]) -> str | None:
         base = f"/api/local/preview/{session['ticket']}"
-        authority = f"http://127.0.0.1:{session['port']}"
         if location.startswith("/"):
             return base + location
-        if location.startswith(authority):
+        # A loopback target may answer with its own authority; a unix socket target
+        # has none, so only its path-relative redirects are kept.
+        authority = f"http://127.0.0.1:{session['port']}" if session.get("port") else None
+        if authority and location.startswith(authority):
             remainder = location[len(authority):] or "/"
             return base + remainder
         return None

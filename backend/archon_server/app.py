@@ -401,7 +401,10 @@ class RunnerTaskRequest(BaseModel):
 class WorkspaceCodeServerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    port: int = Field(strict=True, ge=1024, le=65535)
+    # Accepted for older callers only. The IDE no longer listens on a loopback TCP
+    # port: it binds a private unix socket in this server's state root, so the port
+    # number has no effect and is not reported back as a listener.
+    port: int | None = Field(default=None, strict=True, ge=1024, le=65535)
 
 
 class SecretReferenceRequest(BaseModel):
@@ -1413,7 +1416,7 @@ def create_app(
         payload: WorkspaceCodeServerRequest,
         principal=Depends(require_local_owner),
     ):
-        """Register a loopback code-server for the preview gateway.
+        """Register a code-server that only this server's preview gateway can reach.
 
         The full IDE is a write-capable handoff, so the caller must hold the
         workspace write lease. The read-only viewer path is unaffected.
@@ -1421,15 +1424,22 @@ def create_app(
         current_owner_workspace(workspace_id)
         claim_workspace_write(workspace_id, str(principal["principal_id"]))
         executable = str(settings.code_server_executable)
+        # The IDE is a write-capable handoff, and code-server runs with `--auth none`
+        # (no login page in the preview view). A loopback TCP port would therefore be
+        # a full IDE for any host-local process, so the listener is a unix socket in
+        # this server's private state root: the socket mode, not the network, is what
+        # keeps other processes out, and the preview gateway is the only client.
+        socket_path = workspace_service_manager().socket_path(workspace_id, "code-server")
         definition = {
             "name": "code-server",
             "argv": [
-                executable, "--bind-addr", f"127.0.0.1:{payload.port}",
+                executable,
+                "--socket", str(socket_path), "--socket-mode", "600",
                 "--auth", "none", "--disable-telemetry", ".",
             ],
             "cwd": ".",
             "env": [],
-            "ports": [{"name": "http", "port": payload.port}],
+            "ports": [{"name": "http", "unixSocket": str(socket_path)}],
             "health": {"port": "http", "path": "/healthz"},
             "dependsOn": [],
             "restart": "on-failure",
@@ -2064,7 +2074,16 @@ def create_app(
         watchdog = gateway.schedule_revalidation(ticket, mark_revoked)
         try:
             import websockets
-            async with websockets.connect(target, max_size=2 * 1024 * 1024, open_timeout=10) as upstream:
+            # A declared socket target has no TCP authority: the connection is made
+            # to the socket file itself, so only processes that can open it reach it.
+            upstream_options: dict[str, Any] = {"max_size": 2 * 1024 * 1024, "open_timeout": 10}
+            if target.get("unixSocket"):
+                upstream = websockets.unix_connect(
+                    path=str(target["unixSocket"]), uri=target["url"], **upstream_options,
+                )
+            else:
+                upstream = websockets.connect(target["url"], **upstream_options)
+            async with upstream:
                 async def client_to_upstream() -> None:
                     try:
                         while True:

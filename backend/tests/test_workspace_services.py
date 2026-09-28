@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import http.server
 import json
 import os
 import shutil
 import socket
+import socketserver
+import stat
+import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -27,7 +32,8 @@ OWNER_ID = "local-uid:1000"
 WORKSPACE_ID = "workspace-0123456789abcdef0123456789abcdef"
 
 
-def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 4096,
+def _manager(tmp_path: Path, *, health_probe=None, state_root: Path | None = None,
+             max_total_memory_mb: int = 4096,
              memory_enforcement: bool | None = None, cpu_enforcement: bool | None = None,
              tasks_enforcement: bool | None = None,
              filesystem_enforcement: bool | None = None,
@@ -49,7 +55,7 @@ def _manager(tmp_path: Path, *, health_probe=None, max_total_memory_mb: int = 40
     return WorkspaceServiceManager(
         database,
         owner_id=OWNER_ID,
-        state_root=tmp_path / "private-state",
+        state_root=state_root or tmp_path / "private-state",
         health_probe=health_probe,
         max_total_memory_mb=max_total_memory_mb,
         memory_enforcement=memory_enforcement,
@@ -482,10 +488,12 @@ def test_local_owner_workspace_service_api_contract(tmp_path):
 
 
 def test_workspace_code_server_template_api(tmp_path):
+    # A unix socket path must fit `sun_path`, so the server state root is short.
+    data_dir = Path(tempfile.mkdtemp(prefix="archon-ide-"))
     settings = Settings(
         archon_root=tmp_path,
         hermes_home=tmp_path / ".hermes",
-        data_dir=tmp_path / ".data",
+        data_dir=data_dir,
         auth_token="legacy-token",
         local_owner_mode=True,
         start_worker=False,
@@ -506,13 +514,27 @@ def test_workspace_code_server_template_api(tmp_path):
         created = client.post(
             f"/api/local/workspaces/{workspace_id}/services/code-server",
             headers=headers,
-            json={"port": 4173},
+            json={},
         )
         assert created.status_code == 201
         service = created.json()["service"]
         assert service["name"] == "code-server"
-        assert service["argv"][1:5] == ["--bind-addr", "127.0.0.1:4173", "--auth", "none"]
-        assert service["ports"] == [{"name": "http", "port": 4173}]
+        # The IDE listens on a private socket, not on a loopback TCP port that any
+        # host-local process could reach without authentication.
+        socket_path = service["argv"][service["argv"].index("--socket") + 1]
+        assert socket_path.endswith("-code-server.sock")
+        assert "--bind-addr" not in service["argv"]
+        assert service["argv"][service["argv"].index("--socket-mode") + 1] == "600"
+        assert service["argv"][service["argv"].index("--auth") + 1] == "none"
+        assert service["ports"] == [{"name": "http", "unixSocket": socket_path}]
+        assert str(data_dir) in socket_path
+        # Older callers may still send a port; it no longer selects the listener.
+        legacy = client.post(
+            f"/api/local/workspaces/{workspace_id}/services/code-server",
+            headers=headers, json={"port": 4173},
+        )
+        assert legacy.status_code == 201
+        assert "--bind-addr" not in legacy.json()["service"]["argv"]
         assert client.post(
             f"/api/local/workspaces/{workspace_id}/services/code-server",
             headers=headers, json={"port": 80},
@@ -896,4 +918,128 @@ async def test_service_changes_notify_a_listener_that_an_outside_capability_can_
     assert (await manager.list(WORKSPACE_ID))[0]["state"] == "running"
     manager.set_change_listener(None)
     await manager.stop(WORKSPACE_ID, "web", confirm=True)
+
+class _UnixHTTPHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_args):  # silence
+        return
+
+    def do_GET(self):  # noqa: N802
+        if self.path == "/healthz":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+        elif self.path == "/same":
+            self.send_response(302)
+            self.send_header("Location", "/healthz")
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+def _unix_http_server(path: Path) -> socketserver.ThreadingUnixStreamServer:
+    """A real HTTP server bound to a unix socket, as a declared target would be."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    server = socketserver.ThreadingUnixStreamServer(str(path), _UnixHTTPHandler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _startable_manager(tmp_path: Path, state_root: Path | None = None) -> WorkspaceServiceManager:
+    """A manager whose fake spawn lets a service reach the running state."""
+    manager, _launches = _recording_manager(tmp_path, state_root=state_root)
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_a_declared_unix_socket_target_is_validated_launched_and_probed(tmp_path):
+    """A socket target is bounded to the roots this server controls, exported to the
+    service, and health-checked over the socket."""
+    short_state = Path(tempfile.mkdtemp(prefix="archon-svc-"))
+    manager = _startable_manager(tmp_path, state_root=short_state)
+    with pytest.raises(ValueError):
+        await manager.define(WORKSPACE_ID, {
+            "name": "web", "argv": ["/bin/echo"],
+            "ports": [{"name": "http", "unixSocket": "run/../escape.sock"}],
+        })
+    with pytest.raises(ValueError):
+        await manager.define(WORKSPACE_ID, {
+            "name": "web", "argv": ["/bin/echo"],
+            "ports": [{"name": "http", "unixSocket": "/tmp/other-account.sock"}],
+        })
+    with pytest.raises(ValueError):
+        await manager.define(WORKSPACE_ID, {
+            "name": "web", "argv": ["/bin/echo"],
+            "ports": [{"name": "http", "port": 4173, "unixSocket": "run/web.sock"}],
+        })
+
+    socket_path = manager.socket_path(WORKSPACE_ID, "web")
+    assert socket_path.name == f"{WORKSPACE_ID.split('-', 1)[1][:16]}-web.sock"
+    assert len(str(socket_path).encode()) <= 100
+    server = _unix_http_server(socket_path)
+    try:
+        defined = await manager.define(WORKSPACE_ID, {
+            "name": "web", "argv": ["/bin/echo"],
+            "ports": [{"name": "http", "unixSocket": str(socket_path)}],
+            "health": {"port": "http", "path": "/healthz"},
+        })
+        assert defined["ports"] == [{"name": "http", "unixSocket": str(socket_path)}]
+        assert stat.S_IMODE(os.stat(socket_path.parent).st_mode) == 0o700
+
+        started = await manager.start(WORKSPACE_ID, "web")
+        assert started["state"] == "running"
+        target = await manager.preview_target(WORKSPACE_ID, "web", expected_generation=1)
+        assert target["unixSocket"] == str(socket_path) and "port" not in target
+
+        # The health loop probes the socket and reports the real answer.
+        for _ in range(100):
+            rows = await manager.list(WORKSPACE_ID)
+            if rows[0]["health"] == "healthy":
+                break
+            await asyncio.sleep(0.05)
+        assert (await manager.list(WORKSPACE_ID))[0]["health"] == "healthy"
+        await manager.stop(WORKSPACE_ID, "web", confirm=True)
+    finally:
+        server.shutdown()
+        server.server_close()
+        if socket_path.exists():
+            socket_path.unlink()
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_relative_socket_is_exported_and_a_missing_socket_is_refused(tmp_path):
+    manager = _startable_manager(tmp_path)
+    defined = await manager.define(WORKSPACE_ID, {
+        "name": "web", "argv": ["/bin/echo"],
+        "ports": [{"name": "http", "unixSocket": "run/web.sock"}],
+    })
+    assert defined["ports"] == [{"name": "http", "unixSocket": "run/web.sock"}]
+    await manager.start(WORKSPACE_ID, "web")
+    launches = manager._runtime[(WORKSPACE_ID, "web")]
+    assert launches["state"] == "running"
+    resolved = manager._resolve_socket({"root": str(tmp_path / "workspace")}, "run/web.sock")
+    assert resolved == tmp_path / "workspace" / "run" / "web.sock"
+    assert stat.S_IMODE(os.stat(tmp_path / "workspace" / "run").st_mode) == 0o700
+    # The declared socket has no listener yet, so a preview says so instead of
+    # forwarding to a path that does not exist.
+    with pytest.raises(WorkspaceServiceConflict):
+        await manager.preview_target(WORKSPACE_ID, "web", expected_generation=1)
+    await manager.stop(WORKSPACE_ID, "web", confirm=True)
+
+
+@pytest.mark.asyncio
+async def test_the_socket_health_probe_reports_a_missing_socket(tmp_path):
+    from archon_server.services.workspace_services import _default_socket_health_probe
+
+    assert await _default_socket_health_probe(str(tmp_path / "missing.sock"), "/healthz") is False
+    socket_path = tmp_path / "probe" / "health.sock"
+    server = _unix_http_server(socket_path)
+    try:
+        assert await _default_socket_health_probe(str(socket_path), "/healthz") is True
+        assert await _default_socket_health_probe(str(socket_path), "/missing") is False
+    finally:
+        server.shutdown()
+        server.server_close()
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import http.server
 import socket
+import socketserver
+import tempfile
 import threading
 from pathlib import Path
 
@@ -22,7 +24,7 @@ OWNER_ID = "local-uid:1000"
 WORKSPACE_ID = "workspace-0123456789abcdef0123456789abcdef"
 
 
-def _manager(tmp_path: Path) -> WorkspaceServiceManager:
+def _manager(tmp_path: Path, state_root: Path | None = None) -> WorkspaceServiceManager:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(exist_ok=True)
     database = Database(tmp_path / "database.sqlite3")
@@ -38,7 +40,7 @@ def _manager(tmp_path: Path) -> WorkspaceServiceManager:
             isolation_profile="git-checkout",
         )
     return WorkspaceServiceManager(
-        database, owner_id=OWNER_ID, state_root=tmp_path / "private-state",
+        database, owner_id=OWNER_ID, state_root=state_root or tmp_path / "private-state",
     )
 
 
@@ -101,9 +103,9 @@ class _GateProcess:
         self.returncode = 0
 
 
-def _startable_manager(tmp_path: Path) -> WorkspaceServiceManager:
+def _startable_manager(tmp_path: Path, state_root: Path | None = None) -> WorkspaceServiceManager:
     """A manager whose fake spawn lets a service reach the running state."""
-    manager = _manager(tmp_path)
+    manager = _manager(tmp_path, state_root=state_root)
 
     async def fake_spawn(*_argv, **_kwargs):
         return _GateProcess()
@@ -292,7 +294,7 @@ async def test_websocket_target_uses_the_declared_loopback_port(tmp_path):
     gateway = WorkspacePreviewGateway(manager, forward=_unused_forward)
     preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
     target = await gateway.websocket_target(preview["ticket"], path="hmr", query="a=1")
-    assert target == "ws://127.0.0.1:4173/hmr?a=1"
+    assert target == {"url": "ws://127.0.0.1:4173/hmr?a=1", "unixSocket": None}
     with pytest.raises(WorkspaceGatewayTicketUnavailable):
         await gateway.websocket_target("wprev-" + "0" * 32, path="", query="")
 
@@ -454,4 +456,180 @@ def test_the_server_wires_service_changes_to_preview_revocation(tmp_path):
         listener = services.change_listener
         assert listener is not None and getattr(listener, "__self__", None) is gateway
         assert listener.__name__ == "revoke_service"
+
+
+
+class _SocketHandler(http.server.BaseHTTPRequestHandler):
+    """A service that answers on a unix socket and redirects relative to itself."""
+
+    def log_message(self, *_args):  # silence
+        return
+
+    def do_GET(self):  # noqa: N802
+        if self.path == "/ok":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Set-Cookie", "session=secret")
+            self.end_headers()
+            self.wfile.write(b"hello-preview")
+        elif self.path == "/same":
+            self.send_response(302)
+            self.send_header("Location", "/ok")
+            self.end_headers()
+        elif self.path == "/absolute":
+            self.send_response(302)
+            self.send_header("Location", "http://localhost/ok")
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+def _unix_handler_server(socket_path: Path) -> socketserver.ThreadingUnixStreamServer:
+    """A real HTTP service bound to a unix socket, as a declared target would be."""
+    socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    server = socketserver.ThreadingUnixStreamServer(str(socket_path), _SocketHandler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+@pytest.mark.asyncio
+async def test_a_socket_target_is_previewed_over_the_socket_not_a_port(tmp_path):
+    """A gateway-only listener answers on its socket, and the proxy never needs a
+    loopback port to reach it."""
+    short_state = Path(tempfile.mkdtemp(prefix="archon-gw-"))
+    manager = _startable_manager(tmp_path, state_root=short_state)
+    socket_path = manager.socket_path(WORKSPACE_ID, "web")
+    server = _unix_handler_server(socket_path)
+    try:
+        await manager.define(WORKSPACE_ID, {
+            "name": "web", "argv": ["/bin/echo"],
+            "ports": [{"name": "http", "unixSocket": str(socket_path)}],
+        })
+        await manager.start(WORKSPACE_ID, "web")
+        gateway = WorkspacePreviewGateway(manager)
+        preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+        ok = await gateway.proxy(preview["ticket"], method="GET", path="ok", query="", headers={}, body=b"")
+        assert ok["status"] == 200 and ok["body"] == b"hello-preview"
+        # A response cookie is stripped on this path too.
+        assert "set-cookie" not in ok["headers"]
+        assert (await gateway.proxy(preview["ticket"], method="GET", path="missing", query="", headers={}, body=b""))["status"] == 404
+
+        # A relative redirect stays inside the preview; a socket target has no
+        # authority to rewrite, so an absolute self-redirect is dropped.
+        same = await gateway.proxy(preview["ticket"], method="GET", path="same", query="", headers={}, body=b"")
+        assert same["headers"]["location"] == f"/api/local/preview/{preview['ticket']}/ok"
+        absolute = await gateway.proxy(preview["ticket"], method="GET", path="absolute", query="", headers={}, body=b"")
+        assert "location" not in absolute["headers"]
+
+        target = await gateway.websocket_target(preview["ticket"], path="hmr", query="a=1")
+        assert target == {"url": "ws://localhost/hmr?a=1", "unixSocket": str(socket_path)}
+        await manager.stop(WORKSPACE_ID, "web", confirm=True)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.asyncio
+async def test_a_unix_socket_target_moves_and_invalidates_like_a_port(tmp_path):
+    """The binding check covers the socket path, so a redefined service cannot be
+    reached through a ticket minted for its previous socket."""
+    short_state = Path(tempfile.mkdtemp(prefix="archon-gw2-"))
+    manager = _startable_manager(tmp_path, state_root=short_state)
+    first = manager.socket_path(WORKSPACE_ID, "web")
+    server = _unix_handler_server(first)
+    try:
+        await manager.define(WORKSPACE_ID, {
+            "name": "web", "argv": ["/bin/echo"],
+            "ports": [{"name": "http", "unixSocket": str(first)}],
+        })
+        await manager.start(WORKSPACE_ID, "web")
+        gateway = WorkspacePreviewGateway(manager)
+        preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+        assert (await gateway.proxy(preview["ticket"], method="GET", path="ok", query="", headers={}, body=b""))["status"] == 200
+
+        # Redefining the service to a different socket makes the old ticket invalid.
+        await manager.stop(WORKSPACE_ID, "web", confirm=True)
+        second = manager.socket_path(WORKSPACE_ID, "other")
+        await manager.define(WORKSPACE_ID, {
+            "name": "web", "argv": ["/bin/echo"],
+            "ports": [{"name": "http", "unixSocket": str(second)}],
+        })
+        await manager.start(WORKSPACE_ID, "web")
+        # The binding moved to a socket that no process bound, so the ticket dies.
+        with pytest.raises(WorkspaceGatewayTicketUnavailable):
+            await gateway.authorize(preview["ticket"], force=True)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_websocket_bridge_can_carry_a_socket_target(tmp_path):
+    """The app connects to a socket target with the mechanism proven here.
+
+    `websockets.unix_connect` (the same call the preview route makes for a socket
+    target) reaches a WebSocket server that listens on a unix socket only, and a
+    message round-trips through it.
+    """
+    import websockets
+
+    socket_path = Path(tempfile.mkdtemp(prefix="archon-ws-")) / "echo.sock"
+    received: list[str] = []
+
+    async def scenario() -> None:
+        async def handler(connection) -> None:
+            async for message in connection:
+                received.append(message)
+                await connection.send(f"echo:{message}")
+
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(socket_path))
+        listener.listen(4)
+        async with websockets.serve(handler, sock=listener):
+            async with websockets.unix_connect(
+                path=str(socket_path), uri="ws://localhost/", open_timeout=5,
+            ) as client:
+                await client.send("hello")
+                assert await asyncio.wait_for(client.recv(), timeout=5) == "echo:hello"
+
+    asyncio.run(scenario())
+    assert received == ["hello"]
+
+def test_a_large_ide_asset_is_forwarded_without_truncation(tmp_path):
+    """The editor bundle is far larger than a typical API response, so the cap must
+    clear it while still bounding what the gateway holds and flags anything bigger."""
+    from archon_server.services import workspace_gateway as gateway_module
+
+    body = b"x" * (8 * 1024 * 1024)
+
+    class _BigHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):  # silence
+            return
+
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/javascript")
+            self.end_headers()
+            self.wfile.write(body)
+
+    socket_path = Path(tempfile.mkdtemp(prefix="archon-big-")) / "asset.sock"
+    server = socketserver.ThreadingUnixStreamServer(str(socket_path), _BigHandler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        result = asyncio.run(gateway_module._unix_forward(str(socket_path), "GET", "/asset.js", {}, b"", 15.0))
+        assert result["status"] == 200 and len(result["body"]) == len(body) and result["truncated"] is False
+
+        # A response above the cap is still truncated, and says so.
+        original = gateway_module._MAX_RESPONSE_BYTES
+        gateway_module._MAX_RESPONSE_BYTES = 1024
+        try:
+            capped = asyncio.run(gateway_module._unix_forward(str(socket_path), "GET", "/asset.js", {}, b"", 15.0))
+        finally:
+            gateway_module._MAX_RESPONSE_BYTES = original
+        assert capped["truncated"] is True and len(capped["body"]) == 1024
+    finally:
+        server.shutdown()
+        server.server_close()
 
