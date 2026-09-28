@@ -382,7 +382,7 @@ describe('finite desktop bridge validation', () => {
       { sessionId: 'session/../../etc', prompt: 'work' },
       { sessionId: 'session?limit=1', prompt: 'work' },
       { sessionId: 'session:with:colons', prompt: 'work' },
-      { sessionId: 's'.repeat(201), prompt: 'work' },
+      { sessionId: 's'.repeat(207), prompt: 'work' },
       { sessionId: 42, prompt: 'work' },
       { prompt: 'work' },
       { prompt: 'work', runtime: 'pi' },
@@ -397,8 +397,8 @@ describe('finite desktop bridge validation', () => {
       'sessions.messages', { sessionId, limit: 200 },
     ])
     expect(parseOperationRequest('sessions.messages', { sessionId: 's', limit: 1 })[1]).toEqual({ sessionId: 's', limit: 1 })
-    expect(parseOperationRequest('sessions.messages', { sessionId: 's'.repeat(200), limit: 500 })[1])
-      .toEqual({ sessionId: 's'.repeat(200), limit: 500 })
+    expect(parseOperationRequest('sessions.messages', { sessionId: 's'.repeat(206), limit: 500 })[1])
+      .toEqual({ sessionId: 's'.repeat(206), limit: 500 })
 
     let invoked = false
     const hostile = Object.defineProperty({ limit: 10 }, 'sessionId', {
@@ -424,7 +424,7 @@ describe('finite desktop bridge validation', () => {
       { sessionId: 'a/b', limit: 10 },
       { sessionId: 'a%2Fb', limit: 10 },
       { sessionId: 'a b', limit: 10 },
-      { sessionId: 's'.repeat(201), limit: 10 },
+      { sessionId: 's'.repeat(207), limit: 10 },
       { sessionId: ['session-1'], limit: 10 },
       new Date(),
       null,

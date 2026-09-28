@@ -158,8 +158,9 @@ const MAX_SERVER_URL_LENGTH = 2048
 const MAX_TOKEN_LENGTH = 8192
 const MAX_PROJECT_ID_LENGTH = 200
 const MAX_TASK_ID_LENGTH = 200
-// Session APIs bound conversation ids to 200 characters of the server's safe id alphabet.
-const MAX_SESSION_ID_LENGTH = 200
+// The server's safe id alphabet; a conversation id is at most 206 characters
+// ('prime-' plus a 200-character request key).
+const MAX_SESSION_ID_LENGTH = 206
 const MAX_SESSION_MESSAGES = 500
 const MAX_SESSION_MESSAGE_ID_LENGTH = 512
 // Matches the transport's backend response cap; content is never truncated here.
@@ -447,7 +448,7 @@ function validTaskId(value: unknown): value is string {
 function validSessionId(value: unknown): value is string {
   return typeof value === 'string'
     && value.length <= MAX_SESSION_ID_LENGTH
-    && /^[A-Za-z0-9_-]{1,200}$/u.test(value)
+    && /^[A-Za-z0-9_-]+$/u.test(value)
 }
 
 function parseTaskSubmitPayload(value: unknown): TaskSubmitPayload {
