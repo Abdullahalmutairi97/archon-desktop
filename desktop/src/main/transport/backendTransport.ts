@@ -18,6 +18,7 @@ export const READ_ONLY_OPERATIONS: readonly OperationName[] = Object.freeze([
   'projects.list',
   'projects.head',
   'sessions.list',
+  'sessions.messages',
   'tasks.list',
   'events.cursor',
   'secrets.authStates',
@@ -53,6 +54,7 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'projects.create': 'POST',
   'projects.head': 'GET',
   'sessions.list': 'GET',
+  'sessions.messages': 'GET',
   'tasks.list': 'GET',
   'events.cursor': 'GET',
   'runtimes.list': 'GET',
@@ -89,6 +91,7 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'projects.create': '/api/projects',
   'projects.head': '/api/projects',
   'sessions.list': '/api/sessions',
+  'sessions.messages': '/api/sessions',
   'tasks.list': '/api/tasks',
   'events.cursor': '/api/events/cursor',
   'runtimes.list': '/api/runtimes',
@@ -334,6 +337,9 @@ function operationUrl(
   } else if (operation === 'projects.head') {
     const headPayload = payload as OperationMap['projects.head']['payload']
     path += `/${encodeURIComponent(headPayload.projectId)}/head`
+  } else if (operation === 'sessions.messages') {
+    const messagesPayload = payload as OperationMap['sessions.messages']['payload']
+    path += `/${encodeURIComponent(messagesPayload.sessionId)}/messages`
   } else if (operation === 'tasks.get' || operation === 'tasks.events' || operation === 'tasks.cancel') {
     const taskPayload = payload as OperationMap['tasks.get']['payload']
     const taskId = encodeURIComponent(taskPayload.taskId)
@@ -370,6 +376,9 @@ function operationUrl(
     const listPayload = payload as OperationMap['sessions.list']['payload']
     if (listPayload.projectId !== undefined) url.searchParams.set('project_id', listPayload.projectId)
     if (listPayload.limit !== undefined) url.searchParams.set('limit', String(listPayload.limit))
+  } else if (operation === 'sessions.messages') {
+    const messagesPayload = payload as OperationMap['sessions.messages']['payload']
+    url.searchParams.set('limit', String(messagesPayload.limit))
   } else if (operation === 'tasks.list') {
     const listPayload = payload as OperationMap['tasks.list']['payload']
     if (listPayload.limit !== undefined) url.searchParams.set('limit', String(listPayload.limit))
@@ -416,6 +425,10 @@ function isSupportedResult(
         Number.isSafeInteger(event.seq) &&
         event.seq > after,
       )
+    }
+    if (operation === 'sessions.messages') {
+      const requested = payload as OperationMap['sessions.messages']['payload']
+      return Array.isArray(value.messages) && value.messages.length <= requested.limit
     }
     if (operation === 'workspaces.get') {
       const requestedWorkspaceId = (payload as OperationMap['workspaces.get']['payload']).workspaceId
@@ -509,6 +522,17 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
   }
   if (operation === 'tasks.submit') {
     const submitPayload = payload as OperationMap['tasks.submit']['payload']
+    if (submitPayload.sessionId !== undefined) {
+      // The server continues under the session's recorded runtime and cwd, so
+      // no profile is sent; a project id, when given, must match the session.
+      return JSON.stringify({
+        prompt: submitPayload.prompt,
+        session_id: submitPayload.sessionId,
+        ...(submitPayload.projectId === undefined ? {} : { project_id: submitPayload.projectId }),
+        approval_mode: 'auto',
+        chat_only: false,
+      })
+    }
     if (submitPayload.workspaceId !== undefined) {
       return JSON.stringify({
         prompt: submitPayload.prompt,
@@ -519,7 +543,7 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
     return JSON.stringify({
       prompt: submitPayload.prompt,
       project_id: submitPayload.projectId,
-      profile: 'prime',
+      profile: submitPayload.runtime ?? 'prime',
       approval_mode: 'auto',
       chat_only: false,
     })

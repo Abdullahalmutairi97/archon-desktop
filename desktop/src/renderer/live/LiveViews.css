@@ -1,0 +1,371 @@
+/* Live server conversation views. Logical properties only, so the layout mirrors in RTL. */
+.live-intro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+  max-inline-size: 860px;
+}
+
+.live-intro h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 600;
+}
+
+.live-intro-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.live-empty {
+  display: grid;
+  gap: 6px;
+  max-inline-size: 560px;
+  margin-block: 8px;
+  padding-block: 16px;
+  padding-inline: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  text-align: start;
+}
+
+.live-empty strong {
+  color: var(--text);
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 600;
+}
+
+.live-empty p,
+.live-empty-line {
+  margin: 0;
+  color: var(--muted);
+  font-size: calc(10px * var(--font-scale));
+  line-height: 1.55;
+  text-align: start;
+}
+
+.live-empty-line {
+  margin-block: 6px;
+}
+
+.live-empty-actions,
+.live-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-block-start: 6px;
+}
+
+.live-empty-actions button,
+.live-task-actions button,
+.live-task-unknown > button,
+.live-form-footer button {
+  min-block-size: 30px;
+  padding-inline: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: calc(9px * var(--font-scale));
+}
+
+.live-form-footer button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+
+.live-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.live-badges:empty {
+  display: none;
+}
+
+.live-badge {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding-block: 2px;
+  padding-inline: 5px;
+  color: var(--quiet);
+  font-size: calc(8px * var(--font-scale));
+  font-weight: 650;
+  letter-spacing: .04em;
+}
+
+.live-badge-running {
+  border-color: color-mix(in srgb, #78bd98 40%, var(--line));
+  color: #78bd98;
+}
+
+.live-badge-review,
+.live-tag-review {
+  border-color: color-mix(in srgb, #df8b68 40%, var(--line));
+  color: #df9a7a;
+}
+
+.runtime-unverified {
+  --runtime-color: var(--quiet);
+}
+
+.runtime-unverified.runtime-dot {
+  background: var(--quiet);
+  box-shadow: none;
+}
+
+.live-path {
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+
+.live-project-sessions {
+  display: grid;
+  gap: 10px;
+  max-inline-size: 760px;
+  margin-block-start: 22px;
+}
+
+.live-task-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-inline-size: 0;
+  padding-block: 7px;
+}
+
+.live-task-cell .task-name {
+  max-inline-size: 100%;
+}
+
+.live-task-meta {
+  max-inline-size: 100%;
+  overflow: hidden;
+  color: var(--quiet);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-chat .chat-context-line {
+  flex-wrap: wrap;
+  gap: 4px 7px;
+  block-size: auto;
+  min-block-size: 36px;
+}
+
+.live-message-text {
+  white-space: pre-wrap;
+  text-align: start;
+  unicode-bidi: plaintext;
+}
+
+.live-message-clipped {
+  margin-block: 4px 0;
+  color: var(--quiet);
+  font-size: calc(9px * var(--font-scale));
+}
+
+.live-message-secondary {
+  margin-inline-start: 39px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: var(--radius);
+  padding-block: 5px;
+  padding-inline: 9px;
+  color: var(--quiet);
+  font-size: calc(9px * var(--font-scale));
+}
+
+.live-message-secondary summary {
+  cursor: pointer;
+  text-align: start;
+}
+
+.live-message-secondary pre,
+.live-task-error pre,
+.live-task-error-text {
+  max-block-size: 320px;
+  margin-block: 6px 0;
+  overflow: auto;
+  color: var(--muted);
+  font: calc(9px * var(--font-scale)) / 1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: start;
+  unicode-bidi: plaintext;
+}
+
+.live-message-pending {
+  opacity: .78;
+}
+
+.live-task {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding-block: 11px;
+  padding-inline: 13px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: calc(10px * var(--font-scale));
+  text-align: start;
+}
+
+.live-task strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.live-task p {
+  margin: 0;
+}
+
+.live-task-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.live-task-id {
+  color: var(--quiet);
+  font-size: calc(9px * var(--font-scale));
+  overflow-wrap: anywhere;
+}
+
+.live-task-reply {
+  color: var(--text);
+  font-size: calc(12px * var(--font-scale));
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  unicode-bidi: plaintext;
+}
+
+.live-task-note {
+  margin: 0;
+  color: var(--quiet);
+  font-size: calc(9px * var(--font-scale));
+  line-height: 1.5;
+  text-align: start;
+}
+
+.live-task-error {
+  border-inline-start: 2px solid #dc6d6d;
+  padding-inline-start: 8px;
+}
+
+.live-task-unknown {
+  border-color: color-mix(in srgb, #df8b68 40%, var(--line));
+  margin-block-end: 8px;
+}
+
+.live-composer textarea {
+  display: block;
+  inline-size: 100%;
+  min-block-size: 58px;
+  box-sizing: border-box;
+  border: 0;
+  padding-block: 12px 6px;
+  padding-inline: 14px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: calc(11px * var(--font-scale));
+  line-height: 1.55;
+  resize: vertical;
+  text-align: start;
+}
+
+.live-composer textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.live-composer .composer-caption {
+  text-align: start;
+}
+
+.live-composer-blocker {
+  color: #df9a7a;
+}
+
+.live-new-body {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding-inline: 0;
+}
+
+.live-form {
+  display: grid;
+  gap: 7px;
+  max-inline-size: 640px;
+}
+
+.live-form label {
+  color: var(--muted);
+  font-size: calc(10px * var(--font-scale));
+  font-weight: 550;
+}
+
+.live-form select,
+.live-form textarea {
+  inline-size: 100%;
+  min-inline-size: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding-block: 7px;
+  padding-inline: 10px;
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(11px * var(--font-scale));
+  text-align: start;
+}
+
+.live-form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--quiet);
+  font-size: calc(9px * var(--font-scale));
+}
+
+.live-sent-prompt {
+  max-inline-size: 640px;
+  margin: 0;
+  color: var(--muted);
+  font-size: calc(10px * var(--font-scale));
+  white-space: pre-wrap;
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+
+.live-sidebar-note {
+  margin-block: 0 8px;
+  margin-inline: 8px;
+  color: var(--quiet);
+  font-size: calc(9px * var(--font-scale));
+  line-height: 1.5;
+}
+
+.sidebar-collapsed .live-sidebar-note {
+  display: none;
+}
+
+.shell-app[data-direction="rtl"] .live-flip {
+  transform: scaleX(-1);
+}

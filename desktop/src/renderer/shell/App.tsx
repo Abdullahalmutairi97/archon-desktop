@@ -5,18 +5,33 @@ import { AppearanceStudio } from '../appearance/AppearanceStudio'
 import { ConnectionPanel } from '../connection/ConnectionPanel'
 import { LocalCodexPanel } from '../local/LocalCodexPanel'
 import { ServerCollectionsView } from '../server/ServerCollectionsView'
-import type { LocalCodexProjectDto } from '../../shared/bridge/types'
+import type { DesktopBridge, LocalCodexProjectDto } from '../../shared/bridge/types'
 import { readShellPreferences, saveShellPreferences, type ShellPreferences } from '../appearance/themes'
+import { LiveChatView } from '../live/LiveChat'
+import { runtimeLabel as liveRuntimeLabel } from '../live/liveModels'
+import { LiveProjectsView, LiveSessionsView, LiveTasksView } from '../live/LiveViews'
+import { useLiveServer } from '../live/useLiveServer'
 import { FIXTURE_PROJECTS, FIXTURE_SESSIONS, FIXTURE_TASKS, runtimeLabel, sessionForId } from './fixtures'
 import { Icon } from './Icon'
-import { isPreviewView, Sidebar, type WorkspaceView } from './Sidebar'
+import { isPreviewView, Sidebar, type LiveSidebarData, type WorkspaceView } from './Sidebar'
 import { TitleBar } from './TitleBar'
 import { resolveShellShortcut, type BenchId } from './shortcuts'
 import { WorkspaceBench } from './WorkspaceBench'
 
 const DEFAULT_SESSION_ID = FIXTURE_SESSIONS[0].scope.sessionId
 
+/** Server-scoped selection; it is dropped whenever the connection generation changes. */
+type LiveSelection = {
+  generation: number
+  sessionId: string | null
+  projectId: string | null
+  newConversationProjectId: string | null
+}
+
 export function App() {
+  // The Electron preload bridge; absent in the browser preview, which keeps the fixture demo.
+  const bridge = window.archon as DesktopBridge | undefined
+  const live = Boolean(bridge)
   const [preferences, setPreferences] = useState<ShellPreferences>(() => readShellPreferences())
   const [view, setView] = useState<WorkspaceView>('codex')
   const [selectedSessionId, setSelectedSessionId] = useState(DEFAULT_SESSION_ID)
@@ -27,7 +42,15 @@ export function App() {
   const [benchOpen, setBenchOpen] = useState(true)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [liveSelectionValue, setLiveSelectionValue] = useState<LiveSelection | null>(null)
   const preview = isPreviewView(view)
+  const demo = preview && !live
+  const liveServer = useLiveServer(bridge, view)
+  const liveGeneration = liveServer.scope?.generation ?? null
+  const liveSelection = liveSelectionValue && liveSelectionValue.generation === liveGeneration ? liveSelectionValue : null
+  const liveSession = liveSelection?.sessionId
+    ? liveServer.sessions.find((session) => session.id === liveSelection.sessionId) ?? null
+    : null
 
   const currentSession = useMemo(() => sessionForId(selectedSessionId) ?? FIXTURE_SESSIONS[0], [selectedSessionId])
   const currentProject = FIXTURE_PROJECTS.find((project) => project.id === selectedProjectId) ?? FIXTURE_PROJECTS[0]
@@ -45,10 +68,30 @@ export function App() {
     setBenchOpen(true)
   }, [])
 
+  const selectLive = useCallback((update: (current: LiveSelection) => LiveSelection) => {
+    if (liveGeneration === null) return false
+    setLiveSelectionValue((current) => update(current && current.generation === liveGeneration
+      ? current
+      : { generation: liveGeneration, sessionId: null, projectId: null, newConversationProjectId: null }))
+    return true
+  }, [liveGeneration])
+  const openLiveSession = useCallback((sessionId: string) => {
+    if (selectLive((current) => ({ ...current, sessionId, newConversationProjectId: null }))) setView('chat')
+  }, [selectLive])
+  const startLiveConversation = useCallback((projectId: string | null) => {
+    if (selectLive((current) => ({ ...current, sessionId: null, newConversationProjectId: projectId }))) setView('chat')
+  }, [selectLive])
+  const showLiveProject = useCallback((projectId: string) => {
+    if (selectLive((current) => ({ ...current, projectId }))) setView('projects')
+  }, [selectLive])
+  const openConnection = useCallback(() => setView('connection'), [])
+  const openTasks = useCallback(() => setView('tasks'), [])
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const action = resolveShellShortcut(event, { appearanceOpen, paletteOpen, benchOpen: preview && benchOpen })
-      if (!action) return
+      const action = resolveShellShortcut(event, { appearanceOpen, paletteOpen, benchOpen: demo && benchOpen })
+      // The workbench is a fixture surface; with the desktop bridge it is not offered.
+      if (!action || (live && action.type === 'open-bench')) return
       event.preventDefault()
       switch (action.type) {
         case 'toggle-sidebar':
@@ -81,7 +124,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [appearanceOpen, benchOpen, openDemoBench, openLocalCodex, paletteOpen, preview])
+  }, [appearanceOpen, benchOpen, demo, live, openDemoBench, openLocalCodex, paletteOpen])
 
   const showProject = (projectId: string) => {
     setSelectedProjectId(projectId)
@@ -95,6 +138,15 @@ export function App() {
   }
 
   const themeStyle = { '--font-scale': preferences.fontScale, '--text-direction': preferences.direction } as CSSProperties
+  const liveSidebar: LiveSidebarData | undefined = live ? {
+    status: liveServer.status,
+    projects: liveServer.projects,
+    sessions: liveServer.sessions,
+    selectedSessionId: liveSelection?.sessionId ?? null,
+    selectedProjectId: liveSelection?.projectId ?? null,
+    onSession: openLiveSession,
+    onProject: showLiveProject,
+  } : undefined
 
   return <div className={`shell-app ${preferences.navigationSide === 'right' ? 'navigation-right' : 'navigation-left'}`} data-theme={preferences.theme} data-direction={preferences.direction} style={themeStyle}>
     <TitleBar
@@ -115,40 +167,76 @@ export function App() {
         onNewSession={openLocalCodex}
         onProject={showProject}
         onAppearance={() => { setPaletteOpen(false); setAppearanceOpen(true) }}
+        live={liveSidebar}
       />
-      <main className={`workspace-main ${preview ? 'workspace-main-demo' : 'workspace-main-live'}`} dir={preferences.direction}>
+      <main className={`workspace-main ${demo ? 'workspace-main-demo' : 'workspace-main-live'}`} dir={preferences.direction}>
         <div className="workspace-view-header">
           <div className="view-heading">
-            <span className="eyebrow">{preview ? 'PREVIEW/DEMO · SYNTHETIC DATA' : view === 'connection' ? 'DESKTOP CONNECTION' : view === 'server' ? 'SERVER WORK' : 'THIS PC · CODEX'}</span>
-            <h1>{viewTitle(view, currentSession.title)}</h1>
+            <span className="eyebrow">{demo ? 'PREVIEW/DEMO · SYNTHETIC DATA' : preview ? liveEyebrow(view) : view === 'connection' ? 'DESKTOP CONNECTION' : view === 'server' ? 'SERVER WORK' : 'THIS PC · CODEX'}</span>
+            <h1 dir="auto">{live && preview ? liveViewTitle(view, liveSelection?.sessionId ? liveSession?.title ?? 'Server conversation' : null) : viewTitle(view, currentSession.title)}</h1>
           </div>
           <div className="view-actions">
-            {view === 'chat' && <span className="scope-pill"><i className={`runtime-dot runtime-${currentSession.scope.runtime}`} />{runtimeLabel(currentSession.scope.runtime)}</span>}
-            {view === 'projects' && <span className="scope-pill"><i className={`runtime-dot runtime-${currentProject.runtime}`} />{currentProject.location} · {currentProject.runtime === 'codex' ? 'Local Codex' : currentProject.runtime === 'pi' ? 'Pi' : 'Prime'}</span>}
-            {preview && <button className="icon-button view-action-button" aria-label="Open workbench activity" title="Open demo workbench" onClick={() => openDemoBench('activity')}><Icon name="activity" /></button>}
+            {demo && view === 'chat' && <span className="scope-pill"><i className={`runtime-dot runtime-${currentSession.scope.runtime}`} />{runtimeLabel(currentSession.scope.runtime)}</span>}
+            {demo && view === 'projects' && <span className="scope-pill"><i className={`runtime-dot runtime-${currentProject.runtime}`} />{currentProject.location} · {currentProject.runtime === 'codex' ? 'Local Codex' : currentProject.runtime === 'pi' ? 'Pi' : 'Prime'}</span>}
+            {live && view === 'chat' && liveSession && <span className="scope-pill"><i className={`runtime-dot runtime-${liveSession.runtime ?? 'unverified'}`} />Server · {liveRuntimeLabel(liveSession.runtime)}</span>}
+            {demo && <button className="icon-button view-action-button" aria-label="Open workbench activity" title="Open demo workbench" onClick={() => openDemoBench('activity')}><Icon name="activity" /></button>}
           </div>
         </div>
 
-        {preview && <div className="demo-route-notice" role="note"><strong>Preview/demo</strong><span>Sample data only · These chats, sessions, tasks, projects and workbench panels are not connected to live work.</span></div>}
-        {view === 'chat' && <ChatView session={currentSession} />}
-        {view === 'sessions' && <SessionsView selectedSessionId={selectedSessionId} onSelect={(sessionId) => { selectSession(sessionId); setView('chat') }} />}
-        {view === 'tasks' && <TasksView />}
-        {view === 'projects' && <ProjectsView selectedProjectId={selectedProjectId} onSelectSession={selectSession} onViewChat={() => setView('chat')} />}
+        {demo && <div className="demo-route-notice" role="note"><strong>Preview/demo</strong><span>Sample data only · These chats, sessions, tasks, projects and workbench panels are not connected to live work.</span></div>}
+        {demo && view === 'chat' && <ChatView session={currentSession} />}
+        {demo && view === 'sessions' && <SessionsView selectedSessionId={selectedSessionId} onSelect={(sessionId) => { selectSession(sessionId); setView('chat') }} />}
+        {demo && view === 'tasks' && <TasksView />}
+        {demo && view === 'projects' && <ProjectsView selectedProjectId={selectedProjectId} onSelectSession={selectSession} onViewChat={() => setView('chat')} />}
+        {live && view === 'chat' && <LiveChatView
+          server={liveServer}
+          sessionId={liveSelection?.sessionId ?? null}
+          preferredProjectId={liveSelection?.newConversationProjectId ?? null}
+          onOpenSession={openLiveSession}
+          onNewConversation={startLiveConversation}
+          onOpenConnection={openConnection}
+          onOpenTasks={openTasks}
+        />}
+        {live && view === 'sessions' && <LiveSessionsView server={liveServer} selectedSessionId={liveSelection?.sessionId ?? null} onOpenSession={openLiveSession} onNewConversation={startLiveConversation} onOpenConnection={openConnection} />}
+        {live && view === 'tasks' && <LiveTasksView server={liveServer} onOpenSession={openLiveSession} onOpenConnection={openConnection} />}
+        {live && view === 'projects' && <LiveProjectsView
+          server={liveServer}
+          selectedProjectId={liveSelection?.projectId ?? null}
+          selectedSessionId={liveSelection?.sessionId ?? null}
+          onSelectProject={showLiveProject}
+          onOpenSession={openLiveSession}
+          onNewConversation={startLiveConversation}
+          onOpenConnection={openConnection}
+        />}
         {view === 'connection' && <ConnectionPanel bridge={window.archon} />}
         {view === 'server' && <ServerCollectionsView bridge={window.archon} onLocalCodexProjectRegistered={openRegisteredLocalCodexProject} />}
         <div className="local-codex-route" hidden={view !== 'codex'}><LocalCodexPanel bridge={window.archon} active={view === 'codex'} selectionRequest={localCodexSelectionRequest} /></div>
       </main>
-      {preview && <WorkspaceBench active={activeBench} open={benchOpen} scope={currentSession.scope} onSelect={setActiveBench} onClose={() => setBenchOpen(false)} />}
+      {demo && <WorkspaceBench active={activeBench} open={benchOpen} scope={currentSession.scope} onSelect={setActiveBench} onClose={() => setBenchOpen(false)} />}
     </div>
 
     <div className="reconstruction-ribbon" aria-label="Reconstruction and fixture status">
-      <span><i />SOURCE RECONSTRUCTION</span><b>·</b><span>{view === 'connection' ? 'CONNECTION STATUS' : view === 'server' ? 'SERVER CHECKOUTS · LINE CONSOLE' : view === 'codex' ? 'LOCAL CODEX · ONE TURN' : 'SYNTHETIC FIXTURE DATA'}</span><b>·</b><span>BASELINE PARITY UNVERIFIED</span>
+      <span><i />SOURCE RECONSTRUCTION</span><b>·</b><span>{view === 'connection' ? 'CONNECTION STATUS' : view === 'server' ? 'SERVER CHECKOUTS · LINE CONSOLE' : view === 'codex' ? 'LOCAL CODEX · ONE TURN' : live ? 'SERVER CONVERSATIONS' : 'SYNTHETIC FIXTURE DATA'}</span><b>·</b><span>BASELINE PARITY UNVERIFIED</span>
     </div>
 
     {appearanceOpen && <AppearanceStudio value={preferences} onChange={setPreferences} onClose={() => setAppearanceOpen(false)} />}
-    {paletteOpen && <CommandPalette preview={preview} onClose={() => setPaletteOpen(false)} onNavigate={(next) => { setView(next); setPaletteOpen(false) }} onAppearance={() => { setPaletteOpen(false); setAppearanceOpen(true) }} onBench={(tab) => { openDemoBench(tab); setPaletteOpen(false) }} />}
+    {paletteOpen && <CommandPalette preview={demo} live={live} onClose={() => setPaletteOpen(false)} onNavigate={(next) => { setView(next); setPaletteOpen(false) }} onAppearance={() => { setPaletteOpen(false); setAppearanceOpen(true) }} onBench={(tab) => { openDemoBench(tab); setPaletteOpen(false) }} />}
     <div className="build-stamp" aria-hidden="true">v{buildMetadata.appVersion} · source {buildMetadata.sourceCommit.slice(0, 7)} · parity unverified</div>
   </div>
+}
+
+function liveEyebrow(view: WorkspaceView) {
+  if (view === 'chat') return 'SERVER CONVERSATION'
+  if (view === 'sessions') return 'SERVER SESSIONS'
+  if (view === 'tasks') return 'SERVER TASKS'
+  return 'SERVER PROJECTS'
+}
+
+function liveViewTitle(view: WorkspaceView, sessionTitle: string | null) {
+  if (view === 'chat') return sessionTitle ?? 'New conversation'
+  if (view === 'sessions') return 'Sessions'
+  if (view === 'tasks') return 'Tasks'
+  return 'Projects'
 }
 
 function viewTitle(view: WorkspaceView, sessionTitle: string) {
@@ -219,7 +307,7 @@ function ProjectsView({ selectedProjectId, onSelectSession, onViewChat }: { sele
   </section>
 }
 
-function CommandPalette({ preview, onClose, onNavigate, onAppearance, onBench }: { preview: boolean; onClose(): void; onNavigate(view: WorkspaceView): void; onAppearance(): void; onBench(tab: BenchId): void }) {
+function CommandPalette({ preview, live, onClose, onNavigate, onAppearance, onBench }: { preview: boolean; live: boolean; onClose(): void; onNavigate(view: WorkspaceView): void; onAppearance(): void; onBench(tab: BenchId): void }) {
   return <div className="modal-scrim palette-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <section className="command-palette" role="dialog" aria-modal="true" aria-labelledby="palette-title">
       <div className="palette-search"><Icon name="search" /><h2 id="palette-title">Quick actions</h2><button className="icon-button" aria-label="Close quick actions" onClick={onClose}><Icon name="close" /></button></div>
@@ -228,7 +316,13 @@ function CommandPalette({ preview, onClose, onNavigate, onAppearance, onBench }:
         <button onClick={() => onNavigate('server')}><Icon name="folder" /><span>Server work</span></button>
         <button onClick={() => onNavigate('connection')}><Icon name="settings" /><span>Connection</span></button>
       </div>
-      <div className="palette-group"><span className="eyebrow">PREVIEW/DEMO · SAMPLE DATA</span>
+      {live && <div className="palette-group"><span className="eyebrow">SERVER CONVERSATIONS</span>
+        <button onClick={() => onNavigate('chat')}><Icon name="chat" /><span>Chat</span></button>
+        <button onClick={() => onNavigate('sessions')}><Icon name="history" /><span>Sessions</span></button>
+        <button onClick={() => onNavigate('tasks')}><Icon name="activity" /><span>Tasks</span></button>
+        <button onClick={() => onNavigate('projects')}><Icon name="folder" /><span>Projects</span></button>
+      </div>}
+      {!live && <div className="palette-group"><span className="eyebrow">PREVIEW/DEMO · SAMPLE DATA</span>
         <button onClick={() => onNavigate('chat')}><Icon name="browser" /><span>Open Preview/demo</span></button>
         {preview && <>
           <button onClick={() => onNavigate('sessions')}><Icon name="history" /><span>Browse demo sessions</span></button>
@@ -237,11 +331,13 @@ function CommandPalette({ preview, onClose, onNavigate, onAppearance, onBench }:
           <button onClick={() => onBench('files')}><Icon name="file" /><span>Open synthetic files</span><kbd>Ctrl 2</kbd></button>
           <button onClick={() => onBench('browser')}><Icon name="browser" /><span>Open offline browser fixture</span><kbd>Ctrl 4</kbd></button>
         </>}
-      </div>
+      </div>}
       <div className="palette-group"><span className="eyebrow">SETTINGS</span>
         <button onClick={onAppearance}><Icon name="settings" /><span>Appearance</span><kbd>Ctrl ,</kbd></button>
       </div>
-      <p className="palette-footnote">Preview chat, sessions, projects and workbench panels use fixtures. Local Codex and Server work use the desktop bridge.</p>
+      <p className="palette-footnote">{live
+        ? 'Chat, sessions, tasks and projects read the connected server through the desktop bridge. Local Codex stays a separate identity.'
+        : 'Preview chat, sessions, projects and workbench panels use fixtures. Local Codex and Server work use the desktop bridge.'}</p>
     </section>
   </div>
 }

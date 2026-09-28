@@ -226,6 +226,7 @@ describe('backend transport', () => {
       'projects.list',
       'projects.head',
       'sessions.list',
+      'sessions.messages',
       'tasks.list',
       'events.cursor',
       'secrets.authStates',
@@ -324,6 +325,134 @@ describe('backend transport', () => {
       prompt: 'Inspect this checkout',
       workspace_id: `workspace-${'a'.repeat(32)}`, workspace_generation: 1,
     })
+  })
+
+  it('continues a server conversation without a runtime choice and starts new ones with an explicit runtime', async () => {
+    const task = { id: 'task-continue', status: 'queued', session_id: 'prime-session-1' }
+    const fetcher = vi.fn<BackendFetch>(async () => response({ task }, 202))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('tasks.submit', { sessionId: 'prime-session-1', prompt: 'Continue' }))
+      .resolves.toEqual({ task })
+    await transport.invoke('tasks.submit', { sessionId: 'prime-session-1', prompt: 'Continue here', projectId: 'project-1' })
+    await transport.invoke('tasks.submit', { projectId: 'project-1', prompt: 'Start with Pi', runtime: 'pi' })
+    await transport.invoke('tasks.submit', { projectId: 'project-1', prompt: 'Start with Prime', runtime: 'prime' })
+
+    expect(fetcher).toHaveBeenCalledTimes(4)
+    const requests = fetcher.mock.calls.map(([url, init]) => ({
+      url: String(url),
+      method: init?.method,
+      body: JSON.parse(String(init?.body)),
+      key: new Headers(init?.headers).get('idempotency-key'),
+    }))
+    expect(requests.map(({ url, method }) => [url, method])).toEqual(Array.from({ length: 4 }, () => [
+      'http://127.0.0.1:8000/api/tasks', 'POST',
+    ]))
+    expect(requests.map(({ body }) => body)).toEqual([
+      { prompt: 'Continue', session_id: 'prime-session-1', approval_mode: 'auto', chat_only: false },
+      { prompt: 'Continue here', session_id: 'prime-session-1', project_id: 'project-1', approval_mode: 'auto', chat_only: false },
+      { prompt: 'Start with Pi', project_id: 'project-1', profile: 'pi', approval_mode: 'auto', chat_only: false },
+      { prompt: 'Start with Prime', project_id: 'project-1', profile: 'prime', approval_mode: 'auto', chat_only: false },
+    ])
+    expect(requests[0].body).not.toHaveProperty('profile')
+    expect(requests[1].body).not.toHaveProperty('profile')
+    expect(new Set(requests.map(({ key }) => key)).size).toBe(4)
+    expect(requests.every(({ key }) => typeof key === 'string' && key.length === 36)).toBe(true)
+  })
+
+  it('rejects continuation shapes that mix a session with a runtime or checkout before fetch', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => response({ task: { id: 'task-1', status: 'queued' } }, 202))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    const workspace = { workspaceId: `workspace-${'a'.repeat(32)}`, workspaceGeneration: 1 }
+
+    for (const payload of [
+      { sessionId: 'prime-session-1', prompt: 'work', runtime: 'pi' },
+      { sessionId: 'prime-session-1', prompt: 'work', projectId: 'project-1', ...workspace },
+      { projectId: 'project-1', prompt: 'work', runtime: 'pi', ...workspace },
+      { projectId: 'project-1', prompt: 'work', runtime: 'codex' },
+      { sessionId: '../../api/admin', prompt: 'work' },
+      { sessionId: 'prime-session-1', prompt: 'work', profile: 'pi' },
+    ]) {
+      await expect(transport.invoke('tasks.submit', payload as never)).rejects.toMatchObject({ code: 'invalid_payload' })
+    }
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('does not retry an ambiguous conversation continuation', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => { throw new Error('connection dropped') })
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('tasks.submit', { sessionId: 'prime-session-1', prompt: 'Only once' }))
+      .rejects.toMatchObject({ code: 'network_error' })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a rejected continuation, such as a read-only session, as an HTTP error', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => response({ detail: 'Native Pi history is read-only here.' }, 409))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    const failure = await transport.invoke('tasks.submit', { sessionId: 'pi-native-abc', prompt: 'Continue' })
+      .catch((error: unknown) => error)
+    expect(failure).toMatchObject({ code: 'http_error' })
+    expect(String(failure)).not.toContain('read-only here')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads a bounded session transcript through one fixed encoded GET route', async () => {
+    const messages = [
+      { id: 'task-1-prompt', role: 'user', content: 'Hello', kind: 'text', timestamp: 1_790_000_000 },
+      { id: 'native-9:1', role: 'assistant', content: 'Hi there', kind: 'text', timestamp: 1_790_000_001 },
+    ]
+    const fetcher = vi.fn<BackendFetch>(async () => response({ messages }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('sessions.messages', { sessionId: 'pi-native-session_1', limit: 2 }))
+      .resolves.toEqual({ messages })
+    const [url, init] = fetcher.mock.calls[0]
+    expect(url.pathname).toBe('/api/sessions/pi-native-session_1/messages')
+    expect(url.searchParams.get('limit')).toBe('2')
+    expect([...url.searchParams.keys()]).toEqual(['limit'])
+    expect(init?.method).toBe('GET')
+    expect(init?.body).toBeUndefined()
+    expect(init?.redirect).toBe('manual')
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+  })
+
+  it('rejects transcripts that exceed the requested limit or carry malformed rows', async () => {
+    const message = { id: 'm-1', role: 'assistant', content: 'text', kind: 'text', timestamp: 1 }
+    const tooMany = new BackendTransport({
+      ...localConnection,
+      fetch: fetchStub(async () => response({ messages: [message, { ...message, id: 'm-2' }] })),
+    })
+    await expect(tooMany.invoke('sessions.messages', { sessionId: 'session-1', limit: 1 }))
+      .rejects.toMatchObject({ code: 'invalid_response' })
+
+    const malformed = new BackendTransport({
+      ...localConnection,
+      fetch: fetchStub(async () => response({ messages: [{ ...message, content: { html: '<b>x</b>' } }] })),
+    })
+    await expect(malformed.invoke('sessions.messages', { sessionId: 'session-1', limit: 5 }))
+      .rejects.toMatchObject({ code: 'invalid_response' })
+
+    const missing = new BackendTransport({
+      ...localConnection,
+      fetch: fetchStub(async () => response({ detail: 'Session not found' }, 404)),
+    })
+    await expect(missing.invoke('sessions.messages', { sessionId: 'session-1', limit: 5 }))
+      .rejects.toMatchObject({ code: 'http_error' })
+
+    const fetcher = vi.fn<BackendFetch>(async () => response({ messages: [] }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    for (const payload of [
+      { sessionId: '../tasks', limit: 5 },
+      { sessionId: 'session-1', limit: 0 },
+      { sessionId: 'session-1', limit: 501 },
+      { sessionId: 'session-1' },
+      { sessionId: 'session-1', limit: 5, after: 3 },
+    ]) {
+      await expect(transport.invoke('sessions.messages', payload as never)).rejects.toMatchObject({ code: 'invalid_payload' })
+    }
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('rejects unsafe task inputs before fetch', async () => {

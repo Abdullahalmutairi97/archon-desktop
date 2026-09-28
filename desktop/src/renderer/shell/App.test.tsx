@@ -151,7 +151,7 @@ describe('reconstruction preview shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start Codex turn' }))
     await screen.findByText('Running')
 
-    for (const route of ['Server work', 'Connection', 'Preview/demo']) {
+    for (const route of ['Server work', 'Connection', 'Sessions', 'Chat']) {
       fireEvent.click(screen.getByRole('button', { name: route }))
       await act(async () => {})
       expect(localCodex.subscribe).toHaveBeenCalledTimes(1)

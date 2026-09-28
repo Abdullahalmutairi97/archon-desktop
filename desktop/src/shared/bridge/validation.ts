@@ -19,6 +19,8 @@ import type {
   ProjectHeadPayload,
   ProjectCreatePayload,
   RuntimeRecord,
+  SessionMessageRecord,
+  SessionMessagesPayload,
   SessionsListPayload,
   TaskByIdPayload,
   TaskEventRecord,
@@ -130,6 +132,7 @@ const operationNames = Object.freeze([
   'projects.create',
   'projects.head',
   'sessions.list',
+  'sessions.messages',
   'tasks.list',
   'events.cursor',
   'runtimes.list',
@@ -155,6 +158,12 @@ const MAX_SERVER_URL_LENGTH = 2048
 const MAX_TOKEN_LENGTH = 8192
 const MAX_PROJECT_ID_LENGTH = 200
 const MAX_TASK_ID_LENGTH = 200
+// Session APIs bound conversation ids to 200 characters of the server's safe id alphabet.
+const MAX_SESSION_ID_LENGTH = 200
+const MAX_SESSION_MESSAGES = 500
+const MAX_SESSION_MESSAGE_ID_LENGTH = 512
+// Matches the transport's backend response cap; content is never truncated here.
+const MAX_SESSION_MESSAGE_CONTENT_TOTAL = 2 * 1024 * 1024
 // Fits the 64 KiB IPC envelope even when every UTF-16 code unit encodes to four UTF-8 bytes.
 const MAX_TASK_PROMPT_LENGTH = 8_000
 const MAX_LIST_LIMIT = 500
@@ -435,19 +444,52 @@ function validTaskId(value: unknown): value is string {
     && /^[A-Za-z0-9_-]{1,200}$/u.test(value)
 }
 
+function validSessionId(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length <= MAX_SESSION_ID_LENGTH
+    && /^[A-Za-z0-9_-]{1,200}$/u.test(value)
+}
+
 function parseTaskSubmitPayload(value: unknown): TaskSubmitPayload {
-  const record = readOwnDataRecord(value, ['projectId', 'prompt', 'workspaceId', 'workspaceGeneration'])
+  const record = readOwnDataRecord(value, ['projectId', 'prompt', 'workspaceId', 'workspaceGeneration', 'sessionId', 'runtime'])
+  const hasProject = Object.hasOwn(record, 'projectId')
   const hasWorkspace = Object.hasOwn(record, 'workspaceId')
-  if (Object.keys(record).length !== (hasWorkspace ? 4 : 2) ||
-      hasWorkspace !== Object.hasOwn(record, 'workspaceGeneration')) return fail()
-  if (!boundedString(record.projectId, MAX_PROJECT_ID_LENGTH)) return fail()
+  const hasSession = Object.hasOwn(record, 'sessionId')
+  const hasRuntime = Object.hasOwn(record, 'runtime')
+  if (hasWorkspace !== Object.hasOwn(record, 'workspaceGeneration')) return fail()
   if (!boundedString(record.prompt, MAX_TASK_PROMPT_LENGTH) || !record.prompt.trim()) return fail()
-  if (hasWorkspace && (!workspaceFileId(record.workspaceId) ||
-      typeof record.workspaceGeneration !== 'number' || !Number.isSafeInteger(record.workspaceGeneration) ||
-      record.workspaceGeneration < 1)) return fail()
-  return Object.freeze({ projectId: record.projectId, prompt: record.prompt,
-    ...(hasWorkspace ? { workspaceId: record.workspaceId as string, workspaceGeneration: record.workspaceGeneration as number } : {}),
+  if (hasProject && !boundedString(record.projectId, MAX_PROJECT_ID_LENGTH)) return fail()
+
+  if (hasSession) {
+    // A continuation runs under the session's recorded runtime and cwd, so it
+    // never carries a runtime choice or a checkout identity.
+    if (hasWorkspace || hasRuntime || !validSessionId(record.sessionId)) return fail()
+    return Object.freeze({ sessionId: record.sessionId, prompt: record.prompt,
+      ...(hasProject ? { projectId: record.projectId as string } : {}),
+    })
+  }
+
+  if (!hasProject) return fail()
+  if (hasWorkspace) {
+    if (hasRuntime || !workspaceFileId(record.workspaceId) ||
+        typeof record.workspaceGeneration !== 'number' || !Number.isSafeInteger(record.workspaceGeneration) ||
+        record.workspaceGeneration < 1) return fail()
+    return Object.freeze({ projectId: record.projectId as string, prompt: record.prompt,
+      workspaceId: record.workspaceId as string, workspaceGeneration: record.workspaceGeneration,
+    })
+  }
+  if (hasRuntime && record.runtime !== 'prime' && record.runtime !== 'pi') return fail()
+  return Object.freeze({ projectId: record.projectId as string, prompt: record.prompt,
+    ...(hasRuntime ? { runtime: record.runtime as 'prime' | 'pi' } : {}),
   })
+}
+
+function parseSessionMessagesPayload(value: unknown): SessionMessagesPayload {
+  const record = exactObject(value, ['sessionId', 'limit'])
+  if (!validSessionId(record.sessionId)) return fail()
+  if (typeof record.limit !== 'number' || !Number.isInteger(record.limit) ||
+      record.limit < 1 || record.limit > MAX_SESSION_MESSAGES) return fail()
+  return Object.freeze({ sessionId: record.sessionId, limit: record.limit })
 }
 
 function parseTaskByIdPayload(value: unknown): TaskByIdPayload {
@@ -505,6 +547,8 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseWorkspaceFileCreatePayload(payload)])
     case 'sessions.list':
       return Object.freeze([operation, parseSessionsPayload(payload)])
+    case 'sessions.messages':
+      return Object.freeze([operation, parseSessionMessagesPayload(payload)])
     case 'tasks.list':
       return Object.freeze([operation, parseTasksPayload(payload)])
     case 'tasks.submit':
@@ -817,6 +861,22 @@ function parseTaskEvent(value: unknown): TaskEventRecord {
   return record as TaskEventRecord
 }
 
+function parseSessionMessage(value: unknown): SessionMessageRecord {
+  const record = exactObject(value, ['id', 'role', 'content', 'kind', 'timestamp'])
+  if (!boundedString(record.id, MAX_SESSION_MESSAGE_ID_LENGTH) || /[\u0001-\u001f\u007f-\u009f]/u.test(record.id)) return fail()
+  if (typeof record.role !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(record.role)) return fail()
+  if (typeof record.kind !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(record.kind)) return fail()
+  if (typeof record.content !== 'string' || record.content.length > MAX_SESSION_MESSAGE_CONTENT_TOTAL) return fail()
+  if (typeof record.timestamp !== 'number' || !Number.isSafeInteger(record.timestamp) || record.timestamp < 0) return fail()
+  return Object.freeze({
+    id: record.id,
+    role: record.role,
+    content: record.content,
+    kind: record.kind,
+    timestamp: record.timestamp,
+  })
+}
+
 function parseOperationResponse(operation: unknown, value: unknown): OperationMap[OperationName]['result'] {
   if (!isOperationName(operation)) return fail()
   switch (operation) {
@@ -831,6 +891,16 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       const list = parseBoundedJson(record[key], { nodes: 0, estimatedBytes: 0, seen: new WeakSet<object>() })
       if (!Array.isArray(list) || list.some((item) => !isRecord(item))) return fail()
       return Object.freeze({ [key]: list }) as OperationMap[OperationName]['result']
+    }
+    case 'sessions.messages': {
+      const record = exactObject(value, ['messages'])
+      const messages = readLocalArray(record.messages, MAX_SESSION_MESSAGES).map(parseSessionMessage)
+      let contentLength = 0
+      for (const message of messages) {
+        contentLength += message.content.length
+        if (contentLength > MAX_SESSION_MESSAGE_CONTENT_TOTAL) return fail()
+      }
+      return Object.freeze({ messages: Object.freeze(messages) })
     }
     case 'projects.create': {
       const record = exactObject(value, ['project'])
