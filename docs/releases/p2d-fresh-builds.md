@@ -53,7 +53,9 @@ Harness: `desktop/scripts/native-hostile-frame-check.mjs`
 pointed at a private fixture root, drives it over the DevTools protocol, and
 writes a JSON report. Run against the extracted package of build A.
 
-Result: 12 of 12 checks passed. Observed values:
+Result: every check passed. The first run of this harness reported 12 checks; the
+table below lists those, and later runs report 13 because the language-profile
+bridge namespace was added to the top-frame check. Observed values:
 
 | Check | Observed |
 | --- | --- |

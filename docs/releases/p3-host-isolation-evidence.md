@@ -56,9 +56,13 @@ which is why that path can be described as enforced rather than requested.
 - The isolation profile must be probed behaviourally per control. A control that
   the manager accepted is not a control that took effect: `IPAddressDeny` above is
   accepted and ineffective.
-- CPU and PID limits are recorded only for the memory case today. `isolation_profile`
-  in the workspace database is identity metadata and does not attest any control,
-  as its own docstring states.
+- CPU and PID limits are no longer memory-only: a service may now declare
+  `cpuQuotaPercent` and `tasksMax`, both probe-verified before launch, alongside
+  `memoryLimitMb`, `filesystemIsolation` and `networkIsolation`. (Historical note, kept
+  because it explains why the profiles exist at all: at the time of the host run the
+  only wired control was memory, and `isolation_profile`
+  in the workspace database is still identity metadata and attests no control, as its
+  own docstring states.)
 
 ## What Archon now enforces for a workspace service
 
