@@ -26,6 +26,13 @@ _MAX_SESSIONS = 8
 _MAX_REQUEST_BYTES = 512 * 1024
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _TIMEOUT_SECONDS = 10.0
+# A preview session is re-validated against the live workspace and service, so a
+# ticket cannot outlive a generation change or a stopped service. The result is
+# cached only briefly: a preview loads many assets, but a revoked binding must
+# stop answering promptly.
+_AUTHORIZE_CACHE_SECONDS = 1.0
+_AUTHORIZE_INTERVAL_SECONDS = 2.0
+_PREVIEWABLE_STATES = frozenset({"starting", "running"})
 _ALLOWED_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "DELETE"})
 _FORWARD_REQUEST_HEADERS = frozenset({"accept", "accept-language", "content-type", "range"})
 _STRIP_RESPONSE_HEADERS = frozenset({
@@ -44,6 +51,10 @@ class WorkspaceGatewayTicketUnavailable(WorkspaceGatewayError):
 
 class WorkspaceGatewayRequestRejected(WorkspaceGatewayError):
     """The proxied request is outside the bounded preview contract."""
+
+
+class WorkspaceGatewayServiceUnavailable(WorkspaceGatewayError):
+    """The service has no live process to preview."""
 
 
 Forward = Callable[[str, str, dict[str, str], bytes, float], Awaitable[dict[str, Any]]]
@@ -111,6 +122,8 @@ class WorkspacePreviewGateway:
         self._max_sessions = max_sessions
         self._forward = forward or _default_forward
         self._sessions: dict[str, dict[str, Any]] = {}
+        self._authorized: dict[str, float] = {}
+        self._clock: Callable[[], float] = lambda: asyncio.get_running_loop().time()
 
     async def open(
         self, workspace_id: str, name: str, *, expected_generation: int, port_name: str | None = None,
@@ -123,12 +136,16 @@ class WorkspacePreviewGateway:
         active = [session for session in self._sessions.values() if session["workspaceId"] == workspace_id]
         if len(active) >= self._max_sessions:
             raise WorkspaceGatewayError("Preview session limit reached for this workspace")
+        if target["state"] not in _PREVIEWABLE_STATES:
+            # A stopped, failed or unregistered service has nothing to preview.
+            raise WorkspaceGatewayServiceUnavailable("Service is not running; start it before previewing")
         ticket = "wprev-" + uuid.uuid4().hex
         session = {
             "ticket": ticket,
             "workspaceId": workspace_id,
             "service": name,
             "port": target["port"],
+            "portName": target["portName"],
             "generation": target["generation"],
             "mode": "read-only",
             "expiresAt": datetime.now(timezone.utc) + timedelta(seconds=self._ttl_seconds),
@@ -146,19 +163,91 @@ class WorkspacePreviewGateway:
         return session
 
     def revoke_workspace(self, workspace_id: str) -> None:
+        """Drop every ticket for a workspace, e.g. after a generation change."""
         self._sessions = {
             ticket: session for ticket, session in self._sessions.items()
             if session["workspaceId"] != workspace_id
         }
+        self._authorized.clear()
 
-    def websocket_target(self, ticket: str, *, path: str, query: str) -> str:
-        """Resolve a ticket to the declared port's loopback WebSocket URL."""
+    def revoke_service(self, workspace_id: str, name: str) -> None:
+        """Drop every ticket for one service, e.g. after it was stopped or removed."""
+        self._sessions = {
+            ticket: session for ticket, session in self._sessions.items()
+            if not (session["workspaceId"] == workspace_id and session["service"] == name)
+        }
+        self._authorized.clear()
+
+    async def authorize(self, ticket: str, *, force: bool = False) -> dict[str, Any]:
+        """Re-check a ticket against the live workspace, service and process state.
+
+        A ticket is a capability for one binding: the same workspace generation,
+        the same service and the same declared port. Anything else - a
+        re-provisioned checkout, a removed service, a stopped process - makes it
+        invalid, so a stale preview page stops reaching a process it no longer
+        belongs to.
+        """
         session = self.resolve(ticket)
+        now = self._clock()
+        cached = self._authorized.get(ticket)
+        if not force and cached is not None and now - cached < _AUTHORIZE_CACHE_SECONDS:
+            return session
+        try:
+            target = await self._manager.preview_target(
+                session["workspaceId"], session["service"],
+                expected_generation=session["generation"], port_name=session["portName"],
+            )
+        except Exception as exc:  # noqa: BLE001 - every failure invalidates the ticket
+            self._sessions.pop(ticket, None)
+            self._authorized.pop(ticket, None)
+            raise WorkspaceGatewayTicketUnavailable(
+                "Preview binding changed; open a new preview"
+            ) from exc
+        if target["port"] != session["port"]:
+            self._sessions.pop(ticket, None)
+            self._authorized.pop(ticket, None)
+            raise WorkspaceGatewayTicketUnavailable("Preview binding changed; open a new preview")
+        if target["state"] not in _PREVIEWABLE_STATES:
+            self._sessions.pop(ticket, None)
+            self._authorized.pop(ticket, None)
+            raise WorkspaceGatewayTicketUnavailable("Service is no longer running; open a new preview")
+        self._authorized[ticket] = now
+        return session
+
+    async def websocket_target(self, ticket: str, *, path: str, query: str) -> str:
+        """Resolve a ticket to the declared port's loopback WebSocket URL."""
+        session = await self.authorize(ticket)
         target_path = "/" + path if path else "/"
         url = f"ws://127.0.0.1:{session['port']}{target_path}"
         if query:
             url += "?" + query
         return url
+
+    def schedule_revalidation(self, ticket: str, on_lost: Callable[[], None]) -> asyncio.Task[None]:
+        """Watch one open ticket and call `on_lost` as soon as its binding changes.
+
+        A long-lived WebSocket can outlive the workspace generation or the service
+        process, so the connection is re-checked on a bounded interval for as long
+        as it stays open.
+        """
+
+        async def watch() -> None:
+            while True:
+                await asyncio.sleep(_AUTHORIZE_INTERVAL_SECONDS)
+                try:
+                    await self.authorize(ticket, force=True)
+                except WorkspaceGatewayTicketUnavailable:
+                    try:
+                        on_lost()
+                    except Exception:
+                        pass
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    return
+
+        return asyncio.create_task(watch())
 
     async def proxy(
         self,
@@ -172,7 +261,7 @@ class WorkspacePreviewGateway:
         prefix: str = "/api/local/preview/",
     ) -> dict[str, Any]:
         """Proxy one bounded request to the ticket's declared loopback port."""
-        session = self.resolve(ticket)
+        session = await self.authorize(ticket)
         if method not in _ALLOWED_METHODS:
             raise WorkspaceGatewayRequestRejected("Method is not permitted for a preview")
         if len(body) > _MAX_REQUEST_BYTES:
@@ -221,3 +310,5 @@ class WorkspacePreviewGateway:
             ticket: session for ticket, session in self._sessions.items()
             if session["expiresAt"] > now
         }
+        for ticket in [key for key in self._authorized if key not in self._sessions]:
+            self._authorized.pop(ticket, None)

@@ -127,23 +127,34 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    refuses to see flipped. To close the bullet, run a debug session in the workspace IDE
    once and record what was observed; do not turn those constants on without that. Also
    open: Pylance is proprietary and absent, and there is no JavaScript debugger pin.
-3. **P3 resource accounting and lease remainder** — the owner-only resources summary now
+3. **P4 preview tickets and IDE listener** — preview tickets are re-validated against the
+   live workspace generation, service and process on every request (with a bounded
+   one-second HTTP cache and a two-second WebSocket watchdog), a service with no running
+   process cannot be previewed, and every definition/start/stop/removal notifies the
+   gateway so tickets die with the binding. Still open: the IDE listener itself. Code-server
+   is registered on loopback TCP with `--auth none`, so any host-local process can reach a
+   full write-capable IDE and bypass the gateway and the write lease. Closing it needs
+   either code-server's own auth (a password the user would have to supply) or a listener
+   only the gateway can reach (code-server `--socket` plus a gateway that can forward over
+   a Unix socket).
+
+4. **P3 resource accounting and lease remainder** — the owner-only resources summary now
    covers services, terminals and agent tasks bound to the checkout and names what it
    cannot see, and a lease handover now refuses while this server's own writers are alive
    or an agent task is active, with an explicit `quiesce` path that stops them and
    verifies the checkout is quiet. Still open: fence the writers the lease does not reach:
    kernels, debugger/run tasks (no implementation exists to fence yet) and existing
    detached tmux children, which a later handover does not revoke.
-4. **P2D blocked gates** — the Chromium OS sandbox and the native keyring need a
+5. **P2D blocked gates** — the Chromium OS sandbox and the native keyring need a
    host that provides them (setuid `chrome-sandbox` or unprivileged user namespaces;
    a protected Linux secret-service backend). Both are recorded in
    `docs/releases/p2d-fresh-builds.md`. Re-run the native check on such a host.
-5. **P1 evidence remainder** — the explicit resume path and the snapshot
+6. **P1 evidence remainder** — the explicit resume path and the snapshot
    restore/import procedure are now covered end to end
    (`backend/tests/test_resume_evidence.py`, `test_migration_restore_evidence.py`).
    The one shape a reviewer may still ask for is duplicate project *names*, which live
    in the separate Hermes projects database that the Archon migration never reads.
-6. **P5 remainder** — event normalization, the approval binding and bounded
+7. **P5 remainder** — event normalization, the approval binding and bounded
    diagnostic *records* are done (owner-only `GET/DELETE /api/local/diagnostics`, redacted,
    capped and expiring; raw output capture stays disabled by design). Encryption of that
    ledger at rest is not implemented. Originally: event normalization and the approval binding are done
@@ -158,7 +169,7 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    reachability stay open for anything running as the service account — see
    `docs/releases/p5-same-uid-exposure-evidence.md`. Closing it needs an enforced OS
    boundary around every workspace-capable process or real upstream scopes.
-7. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
+8. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
    unstarted; the operator deferred these earlier — confirm before starting).
 
 ### Gates that must not be reported as passed

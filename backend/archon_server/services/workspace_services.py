@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -30,6 +31,8 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+
+logger = logging.getLogger(__name__)
 
 from ..child_env import build_child_env
 from ..db import Database
@@ -214,8 +217,35 @@ class WorkspaceServiceManager:
         self._network_enforcement = network_enforcement
         self._lock = asyncio.Lock()
         self._runtime: dict[tuple[str, str], dict[str, Any]] = {}
+        self._change_listener: Callable[[str, str], None] | None = None
 
     # ---------------------------------------------------------------- registry
+
+    @property
+    def change_listener(self) -> Callable[[str, str], None] | None:
+        """The callback told about every change to a service's live binding."""
+        return self._change_listener
+
+    def set_change_listener(self, listener: Callable[[str, str], None] | None) -> None:
+        """Register a listener called as (workspace_id, service_name).
+
+        The listener runs after a definition, start, stop or removal changed which
+        process backs a service, so an outside capability bound to that process
+        (a preview ticket, for example) can be dropped with it. A failing listener
+        never fails the state change.
+        """
+        if listener is not None and not callable(listener):
+            raise ValueError("change listener must be callable")
+        self._change_listener = listener
+
+    def _notify_change(self, workspace_id: str, name: str) -> None:
+        listener = self._change_listener
+        if listener is None:
+            return
+        try:
+            listener(workspace_id, name)
+        except Exception:
+            logger.exception("Workspace service change listener failed")
 
     async def list(self, workspace_id: str) -> list[dict[str, Any]]:
         """Return definitions with their current in-memory runtime state."""
@@ -237,6 +267,7 @@ class WorkspaceServiceManager:
             self._validate_graph(others)
             record["services"] = sorted(others, key=lambda item: item["name"])
             self._save(workspace, record)
+            self._notify_change(workspace_id, normalized["name"])
             return self._public_entry(workspace_id, normalized)
 
     async def remove(self, workspace_id: str, name: str, *, confirm: bool) -> None:
@@ -259,6 +290,7 @@ class WorkspaceServiceManager:
             self._runtime.pop((workspace_id, name), None)
             record["services"] = [item for item in record["services"] if item["name"] != name]
             self._save(workspace, record)
+            self._notify_change(workspace_id, name)
 
     # --------------------------------------------------------------- lifecycle
 
@@ -309,6 +341,7 @@ class WorkspaceServiceManager:
                     )
             cwd = self._resolve_cwd(workspace, entry["cwd"])
             await self._launch(workspace, entry, cwd)
+            self._notify_change(workspace_id, entry["name"])
             return self._public_entry(workspace_id, entry)
 
     async def stop(self, workspace_id: str, name: str, *, confirm: bool) -> None:
@@ -322,6 +355,7 @@ class WorkspaceServiceManager:
             if not any(item["name"] == name for item in record["services"]):
                 raise WorkspaceServiceNotFound(name)
             await self._stop_locked(workspace_id, name, missing_ok=False)
+            self._notify_change(workspace_id, name)
 
     async def preview_target(
         self, workspace_id: str, name: str, *, expected_generation: int, port_name: str | None = None,

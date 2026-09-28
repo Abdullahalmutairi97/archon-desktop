@@ -101,6 +101,7 @@ from .services.workspace_services import (
 from .services.workspace_gateway import (
     WorkspaceGatewayError,
     WorkspaceGatewayRequestRejected,
+    WorkspaceGatewayServiceUnavailable,
     WorkspaceGatewayTicketUnavailable,
     WorkspacePreviewGateway,
 )
@@ -951,6 +952,9 @@ def create_app(
                     state_root=data_root / "workspace-services",
                 )
                 local_workspace_preview = WorkspacePreviewGateway(local_workspace_services)
+                # A preview ticket is bound to the process that answered when it was
+                # opened, so every change to that binding drops the tickets for it.
+                local_workspace_services.set_change_listener(local_workspace_preview.revoke_service)
                 runner_enrollments = RunnerEnrollmentService(data_root / "runner-enrollments")
                 runner_outbox = RunnerOutbox(data_root / "runner-outbox")
                 runner_results = RunnerResultLedger(data_root / "runner-results")
@@ -1992,6 +1996,8 @@ def create_app(
             raise HTTPException(status_code=404, detail="Workspace service is not registered") from exc
         except WorkspaceServiceConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkspaceGatewayServiceUnavailable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except WorkspaceGatewayError as exc:
             raise HTTPException(status_code=429, detail=str(exc)) from exc
         except ValueError as exc:
@@ -2041,7 +2047,7 @@ def create_app(
             await websocket.close(code=1011)
             return
         try:
-            target = gateway.websocket_target(ticket, path=path, query=websocket.url.query)
+            target = await gateway.websocket_target(ticket, path=path, query=websocket.url.query)
         except WorkspaceGatewayTicketUnavailable:
             await websocket.close(code=1008)
             return
@@ -2050,6 +2056,12 @@ def create_app(
             await websocket.close(code=1008)
             return
         await websocket.accept()
+        revocation: dict[str, bool] = {"lost": False}
+
+        def mark_revoked() -> None:
+            revocation["lost"] = True
+
+        watchdog = gateway.schedule_revalidation(ticket, mark_revoked)
         try:
             import websockets
             async with websockets.connect(target, max_size=2 * 1024 * 1024, open_timeout=10) as upstream:
@@ -2074,7 +2086,16 @@ def create_app(
                     except Exception:
                         return
 
-                tasks = {asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())}
+                async def stop_when_revoked() -> None:
+                    while not revocation["lost"]:
+                        await asyncio.sleep(0.25)
+                    return
+
+                tasks = {
+                    asyncio.create_task(client_to_upstream()),
+                    asyncio.create_task(upstream_to_client()),
+                    asyncio.create_task(stop_when_revoked()),
+                }
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in pending:
                     task.cancel()
@@ -2082,6 +2103,7 @@ def create_app(
         except Exception:
             pass
         finally:
+            watchdog.cancel()
             try:
                 await websocket.close()
             except Exception:

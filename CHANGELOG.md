@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — preview tickets die with the binding they were minted for
+
+- A workspace service preview ticket is now re-validated against the live workspace, service and process, so a stale preview page stops reaching a process it no longer belongs to. The server drops a ticket when the workspace generation changed, the service was redefined, stopped or removed, and it refuses to open a preview for a service that has no running process. Every service change notifies the preview gateway through a manager change listener, so revocation follows the state change instead of depending on each route. An open WebSocket is watched on a bounded interval and closed as soon as its binding is lost; a normal HTTP preview re-checks at most once per second so an asset-heavy page is not slowed down, which bounds how long a stale ticket can still answer.
+
 ## Unreleased — a handover must quiesce the writers it cannot see
 
 - Taking the workspace write lease now accounts for the writers a lease cannot name. `POST /api/local/workspaces/{id}/write-lease` reports the live writers (`terminals`, `services`, `agentTasks`) and refuses with 409 while this server's own terminals or services are still running, unless the caller passes `quiesce: true`, which stops them (terminals terminated, services stopped with confirmation) and verifies none remain before the lease is recorded. An agent task always refuses the handover, because this server cannot stop one mid-turn without leaving unknown side effects. Driving an existing shell already required the lease; that path now only reachable by seeding a competing lease, as a crash would leave it.

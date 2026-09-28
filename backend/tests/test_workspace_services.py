@@ -869,3 +869,31 @@ def test_resource_summary_counts_agent_tasks_bound_to_the_checkout(tmp_path):
         body = client.get(f"/api/local/workspaces/{workspace_id}/resources", headers=headers).json()
         assert body["agentTasks"]["queued"] == 2
 
+@pytest.mark.asyncio
+async def test_service_changes_notify_a_listener_that_an_outside_capability_can_follow(tmp_path):
+    """Every change to which process backs a service tells the listener, and a
+    failing listener never fails the state change."""
+    manager, _launches = _recording_manager(tmp_path)
+    seen: list[tuple[str, str]] = []
+    manager.set_change_listener(lambda workspace_id, name: seen.append((workspace_id, name)))
+    assert manager.change_listener is not None
+    with pytest.raises(ValueError):
+        manager.set_change_listener("not callable")  # type: ignore[arg-type]
+
+    definition = {"name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}]}
+    await manager.define(WORKSPACE_ID, definition)
+    await manager.start(WORKSPACE_ID, "web")
+    await manager.stop(WORKSPACE_ID, "web", confirm=True)
+    await manager.remove(WORKSPACE_ID, "web", confirm=True)
+    assert seen == [(WORKSPACE_ID, "web")] * 4
+
+    def broken(_workspace_id, _name):
+        raise RuntimeError("listener exploded")
+
+    manager.set_change_listener(broken)
+    await manager.define(WORKSPACE_ID, definition)
+    await manager.start(WORKSPACE_ID, "web")
+    assert (await manager.list(WORKSPACE_ID))[0]["state"] == "running"
+    manager.set_change_listener(None)
+    await manager.stop(WORKSPACE_ID, "web", confirm=True)
+

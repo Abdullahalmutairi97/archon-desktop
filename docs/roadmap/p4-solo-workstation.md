@@ -22,7 +22,7 @@ Prioritize an authenticated interactive attach to the existing checkout shell, t
 - [ ] Launch only registered services and validate targets inside the workspace namespace. A chat URL or parsed log port does not authorize execution or proxy access.
 - [ ] Provide an authenticated service-specific gateway and per-view loopback tunnel, origin and storage partition; forward HTTP/HMR/WebSockets while stripping control credentials.
 - [ ] Use sandboxed remote views with no Node integration or Archon preload. Validate privileged IPC senders and prevent preview access to control/private destinations, other services and credential-bearing redirects.
-- [ ] Teardown view/tunnel state and invalidate tickets on service generation changes. Keep IDE auth or restrict its listener to the gateway-only path.
+- [ ] Teardown view/tunnel state and invalidate tickets on service generation changes. Keep IDE auth or restrict its listener to the gateway-only path. Ticket re-validation and revocation are in place: every proxied HTTP request and every WebSocket re-checks the ticket against the live generation, service and process state (a bounded one-second cache for HTTP, a two-second watchdog for an open socket), a service that is not running cannot be previewed at all, and each definition/start/stop/removal notifies the gateway so tickets are dropped with the binding. The IDE listener is still loopback TCP with `--auth none`, so any host-local process can reach a code-server instance and bypass the gateway: 'keep IDE auth or restrict its listener' is not satisfied yet.
 - [ ] Add on-demand/idle behavior and limits using P3 aggregate accounting; UI closure must not kill an active shell/service.
 
 ## Validation and exit

@@ -11,6 +11,7 @@ import pytest
 from archon_server.db import Database
 from archon_server.services.workspace_gateway import (
     WorkspaceGatewayRequestRejected,
+    WorkspaceGatewayServiceUnavailable,
     WorkspaceGatewayTicketUnavailable,
     WorkspacePreviewGateway,
 )
@@ -79,9 +80,49 @@ def _serve() -> tuple[http.server.HTTPServer, threading.Thread, int]:
     return server, thread, port
 
 
-@pytest.mark.asyncio
-async def test_open_requires_a_registered_service_and_declared_port(tmp_path):
+
+
+class _GateProcess:
+    """A fake service process: the gateway only needs the manager's state."""
+
+    def __init__(self) -> None:
+        self.returncode = None
+        self.stdout = None
+
+    async def wait(self) -> int:
+        while self.returncode is None:
+            await asyncio.sleep(0.01)
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.returncode = 0
+
+    def kill(self) -> None:
+        self.returncode = 0
+
+
+def _startable_manager(tmp_path: Path) -> WorkspaceServiceManager:
+    """A manager whose fake spawn lets a service reach the running state."""
     manager = _manager(tmp_path)
+
+    async def fake_spawn(*_argv, **_kwargs):
+        return _GateProcess()
+
+    manager._spawn = fake_spawn
+    return manager
+
+
+async def _running_manager(tmp_path: Path, *definitions: dict) -> WorkspaceServiceManager:
+    manager = _startable_manager(tmp_path)
+    for definition in definitions:
+        await manager.define(WORKSPACE_ID, definition)
+        await manager.start(WORKSPACE_ID, definition["name"])
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_open_requires_a_registered_running_service_and_declared_port(tmp_path):
+    manager = _startable_manager(tmp_path)
     gateway = WorkspacePreviewGateway(manager, forward=_unused_forward)
     with pytest.raises(WorkspaceServiceNotFound):
         await gateway.open(WORKSPACE_ID, "missing", expected_generation=1)
@@ -91,6 +132,10 @@ async def test_open_requires_a_registered_service_and_declared_port(tmp_path):
     await manager.define(WORKSPACE_ID, {
         "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
     })
+    # A registered but stopped service has nothing to proxy to.
+    with pytest.raises(WorkspaceGatewayServiceUnavailable):
+        await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    await manager.start(WORKSPACE_ID, "web")
     preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
     assert preview["ticket"].startswith("wprev-") and preview["mode"] == "read-only"
     with pytest.raises(ValueError):
@@ -105,8 +150,7 @@ async def _unused_forward(*_args, **_kwargs):  # pragma: no cover - open() never
 
 @pytest.mark.asyncio
 async def test_proxy_contract_forwards_allowlisted_headers_and_strips_cookies(tmp_path):
-    manager = _manager(tmp_path)
-    await manager.define(WORKSPACE_ID, {
+    manager = await _running_manager(tmp_path, {
         "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
     })
     calls: list[tuple] = []
@@ -140,8 +184,7 @@ async def test_proxy_contract_forwards_allowlisted_headers_and_strips_cookies(tm
 
 @pytest.mark.asyncio
 async def test_proxy_rejects_bad_tickets_methods_and_oversized_bodies(tmp_path):
-    manager = _manager(tmp_path)
-    await manager.define(WORKSPACE_ID, {
+    manager = await _running_manager(tmp_path, {
         "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
     })
 
@@ -162,8 +205,7 @@ async def test_proxy_rejects_bad_tickets_methods_and_oversized_bodies(tmp_path):
 
 @pytest.mark.asyncio
 async def test_proxy_rewrites_same_origin_and_drops_cross_origin_redirects(tmp_path):
-    manager = _manager(tmp_path)
-    await manager.define(WORKSPACE_ID, {
+    manager = await _running_manager(tmp_path, {
         "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
     })
     replies = [
@@ -184,8 +226,7 @@ async def test_proxy_rewrites_same_origin_and_drops_cross_origin_redirects(tmp_p
 
 @pytest.mark.asyncio
 async def test_revoke_workspace_drops_sessions(tmp_path):
-    manager = _manager(tmp_path)
-    await manager.define(WORKSPACE_ID, {
+    manager = await _running_manager(tmp_path, {
         "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
     })
     gateway = WorkspacePreviewGateway(manager, forward=_unused_forward)
@@ -197,8 +238,7 @@ async def test_revoke_workspace_drops_sessions(tmp_path):
 
 @pytest.mark.asyncio
 async def test_preview_ticket_expires(tmp_path):
-    manager = _manager(tmp_path)
-    await manager.define(WORKSPACE_ID, {
+    manager = await _running_manager(tmp_path, {
         "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
     })
     gateway = WorkspacePreviewGateway(manager, ttl_seconds=0.05, forward=_unused_forward)
@@ -210,8 +250,7 @@ async def test_preview_ticket_expires(tmp_path):
 
 @pytest.mark.asyncio
 async def test_preview_requires_a_single_port_or_a_named_choice(tmp_path):
-    manager = _manager(tmp_path)
-    await manager.define(WORKSPACE_ID, {
+    manager = await _running_manager(tmp_path, {
         "name": "web", "argv": ["/bin/echo"],
         "ports": [{"name": "http", "port": 4173}, {"name": "ws", "port": 4174}],
     })
@@ -232,8 +271,7 @@ async def test_preview_requires_a_single_port_or_a_named_choice(tmp_path):
 
 @pytest.mark.asyncio
 async def test_truncated_response_is_flagged(tmp_path):
-    manager = _manager(tmp_path)
-    await manager.define(WORKSPACE_ID, {
+    manager = await _running_manager(tmp_path, {
         "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
     })
 
@@ -248,15 +286,15 @@ async def test_truncated_response_is_flagged(tmp_path):
 
 @pytest.mark.asyncio
 async def test_websocket_target_uses_the_declared_loopback_port(tmp_path):
-    manager = _manager(tmp_path)
-    await manager.define(WORKSPACE_ID, {
+    manager = await _running_manager(tmp_path, {
         "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
     })
     gateway = WorkspacePreviewGateway(manager, forward=_unused_forward)
     preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
-    assert gateway.websocket_target(preview["ticket"], path="hmr", query="a=1") == "ws://127.0.0.1:4173/hmr?a=1"
+    target = await gateway.websocket_target(preview["ticket"], path="hmr", query="a=1")
+    assert target == "ws://127.0.0.1:4173/hmr?a=1"
     with pytest.raises(WorkspaceGatewayTicketUnavailable):
-        gateway.websocket_target("wprev-" + "0" * 32, path="", query="")
+        await gateway.websocket_target("wprev-" + "0" * 32, path="", query="")
 
 
 def test_preview_websocket_route_rejects_an_invalid_ticket(tmp_path):
@@ -285,10 +323,11 @@ def test_preview_websocket_route_rejects_an_invalid_ticket(tmp_path):
 async def test_default_forward_reaches_a_real_loopback_service(tmp_path):
     server, _thread, port = _serve()
     try:
-        manager = _manager(tmp_path)
+        manager = _startable_manager(tmp_path)
         await manager.define(WORKSPACE_ID, {
             "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": port}],
         })
+        await manager.start(WORKSPACE_ID, "web")
         gateway = WorkspacePreviewGateway(manager)
         preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
         ok = await gateway.proxy(preview["ticket"], method="GET", path="ok", query="", headers={"accept": "text/plain"}, body=b"")
@@ -301,3 +340,118 @@ async def test_default_forward_reaches_a_real_loopback_service(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+@pytest.mark.asyncio
+async def test_a_ticket_stops_working_when_the_binding_changes(tmp_path):
+    """A ticket is a capability for one binding; a stopped process or a new
+    generation must end it instead of reaching whatever answers next."""
+    manager = await _running_manager(tmp_path, {
+        "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
+    })
+
+    async def fake_forward(*_args, **_kwargs):
+        return {"status": 200, "headers": {}, "body": b"ok", "truncated": False, "location": None}
+
+    gateway = WorkspacePreviewGateway(manager, forward=fake_forward)
+    preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    ticket = preview["ticket"]
+    assert (await gateway.proxy(ticket, method="GET", path="", query="", headers={}, body=b""))["status"] == 200
+
+    # Stop the process. The live check is cached for a second so a preview can load
+    # its assets, so a forced check fails at once and the cached one follows.
+    await manager.stop(WORKSPACE_ID, "web", confirm=True)
+    with pytest.raises(WorkspaceGatewayTicketUnavailable):
+        await gateway.authorize(ticket, force=True)
+    # The route that stops a service revokes its tickets immediately.
+    gateway.revoke_service(WORKSPACE_ID, "web")
+    with pytest.raises(WorkspaceGatewayTicketUnavailable):
+        gateway.resolve(ticket)
+
+    # A new generation is a different checkout, so a ticket from the old one is refused too.
+    await manager.start(WORKSPACE_ID, "web")
+    fresh = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    with manager.database.transaction() as conn:
+        conn.execute("UPDATE workspaces SET generation=2 WHERE workspace_id=?", (WORKSPACE_ID,))
+    with pytest.raises(WorkspaceGatewayTicketUnavailable):
+        await gateway.proxy(fresh["ticket"], method="GET", path="", query="", headers={}, body=b"")
+
+
+@pytest.mark.asyncio
+async def test_revoke_service_keeps_other_services_previews(tmp_path):
+    manager = await _running_manager(tmp_path, {
+        "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
+    }, {
+        "name": "api", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4174}],
+    })
+    gateway = WorkspacePreviewGateway(manager, forward=_unused_forward)
+    web = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    api = await gateway.open(WORKSPACE_ID, "api", expected_generation=1)
+    gateway.revoke_service(WORKSPACE_ID, "web")
+    with pytest.raises(WorkspaceGatewayTicketUnavailable):
+        gateway.resolve(web["ticket"])
+    assert gateway.resolve(api["ticket"])["service"] == "api"
+    assert await gateway.authorize(api["ticket"], force=True) is not None
+
+
+@pytest.mark.asyncio
+async def test_authorize_rechecks_are_cached_but_forcible(tmp_path):
+    """A preview loads many assets, so the live check is cached briefly - and a
+    forced check always reaches the service manager."""
+    manager = await _running_manager(tmp_path, {
+        "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
+    })
+    gateway = WorkspacePreviewGateway(manager, forward=_unused_forward)
+    preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    calls = 0
+    original = manager.preview_target
+
+    async def counting(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await original(*args, **kwargs)
+
+    manager.preview_target = counting
+    await gateway.authorize(preview["ticket"])
+    await gateway.authorize(preview["ticket"])
+    assert calls == 1
+    await gateway.authorize(preview["ticket"], force=True)
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_schedule_revalidation_reports_a_lost_binding(tmp_path):
+    manager = await _running_manager(tmp_path, {
+        "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
+    })
+    gateway = WorkspacePreviewGateway(manager, forward=_unused_forward)
+    preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    lost = asyncio.Event()
+    task = gateway.schedule_revalidation(preview["ticket"], lost.set)
+    gateway.revoke_service(WORKSPACE_ID, "web")
+    await asyncio.wait_for(lost.wait(), timeout=5)
+    await asyncio.wait_for(task, timeout=5)
+
+def test_the_server_wires_service_changes_to_preview_revocation(tmp_path):
+    """A ticket must not outlive the process binding it was minted for, so the
+    server connects every service change to the preview gateway."""
+    from fastapi.testclient import TestClient
+
+    from archon_server.app import create_app
+    from archon_server.config import Settings
+
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        services = client.app.state.local_workspace_services
+        gateway = client.app.state.local_workspace_preview
+        assert services is not None and gateway is not None
+        listener = services.change_listener
+        assert listener is not None and getattr(listener, "__self__", None) is gateway
+        assert listener.__name__ == "revoke_service"
+
