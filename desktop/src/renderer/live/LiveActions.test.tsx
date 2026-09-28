@@ -71,6 +71,7 @@ function serverFor(bridge: DesktopBridge, rows: readonly JsonRecord[] = ALL_ROWS
     sessions: liveSessions(rows),
     refreshing: false,
     refresh: vi.fn(),
+    renameSession: vi.fn(),
   }
 }
 

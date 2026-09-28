@@ -157,7 +157,7 @@ describe('new conversation in a checkout', () => {
       throw new Error(operation)
     })
     const server: LiveServer = {
-      status: 'ready', scope: scopeFor(bridge), projects: liveProjects([project]), sessions: [], refreshing: false, refresh: vi.fn(),
+      status: 'ready', scope: scopeFor(bridge), projects: liveProjects([project]), sessions: [], refreshing: false, refresh: vi.fn(), renameSession: vi.fn(),
     }
     render(<LiveChatView server={server} sessionId={null} preferredProjectId="project-1" pollDelayMs={60_000} onOpenSession={vi.fn()} onNewConversation={vi.fn()} onOpenConnection={vi.fn()} onOpenTasks={vi.fn()} />)
 

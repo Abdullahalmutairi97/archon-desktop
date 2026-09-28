@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import type { DesktopBridge, SessionMessageRecord, TaskEventRecord, TaskRecord } from '../../shared/bridge/types'
 import { normalizeTaskView } from '../../shared/domain/queue'
 import { Icon } from '../shell/Icon'
-import { ConfirmDialog } from './LiveDialog'
+import { ConfirmDialog, RenameDialog } from './LiveDialog'
 import {
   advanceTask,
   continuationBlocker,
@@ -223,6 +223,7 @@ function LiveConversation({
   onConversationChanged,
   onNewConversation,
   onDeleted,
+  onRename,
 }: {
   scope: LiveScope
   sessionId: string
@@ -232,6 +233,7 @@ function LiveConversation({
   onConversationChanged(): void
   onNewConversation(projectId: string | null): void
   onDeleted(projectId: string | null): void
+  onRename(sessionId: string, name: string | null): void
 }) {
   const { bridge } = scope
   const tracker = useTaskTracker(bridge, pollDelayMs)
@@ -243,7 +245,7 @@ function LiveConversation({
   const [notice, setNotice] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [sentPrompt, setSentPrompt] = useState<string | null>(null)
-  const [dialog, setDialog] = useState<'delete' | 'share' | null>(null)
+  const [dialog, setDialog] = useState<'delete' | 'share' | 'rename' | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteFailure, setDeleteFailure] = useState<string | null>(null)
   const alive = useRef(true)
@@ -433,6 +435,7 @@ function LiveConversation({
       {session && session.ownership !== 'verified' && <span className="fixture-tag live-tag-review">{session.ownership === 'review_required' ? 'REVIEW REQUIRED' : 'UNVERIFIED'}</span>}
       <button type="button" className="text-button" onClick={() => setTranscriptRequest((value) => value + 1)} disabled={transcript.state === 'loading' || (transcript.state === 'ready' && transcript.refreshing)}>Reload</button>
       <button type="button" className="text-button" onClick={() => onNewConversation(session?.projectId ?? null)}>New conversation</button>
+      <button type="button" className="text-button" onClick={() => setDialog('rename')} disabled={!session || deleting}>Rename</button>
       <button type="button" className="text-button" onClick={() => setDialog('share')} disabled={deleting}>Share</button>
       <button type="button" className="text-button live-danger-text" onClick={() => { setDeleteFailure(null); setDialog('delete') }} disabled={!!deleteBlocker || deleting} title={deleteBlocker ?? undefined}>Delete conversation</button>
     </div>
@@ -448,6 +451,13 @@ function LiveConversation({
     >
       <ul className="live-dialog-list" aria-label="Conversations to remove"><li dir="auto">{session?.title ?? sessionId}</li></ul>
     </ConfirmDialog>}
+    {dialog === 'rename' && session && <RenameDialog
+      currentName={session.title}
+      serverTitle={session.serverTitle}
+      locallyNamed={session.locallyNamed}
+      onCancel={() => setDialog(null)}
+      onSave={(name) => { onRename(session.id, name); setDialog(null) }}
+    />}
     {dialog === 'share' && <ShareDialog
       bridge={bridge}
       source={{ kind: 'session', title: session?.title ?? 'Server conversation', session: { id: sessionId, title: session?.title ?? 'Server conversation' } }}
@@ -741,6 +751,7 @@ export function LiveChatView({
         refresh()
         onNewConversation(projectId)
       }}
+      onRename={server.renameSession}
     />
   }
   return <NewConversation

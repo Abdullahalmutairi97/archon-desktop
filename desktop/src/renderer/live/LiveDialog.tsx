@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { MAX_CONVERSATION_NAME } from './conversationNames'
 import './LiveViews.css'
 
 const FOCUSABLE = 'button:not(:disabled), textarea:not(:disabled), select:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
@@ -100,5 +101,35 @@ export function ConfirmDialog({
   </>}>
     <p className="live-dialog-detail">{detail}</p>
     {children}
+  </LiveDialog>
+}
+
+/** Name a conversation on this computer; the server's title is never changed. */
+export function RenameDialog({
+  currentName,
+  serverTitle,
+  locallyNamed,
+  onCancel,
+  onSave,
+}: {
+  currentName: string
+  serverTitle: string
+  locallyNamed: boolean
+  onCancel(): void
+  onSave(name: string | null): void
+}) {
+  const field = useRef<HTMLInputElement>(null)
+  const [name, setName] = useState(currentName)
+  const trimmed = name.trim()
+  return <LiveDialog eyebrow="LOCAL NAME" title="Rename conversation" initialFocus={field} onCancel={onCancel} footer={<>
+    <button type="button" onClick={onCancel}>Cancel</button>
+    {locallyNamed && <button type="button" onClick={() => onSave(null)}>Use server title</button>}
+    <button type="submit" form="live-rename-form" disabled={!trimmed}>Save</button>
+  </>}>
+    <form id="live-rename-form" className="live-form" onSubmit={(event) => { event.preventDefault(); if (trimmed) onSave(trimmed) }}>
+      <label htmlFor="live-rename-name">Name</label>
+      <input id="live-rename-name" ref={field} dir="auto" value={name} maxLength={MAX_CONVERSATION_NAME} onChange={(event) => setName(event.currentTarget.value)} />
+      <p className="live-task-note">Kept on this computer only. The server keeps its own title: <span dir="auto">{serverTitle}</span></p>
+    </form>
   </LiveDialog>
 }

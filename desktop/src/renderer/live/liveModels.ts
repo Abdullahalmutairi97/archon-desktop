@@ -18,7 +18,12 @@ export type LiveProject = {
 
 export type LiveSession = {
   id: string
+  /** What the app shows: the owner's local name when there is one, else the server's title. */
   title: string
+  /** The title the server derived; kept so a local name can be cleared. */
+  serverTitle: string
+  /** A local name (kept on this computer) replaces the server's title. */
+  locallyNamed: boolean
   preview: string | null
   runtime: LiveRuntime | null
   projectId: string | null
@@ -144,6 +149,8 @@ export function liveSessions(rows: readonly JsonRecord[]): LiveSession[] {
     return [{
       id: row.id,
       title: displayLine(row.title, MAX_TITLE_LENGTH) ?? 'Untitled conversation',
+      serverTitle: displayLine(row.title, MAX_TITLE_LENGTH) ?? 'Untitled conversation',
+      locallyNamed: false,
       preview: displayLine(row.preview, MAX_PREVIEW_LENGTH),
       runtime: ownership === 'verified' && (row.runtime === 'prime' || row.runtime === 'pi') ? row.runtime : null,
       projectId: projectId(row.project_id),

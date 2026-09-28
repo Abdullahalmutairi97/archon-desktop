@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ConnectionDescription, DesktopBridge } from '../../shared/bridge/types'
+import { readConversationNames, writeConversationName, type ConversationNames } from './conversationNames'
 import { liveProjects, liveSessions, operationErrorCode, type LiveProject, type LiveSession } from './liveModels'
 
 /** Rows the shared session list asks for; the server may cap it further. */
@@ -27,6 +28,8 @@ export type LiveServer = {
   refreshing: boolean
   /** Re-read the connection and reload projects and sessions. */
   refresh(): void
+  /** Give a conversation a local name on this computer, or clear it with null. */
+  renameSession(sessionId: string, name: string | null): void
 }
 
 type DescribeState = { bridge: DesktopBridge; description: ConnectionDescription | null }
@@ -118,6 +121,16 @@ export function useLiveServer(bridge: DesktopBridge | undefined, routeKey: strin
     }
   }, [bridge, configured, generation, validGeneration, reload])
 
+  const [names, setNames] = useState<{ serverUrl: string | null; names: ConversationNames }>({ serverUrl: null, names: {} })
+  useEffect(() => { setNames({ serverUrl, names: readConversationNames(serverUrl) }) }, [serverUrl])
+  const currentNames = names.serverUrl === serverUrl ? names.names : null
+  const renameSession = useCallback((sessionId: string, name: string | null) => {
+    setNames((current) => ({
+      serverUrl,
+      names: writeConversationName(serverUrl, current.serverUrl === serverUrl ? current.names : readConversationNames(serverUrl), sessionId, name),
+    }))
+  }, [serverUrl])
+
   const refresh = useCallback(() => {
     setDescribeRequest((value) => value + 1)
     setReload((value) => value + 1)
@@ -143,8 +156,16 @@ export function useLiveServer(bridge: DesktopBridge | undefined, routeKey: strin
     status,
     scope,
     projects: current?.state === 'ready' ? current.projects : NO_PROJECTS,
-    sessions: current?.state === 'ready' ? current.sessions : NO_SESSIONS,
+    sessions: current?.state === 'ready' ? named(current.sessions, currentNames) : NO_SESSIONS,
     refreshing: current?.state === 'ready' && current.refreshing,
     refresh,
+    renameSession,
   }
+}
+
+function named(sessions: readonly LiveSession[], names: ConversationNames | null): readonly LiveSession[] {
+  if (!names || !Object.keys(names).length) return sessions
+  return sessions.map((session) => names[session.id]
+    ? { ...session, title: names[session.id], locallyNamed: true }
+    : session)
 }
