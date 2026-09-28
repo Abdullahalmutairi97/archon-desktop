@@ -593,6 +593,14 @@ describe('language profile report validation', () => {
       unpinnedInstalled: [],
       pinsVerified: false,
       note: 'Installed means the pinned version is present and its files still hash to the recorded digest.',
+    debug: {
+      adapters: [],
+      unsupported: [{ profile: null, feature: 'dap-session-control', reason: 'this server cannot start a session' }],
+      codeServer: null,
+      sessionExercised: false,
+      breakpointVerified: false,
+      note: 'This block reports artefacts and gaps.',
+    },
       ...overrides,
     }
   }
@@ -628,5 +636,23 @@ describe('language profile report validation', () => {
     }
     expect(() => parseLanguageProfilesBackendResponse(LANGUAGE_PROFILES_CHANNELS.list, report({ pinsVerified: 'no' }))).toThrow(TypeError)
     expect(() => parseLanguageProfilesBackendResponse('archon:workspace-services:list', report())).toThrow(TypeError)
+  })
+
+  it('refuses a debug block that claims a session or a breakpoint', () => {
+    const claimed = report({ debug: {
+      adapters: [], unsupported: [], codeServer: null,
+      sessionExercised: true, breakpointVerified: false, note: 'claimed',
+    } })
+    expect(() => parseLanguageProfilesBackendResponse(LANGUAGE_PROFILES_CHANNELS.list, claimed)).toThrow(TypeError)
+    const verified = report({ debug: {
+      adapters: [], unsupported: [], codeServer: null,
+      sessionExercised: false, breakpointVerified: true, note: 'claimed',
+    } })
+    expect(() => parseLanguageProfilesBackendResponse(LANGUAGE_PROFILES_CHANNELS.list, verified)).toThrow(TypeError)
+    const unknownKey = report({ debug: {
+      adapters: [], unsupported: [], codeServer: null,
+      sessionExercised: false, breakpointVerified: false, note: 'ok', extra: 1,
+    } })
+    expect(() => parseLanguageProfilesBackendResponse(LANGUAGE_PROFILES_CHANNELS.list, unknownKey)).toThrow(TypeError)
   })
 })

@@ -37,6 +37,24 @@ function report(overrides: Partial<LanguageProfilesDto> = {}): LanguageProfilesD
     }],
     pinsVerified: false,
     note: 'Installed means the pinned version is present and its files still hash to the recorded digest.',
+    debug: {
+      adapters: [{
+        profile: 'python', extensionId: 'ms-python.debugpy', version: '2026.6.0', state: 'installed',
+        reason: null, declaredLicence: 'MIT', pinnedInstalledSha256: 'f'.repeat(64),
+      }],
+      unsupported: [{ profile: 'javascript-typescript', feature: 'debugging', reason: 'no debug adapter is pinned for this profile' }],
+      codeServer: {
+        registered: true, state: 'running', argv: ['/opt/code-server', '--bind-addr', '127.0.0.1:4173', '--auth', 'none'],
+        ports: [{ name: 'http', port: 4173 }], authMode: 'none', bindAddress: '127.0.0.1:4173',
+        resourceControls: {
+          memoryLimitMb: null, cpuQuotaPercent: null, tasksMax: null,
+          filesystemIsolation: 'none', networkIsolation: 'host',
+        },
+        accountNote: 'the IDE runs as the backend owner account with no confirmed resource or filesystem confinement',
+      },
+      sessionExercised: false, breakpointVerified: false,
+      note: 'This block reports artefacts and gaps. No debug session has been started.',
+    },
     ...overrides,
   }
 }
@@ -51,7 +69,7 @@ describe('LanguageProfiles', () => {
     render(<LanguageProfiles bridge={bridge} workspaceId={WORKSPACE_ID} generation={2} pairingAvailable />)
 
     expect(await screen.findByText('ms-python.python@2026.4.0')).toBeInTheDocument()
-    expect(screen.getByText('installed')).toBeInTheDocument()
+    expect(screen.getAllByText('installed').length).toBeGreaterThan(0)
     expect(screen.getByText('ms-python.debugpy@2026.6.0')).toBeInTheDocument()
     expect(screen.getByText('missing')).toBeInTheDocument()
     // An unsupported capability is named with its reason, never implied as working.
@@ -61,6 +79,11 @@ describe('LanguageProfiles', () => {
     expect(screen.getByText('ms-python.vscode-python-envs@1.38.0')).toBeInTheDocument()
     expect(screen.getByText('no licence field')).toBeInTheDocument()
     expect(screen.getByText(/not a behavioural qualification/)).toBeInTheDocument()
+    // Debug readiness is reported as artefacts and gaps, never as a capability.
+    expect(screen.getByText('ms-python.debugpy@2026.6.0')).toBeInTheDocument()
+    expect(screen.getByText('debugging')).toBeInTheDocument()
+    expect(screen.getByText(/no session exercised, no breakpoint verified/)).toBeInTheDocument()
+    expect(screen.getByText(/auth none/)).toBeInTheDocument()
     expect(bridge.list).toHaveBeenCalledWith({ workspaceId: WORKSPACE_ID })
   })
 

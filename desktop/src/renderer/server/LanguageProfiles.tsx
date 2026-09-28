@@ -3,6 +3,10 @@ import type { LanguageProfileDto, LanguageProfilesBridge, LanguageProfilesDto } 
 
 const EMPTY: LanguageProfilesDto = {
   extensionsDirectory: '', profiles: [], unpinnedInstalled: [], pinsVerified: false, note: '',
+  debug: {
+    adapters: [], unsupported: [], codeServer: null,
+    sessionExercised: false, breakpointVerified: false, note: '',
+  },
 }
 
 function stateLabel(state: string): string {
@@ -102,5 +106,41 @@ export function LanguageProfiles({
       </ul>
     </div>}
     {report.note && <p className="workspace-services-controls">{report.note}</p>}
+    <div>
+      <h5>Debug readiness</h5>
+      <ul className="workspace-services-list">
+        <li>
+          <span className="service-state service-failed">not verified</span>
+          <code>debug session</code>
+          <span className="workspace-services-controls">
+            no session exercised, no breakpoint verified; this server cannot start or observe one
+          </span>
+        </li>
+        {report.debug.adapters.map((adapter) => <li key={`${adapter.profile}:${adapter.extensionId ?? 'none'}`}>
+          <span className={`service-state service-${adapter.state === 'installed' ? 'running' : 'failed'}`}>
+            {adapter.state ?? 'unknown'}
+          </span>
+          <code>{adapter.extensionId ?? 'no adapter'} {adapter.version ? `@${adapter.version}` : ''}</code>
+          <span className="workspace-services-controls">
+            {adapter.reason ?? `debug adapter for ${adapter.profile} (the extension's own capability)`}
+          </span>
+        </li>)}
+        {report.debug.unsupported.map((row) => <li key={`${row.profile ?? 'host'}:${row.feature}`}>
+          <span className="service-state service-failed">unsupported</span>
+          <code>{row.feature}</code>
+          <span className="workspace-services-controls">{row.reason}</span>
+        </li>)}
+      </ul>
+      {report.debug.codeServer && <ul className="workspace-services-list">
+        <li>
+          <span className="service-state service-running">{report.debug.codeServer.state ?? 'registered'}</span>
+          <code>code-server {report.debug.codeServer.bindAddress ?? 'address unknown'}</code>
+          <span className="workspace-services-controls">
+            auth {report.debug.codeServer.authMode} · {report.debug.codeServer.accountNote}
+          </span>
+        </li>
+      </ul>}
+      {report.debug.note && <p className="workspace-services-controls">{report.debug.note}</p>}
+    </div>
   </section>
 }

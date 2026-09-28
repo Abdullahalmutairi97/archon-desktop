@@ -206,6 +206,14 @@ describe('preload bridge', () => {
       unpinnedInstalled: [],
       pinsVerified: false,
       note: 'artefact record',
+    debug: {
+      adapters: [],
+      unsupported: [{ profile: null, feature: 'dap-session-control', reason: 'this server cannot start a session' }],
+      codeServer: null,
+      sessionExercised: false,
+      breakpointVerified: false,
+      note: 'This block reports artefacts and gaps.',
+    },
     }
     const invoke = vi.fn(async () => report)
     const bridge = createDesktopBridge({ invoke })

@@ -360,6 +360,43 @@ export interface LanguageProfileUnpinnedDto {
   reason: string
 }
 
+export interface DebugAdapterDto {
+  profile: string
+  extensionId: string | null
+  version: string | null
+  state: string | null
+  reason: string | null
+  declaredLicence: string | null
+  pinnedInstalledSha256: string | null
+}
+
+export interface DebugUnsupportedDto {
+  profile: string | null
+  feature: string
+  reason: string
+}
+
+export interface DebugCodeServerDto {
+  registered: boolean
+  state: string | null
+  argv: readonly string[]
+  ports: readonly WorkspaceServicePortDto[]
+  authMode: string
+  bindAddress: string | null
+  resourceControls: Readonly<Record<string, unknown>>
+  accountNote: string
+}
+
+/** Debug facts and gaps. The two verified flags are constants and stay false. */
+export interface DebugReadinessDto {
+  adapters: readonly DebugAdapterDto[]
+  unsupported: readonly DebugUnsupportedDto[]
+  codeServer: DebugCodeServerDto | null
+  sessionExercised: boolean
+  breakpointVerified: boolean
+  note: string
+}
+
 /** Owner-scoped, read-only artefact report; it never claims a working feature. */
 export interface LanguageProfilesDto {
   extensionsDirectory: string
@@ -367,6 +404,7 @@ export interface LanguageProfilesDto {
   unpinnedInstalled: readonly LanguageProfileUnpinnedDto[]
   pinsVerified: boolean
   note: string
+  debug: DebugReadinessDto
 }
 
 export interface LanguageProfilesBridge {

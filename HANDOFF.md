@@ -120,11 +120,13 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    What remains is qualification: run a real provider turn inside the profile, then
    record the result. Until that happens, do not describe the profile as qualified
    or turn it on by default.
-2. **P4 debug flow** — a breakpoint/debug flow for the workspace IDE. `ms-python.debugpy`
-   is pinned and installed, but Archon exposes no debug-launch surface and no debug
-   session has been exercised, so the roadmap box stays open. Also open: Pylance is
-   proprietary and cannot be provided from this marketplace, and there is no
-   JavaScript debugger adapter pin.
+2. **P4 debug flow** — blocked on evidence only a human can produce. The server cannot
+   start a session (no code-server session flag, no DAP implementation), so the report
+   states the adapter artefact, the unsupported features and the IDE launch inspection,
+   with `sessionExercised`/`breakpointVerified` as false constants the desktop validator
+   refuses to see flipped. To close the bullet, run a debug session in the workspace IDE
+   once and record what was observed; do not turn those constants on without that. Also
+   open: Pylance is proprietary and absent, and there is no JavaScript debugger pin.
 3. **P3 write-lease remainder** — fence the writers the lease does not reach:
    kernels, debugger/run tasks (no implementation exists to fence yet) and existing
    detached tmux children, which a later handover does not revoke.

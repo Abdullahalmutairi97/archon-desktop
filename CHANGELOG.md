@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — debug readiness is reported, not claimed
+
+- Add a bounded `debug` block to the owner-only `GET /api/local/workspaces/{id}/language-profiles` report: the pinned debug adapter with its version, digest and install state, the debug features this host cannot provide with reasons (no JavaScript debugger pin; this server speaks no debug adapter protocol and code-server exposes no session flag), and how the IDE service is actually launched (argv, state, ports, `authMode`, bind address and declared resource controls) when it is registered. `sessionExercised` and `breakpointVerified` are false constants, and the desktop validator refuses any payload that sets them true, so a fabricated session claim cannot reach the renderer. The desktop renders the same facts including "no session exercised, no breakpoint verified".
+
 ## Unreleased — restore and import evidence
 
 - Add `backend/tests/test_migration_restore_evidence.py`: restore the pre-migration snapshot produced by a mixed-shape legacy database, reopen the restored copy with the current code and require the current schema version, every row/status/native session id/project mapping/tombstone, its own pre-migration copy, an identical `sqlite_master` and migration ledger against a directly migrated database, and an unchanged snapshot file; then drive the hash-checked frozen published-v1 reader through the same procedure so the older binary opens the restored copy and refuses the migrated one.

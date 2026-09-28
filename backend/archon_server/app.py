@@ -68,6 +68,7 @@ from .runner_journal import RunnerJournal, RunnerJournalError, UnsafeJournalPath
 from .sandbox import RuntimeConfinement
 from .runner_ownership import RunnerOwnershipLock
 from .local_codex_event_journal import LocalCodexEventJournal, LocalCodexEventJournalError
+from .debug_profiles import describe_debug_readiness
 from .language_profiles import describe_profiles as describe_language_profiles
 from .local_pairing import LocalPairingBroker, UnixSocketPairingServer
 from .services.local_codex_worker import (
@@ -1674,10 +1675,17 @@ def create_app(
         """
         current_owner_workspace(workspace_id)
         try:
-            return JSONResponse(
-                content=describe_language_profiles(settings.code_server_extensions_dir),
-                headers={"Cache-Control": "no-store"},
-            )
+            report = describe_language_profiles(settings.code_server_extensions_dir)
+            # Debug readiness rides the same owner-only report: adapter artefacts, the
+            # gaps, and how the IDE service is actually launched. No session is started
+            # or observed, and the honesty flags are constants.
+            if local_workspace_services is not None:
+                report["debug"] = describe_debug_readiness(
+                    report["profiles"], services=await local_workspace_services.list(workspace_id),
+                )
+            else:
+                report["debug"] = describe_debug_readiness(report["profiles"])
+            return JSONResponse(content=report, headers={"Cache-Control": "no-store"})
         except ValueError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 

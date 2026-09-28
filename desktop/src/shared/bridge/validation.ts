@@ -46,6 +46,9 @@ import type {
   WorkspaceServiceDefinitionInput,
   LanguageProfileExtensionDto,
   LanguageProfilesDto,
+  DebugAdapterDto,
+  DebugCodeServerDto,
+  DebugReadinessDto,
 } from './types'
 
 export const BRIDGE_CHANNELS = Object.freeze({
@@ -1652,8 +1655,73 @@ function parseLanguageProfileExtension(value: unknown): LanguageProfileExtension
   })
 }
 
+function parseDebugAdapter(value: unknown): DebugAdapterDto {
+  const record = exactObject(value, [
+    'profile', 'extensionId', 'version', 'state', 'reason', 'declaredLicence', 'pinnedInstalledSha256',
+  ])
+  const optionalText = (item: unknown) => item === null ? null : boundedLanguageText(item, { allowNull: true }) as string
+  return Object.freeze({
+    profile: boundedLanguageText(record.profile) as string,
+    extensionId: optionalText(record.extensionId),
+    version: optionalText(record.version),
+    state: optionalText(record.state),
+    reason: optionalText(record.reason),
+    declaredLicence: optionalText(record.declaredLicence),
+    pinnedInstalledSha256: optionalText(record.pinnedInstalledSha256),
+  })
+}
+
+function parseDebugCodeServer(value: unknown): DebugCodeServerDto {
+  const record = exactObject(value, [
+    'registered', 'state', 'argv', 'ports', 'authMode', 'bindAddress', 'resourceControls', 'accountNote',
+  ])
+  if (record.registered !== true) return fail()
+  if (!Array.isArray(record.argv) || record.argv.length > 64) return fail()
+  const argv = Object.freeze(record.argv.map((item) => boundedLanguageText(item) as string))
+  const ports = parseWorkspaceServicePorts(record.ports)
+  const controls = boundedRecord(record.resourceControls, ['memoryLimitMb', 'cpuQuotaPercent', 'tasksMax',
+    'filesystemIsolation', 'networkIsolation'], [])
+  return Object.freeze({
+    registered: true,
+    state: record.state === null ? null : boundedLanguageText(record.state, { allowNull: true }) as string,
+    argv,
+    ports,
+    authMode: boundedLanguageText(record.authMode) as string,
+    bindAddress: record.bindAddress === null ? null : boundedLanguageText(record.bindAddress, { allowNull: true }) as string,
+    resourceControls: Object.freeze({ ...controls }),
+    accountNote: boundedLanguageText(record.accountNote) as string,
+  })
+}
+
+function parseDebugReadiness(value: unknown): DebugReadinessDto {
+  const record = exactObject(value, [
+    'adapters', 'unsupported', 'codeServer', 'sessionExercised', 'breakpointVerified', 'note',
+  ])
+  if (!Array.isArray(record.adapters) || record.adapters.length > 32) return fail()
+  if (!Array.isArray(record.unsupported) || record.unsupported.length > 32) return fail()
+  const unsupported = Object.freeze(record.unsupported.map((item) => {
+    const row = exactObject(item, ['profile', 'feature', 'reason'])
+    return Object.freeze({
+      profile: row.profile === null ? null : boundedLanguageText(row.profile, { allowNull: true }) as string,
+      feature: boundedLanguageText(row.feature) as string,
+      reason: boundedLanguageText(row.reason) as string,
+    })
+  }))
+  // The verified flags are constants: a payload that claims a session or a breakpoint
+  // is refused instead of forwarded to the renderer.
+  if (record.sessionExercised !== false || record.breakpointVerified !== false) return fail()
+  return Object.freeze({
+    adapters: Object.freeze(record.adapters.map(parseDebugAdapter)),
+    unsupported,
+    codeServer: record.codeServer === null ? null : parseDebugCodeServer(record.codeServer),
+    sessionExercised: false,
+    breakpointVerified: false,
+    note: boundedLanguageText(record.note) as string,
+  })
+}
+
 function parseLanguageProfilesReport(value: unknown): LanguageProfilesDto {
-  const record = exactObject(value, ['extensionsDirectory', 'profiles', 'unpinnedInstalled', 'pinsVerified', 'note'])
+  const record = exactObject(value, ['extensionsDirectory', 'profiles', 'unpinnedInstalled', 'pinsVerified', 'note', 'debug'])
   const extensionsDirectory = boundedLanguageText(record.extensionsDirectory) as string
   if (!extensionsDirectory.startsWith('/')) return fail()
   if (!Array.isArray(record.profiles) || record.profiles.length > MAX_LANGUAGE_PROFILES) return fail()
@@ -1701,6 +1769,7 @@ function parseLanguageProfilesReport(value: unknown): LanguageProfilesDto {
     unpinnedInstalled,
     pinsVerified: record.pinsVerified,
     note: boundedLanguageText(record.note) as string,
+    debug: parseDebugReadiness(record.debug),
   })
 }
 
