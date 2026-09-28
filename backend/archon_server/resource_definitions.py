@@ -372,6 +372,7 @@ class ResourceInstallRequestLedger:
             "decisionNote": None,
             "installedBy": None,
             "installationPerformed": False,
+            "verification": None,
         }
         document["epoch"] = int(document.get("epoch", 0)) + 1
         self._save(document)
@@ -402,6 +403,62 @@ class ResourceInstallRequestLedger:
         self._save(document)
         return dict(row)
 
+    def verify(
+        self,
+        *,
+        request_id: Any,
+        definition_digest: Any,
+        observed_digest: Any = None,
+        present: Any = None,
+        note: Any = None,
+    ) -> dict[str, Any]:
+        """Record whether the approved artefact is actually provisioned on this host.
+
+        Only an approved request can be checked, and the check never changes what is
+        installed: it compares the digest this definition declares with the digest this
+        host measures. A measurement that is absent is `unverifiable`, never `provisioned`.
+        """
+        if not isinstance(request_id, str) or not self._ID.fullmatch(request_id):
+            raise ValueError("request id is invalid")
+        if definition_digest is not None and (not isinstance(definition_digest, str)
+                                              or not _DIGEST.fullmatch(definition_digest)):
+            raise ValueError("definition digest must be a sha256 hex digest")
+        if observed_digest is not None and (not isinstance(observed_digest, str)
+                                            or not _DIGEST.fullmatch(observed_digest)):
+            raise ValueError("observed digest must be a sha256 hex digest")
+        if present is not None and not isinstance(present, bool):
+            raise ValueError("present must be a boolean or absent")
+        if note is not None and (not isinstance(note, str) or not note.strip() or len(note) > 256):
+            raise ValueError("note is invalid")
+        document = self._load()
+        row = document["requests"].get(request_id)
+        if row is None:
+            raise ResourceDefinitionUnavailable("That install request is not recorded")
+        if row["state"] != "approved":
+            raise ResourceDefinitionUnavailable("Only an approved request can be verified")
+        if present is False:
+            state = "missing"
+        elif present is True and observed_digest is not None and definition_digest is not None:
+            state = "provisioned" if observed_digest == definition_digest else "drifted"
+        elif present is True and definition_digest is None:
+            # A configuration-only definition has no digest to compare.
+            state = "unverifiable"
+        else:
+            state = "unverifiable"
+        row["verification"] = {
+            "state": state,
+            "definitionDigest": definition_digest,
+            "observedDigest": observed_digest,
+            "present": present,
+            "checkedAt": self._now().isoformat(),
+            "note": note,
+        }
+        # Verification observes; it never installs.
+        row["installationPerformed"] = False
+        document["epoch"] = int(document.get("epoch", 0)) + 1
+        self._save(document)
+        return dict(row)
+
     def list(self, limit: int = 32) -> list[dict[str, Any]]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 128:
             raise ValueError("limit must be between 1 and 128")
@@ -416,8 +473,9 @@ class ResourceInstallRequestLedger:
             "maxRequests": self.max_requests,
             "installationPerformed": False,
             "note": (
-                "This server records the request and the operator's decision. It does not "
-                "install, download or execute the artefact, so an approved request means "
-                "'provision this recorded identity out of band', never 'installed'."
+                "This server records the request, the operator's decision and whether the "
+                "artefact is present on this host. It does not install, download or execute "
+                "anything, so an approved request means 'provision this recorded identity out "
+                "of band', and a verification reports what was measured, never an install."
             ),
         }

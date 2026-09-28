@@ -228,7 +228,7 @@ def test_install_requests_are_recorded_and_never_claim_an_installation(tmp_path)
     definitions.define(name="code-server", kind="runtime", version="4.139.1", digest=DIGEST)
     ledger = ResourceInstallRequestLedger(tmp_path / "requests")
     assert ledger.status()["installationPerformed"] is False
-    assert "never 'installed'" in ledger.status()["note"]
+    assert "never an install" in ledger.status()["note"]
 
     with pytest.raises(ResourceDefinitionUnavailable):
         ledger.request(definition="missing", reason="please", requested_by="local-uid:1000",
@@ -307,4 +307,96 @@ def test_the_install_request_api_is_owner_only_and_never_reports_an_install(tmp_
         rows = listed["requests"]
         assert rows and all(row["state"] in {"requested", "approved", "rejected"} for row in rows)
         assert all(row["installationPerformed"] is False and row["installedBy"] is None for row in rows)
+
+def test_verification_reports_what_the_host_measured_and_never_an_install(tmp_path):
+    from archon_server.resource_definitions import ResourceInstallRequestLedger
+
+    definitions = _ledger(tmp_path)
+    definitions.define(name="code-server", kind="runtime", version="4.139.1", digest=DIGEST)
+    definitions.define(name="tools", kind="mcp", version="1")
+    ledger = ResourceInstallRequestLedger(tmp_path / "requests")
+    runtime = ledger.request(definition="code-server", reason="provision", requested_by="local-uid:1000",
+                             definitions={"code-server", "tools"})
+    config_only = ledger.request(definition="tools", reason="configure", requested_by="local-uid:1000",
+                                 definitions={"code-server", "tools"})
+
+    # Verification requires an approved request, and a configuration-only definition has
+    # no digest, so it can never be reported as provisioned.
+    with pytest.raises(ResourceDefinitionUnavailable):
+        ledger.verify(request_id=runtime["id"], definition_digest=DIGEST, present=True,
+                      observed_digest=DIGEST)
+    ledger.decide(request_id=config_only["id"], decision="approved", decided_by="local-uid:1000")
+    assert ledger.verify(request_id=config_only["id"], definition_digest=None, present=True,
+                         observed_digest=None)["verification"]["state"] == "unverifiable"
+
+    ledger.decide(request_id=runtime["id"], decision="approved", decided_by="local-uid:1000")
+    provisioned = ledger.verify(request_id=runtime["id"], definition_digest=DIGEST, present=True,
+                                observed_digest=DIGEST, note="measured")
+    assert provisioned["verification"]["state"] == "provisioned"
+    assert provisioned["installationPerformed"] is False and provisioned["installedBy"] is None
+
+    drifted = ledger.verify(request_id=runtime["id"], definition_digest=DIGEST, present=True,
+                            observed_digest=OTHER_DIGEST)
+    assert drifted["verification"]["state"] == "drifted"
+    missing = ledger.verify(request_id=runtime["id"], definition_digest=DIGEST, present=False)
+    assert missing["verification"]["state"] == "missing"
+    # Nothing measured is unverifiable, never provisioned.
+    unmeasured = ledger.verify(request_id=runtime["id"], definition_digest=DIGEST, present=None)
+    assert unmeasured["verification"]["state"] == "unverifiable"
+    assert "never an install" in ledger.status()["note"]
+
+    with pytest.raises(ValueError):
+        ledger.verify(request_id=runtime["id"], definition_digest="not-a-digest", present=True,
+                      observed_digest=DIGEST)
+    with pytest.raises(ResourceDefinitionUnavailable):
+        ledger.verify(request_id="req-" + "0" * 16, definition_digest=DIGEST, present=True,
+                      observed_digest=DIGEST)
+
+
+def test_verifying_an_approved_request_reports_the_host_state_through_the_api(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from archon_server.app import create_app
+    from archon_server.config import Settings
+
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        # A definition that names no measurable runtime on this host.
+        client.put("/api/local/resources/definitions/unknown-tool", headers=headers, json={
+            "name": "unknown-tool", "kind": "runtime", "version": "1", "digest": DIGEST,
+        })
+        created = client.post("/api/local/resources/install-requests", headers=headers, json={
+            "definition": "unknown-tool", "reason": "provision the pinned tool",
+        })
+        assert created.status_code == 201
+        request_id = created.json()["request"]["id"]
+        assert client.post(f"/api/local/resources/install-requests/{request_id}/verify",
+                           json={}).status_code == 401
+
+        # Nothing to verify before the decision.
+        assert client.post(f"/api/local/resources/install-requests/{request_id}/verify",
+                           headers=headers, json={}).status_code == 409
+        client.post(f"/api/local/resources/install-requests/{request_id}/decision",
+                    headers=headers, json={"decision": "approved"})
+        verified = client.post(f"/api/local/resources/install-requests/{request_id}/verify",
+                               headers=headers, json={"note": "checked"})
+        assert verified.status_code == 200, verified.text
+        body = verified.json()
+        assert body["installationPerformed"] is False
+        # The artefact is not measurable on this host, so the state is honest about that
+        # rather than reporting a successful provisioning.
+        assert body["request"]["verification"]["state"] in {"unverifiable", "missing", "drifted"}
+        assert body["request"]["verification"]["checkedAt"]
+        assert body["request"]["installedBy"] is None
+        unknown = client.post("/api/local/resources/install-requests/req-" + "0" * 16 + "/verify",
+                              headers=headers, json={})
+        assert unknown.status_code == 409
 

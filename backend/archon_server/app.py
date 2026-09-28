@@ -477,6 +477,12 @@ class ResourceInstallRequestCreate(BaseModel):
     scope_id: str | None = Field(default=None, alias="scopeId", max_length=128)
 
 
+class ResourceInstallVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: str | None = Field(default=None, max_length=256)
+
+
 class ResourceInstallDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1815,24 +1821,48 @@ def create_app(
             raise HTTPException(status_code=503, detail="Resource definitions are unavailable")
         return resource_definitions
 
-    def observed_definition_map() -> dict[str, str | None]:
-        """Digest measured now for each recorded definition, where it can be measured."""
+    def measure_definitions() -> dict[str, dict[str, Any]]:
+        """Measure each recorded definition on this host, including whether it is present.
+
+        `present` is what the host reports, not what the definition declares: an absent or
+        unmeasurable artefact is reported as such instead of being assumed provisioned.
+        """
         rows = {row["name"]: row for row in resource_definition_service().definitions()}
-        manifests = {row.get("id"): row.get("executable_digest") for row in registry.describe()}
-        measured: dict[str, str] = {}
+        manifests = {row.get("id"): row for row in registry.describe()}
+        measured: dict[str, dict[str, Any]] = {}
         try:
             extensions = describe_language_profiles(settings.code_server_extensions_dir)
         except Exception:
             extensions = {"profiles": []}
         for profile in extensions.get("profiles", []):
             for entry in [*profile.get("extensions", []), *profile.get("debuggers", [])]:
+                identifier = entry.get("extensionId")
+                if not isinstance(identifier, str):
+                    continue
                 digest = entry.get("pinnedInstalledSha256") or entry.get("measuredSha256")
-                if isinstance(entry.get("extensionId"), str) and isinstance(digest, str):
-                    measured[entry["extensionId"]] = digest
-        return {
-            name: (manifests.get(name) or measured.get(name) or measured.get(row.get("source") or ""))
-            for name, row in rows.items()
-        }
+                state = entry.get("state")
+                measured[identifier] = {
+                    "present": state in {"installed", "modified"} if isinstance(state, str) else None,
+                    "digest": digest if isinstance(digest, str) else None,
+                }
+        result: dict[str, dict[str, Any]] = {}
+        for name, row in rows.items():
+            runtime = manifests.get(name)
+            if runtime is not None:
+                result[name] = {
+                    "present": runtime.get("available") is True,
+                    "digest": runtime.get("executable_digest"),
+                }
+                continue
+            source = row.get("source")
+            result[name] = measured.get(source) if isinstance(source, str) and source in measured else {
+                "present": None, "digest": None,
+            }
+        return result
+
+    def observed_definition_map() -> dict[str, str | None]:
+        """Digest measured now for each recorded definition, where it can be measured."""
+        return {name: value.get("digest") for name, value in measure_definitions().items()}
 
     def resource_install_request_service() -> ResourceInstallRequestLedger:
         if resource_install_requests is None:
@@ -1877,6 +1907,34 @@ def create_app(
             row = resource_install_request_service().decide(
                 request_id=request_id, decision=payload.decision,
                 decided_by=str(principal["principal_id"]), note=payload.note,
+            )
+            return JSONResponse(content={"request": row, "installationPerformed": False},
+                                headers={"Cache-Control": "no-store"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ResourceDefinitionUnavailable, ResourceDefinitionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/local/resources/install-requests/{request_id}/verify",
+              dependencies=[Depends(require_local_owner)])
+    async def local_resource_install_verify(request_id: str, payload: ResourceInstallVerifyRequest):
+        """Check whether the approved artefact is present. This server installs nothing."""
+        try:
+            ledger = resource_install_request_service()
+            requested = next((row for row in ledger.list(128) if row["id"] == request_id), None)
+            if requested is None:
+                raise ResourceDefinitionUnavailable("That install request is not recorded")
+            definition = next((row for row in resource_definition_service().definitions()
+                               if row["name"] == requested["definition"]), None)
+            if definition is None:
+                raise ResourceDefinitionUnavailable("The requested definition is no longer recorded")
+            measured = measure_definitions().get(definition["name"], {"present": None, "digest": None})
+            row = ledger.verify(
+                request_id=request_id,
+                definition_digest=definition.get("digest"),
+                observed_digest=measured.get("digest"),
+                present=measured.get("present"),
+                note=payload.note,
             )
             return JSONResponse(content={"request": row, "installationPerformed": False},
                                 headers={"Cache-Control": "no-store"})

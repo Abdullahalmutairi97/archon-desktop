@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — an approval can be checked against the host, still without installing
+
+- Add owner-only `POST /api/local/resources/install-requests/{id}/verify`. Only an approved request can be verified, and the check only measures: it compares the digest the definition declares with the digest this host reports and records `provisioned`, `drifted`, `missing` or `unverifiable`. A definition with no digest, or an artefact this host cannot measure, is `unverifiable`, never `provisioned`. Every row still reports `installationPerformed: false` and `installedBy: null`: the server observes, it never installs.
+
 ## Unreleased — install requests recorded, never performed
 
 - Add owner-only `GET/POST /api/local/resources/install-requests` and `POST /api/local/resources/install-requests/{id}/decision`. An install request names a recorded definition, a reason, an optional scope and the requesting principal; the decision records `approved` or `rejected` once, and a second decision is refused. The ledger has no `installed` state at all: every row reports `installationPerformed: false` and `installedBy: null`, so no code path here can claim an installation this server never performs.

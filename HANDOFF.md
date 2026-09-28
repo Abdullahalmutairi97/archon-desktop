@@ -184,8 +184,10 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    against measured digests (`current`/`drifted`/`unobserved`/`configuration-only`), and the
    effective list recorded in every attempt snapshot. Still missing from that roadmap item:
    install requests are now recorded with an explicit owner decision (approve/reject,
-   once) that never claims an installation; the managed installation/update pipeline that
-   would consume an approval is still missing.
+   once) that never claims an installation, and an approved request can be verified
+   against the host (`provisioned`/`drifted`/`missing`/`unverifiable` from a real
+   measurement). What is still missing is an actual provisioning pipeline: this server
+   observes and records, it never installs.
 
 9. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
    unstarted; the operator deferred these earlier — confirm before starting).
