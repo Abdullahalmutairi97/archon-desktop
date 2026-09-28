@@ -23,6 +23,8 @@ const ACTIVITY_POLL_MS = 2_000
 const MAX_ACTIVITY_ROWS = 60
 const MAX_ACTIVITY_TEXT = 400
 const MAX_ANSWER_TEXT = 4_000
+// Pages read per poll; the server returns up to 1,000 events per page.
+const MAX_EVENT_PAGES = 20
 
 export type CheckoutChoice = {
   id: string
@@ -63,11 +65,20 @@ export function defaultCheckout(session: LiveSession | null, choices: readonly C
 
 type ActivityRow = { key: string; kind: 'tool' | 'tool-end' | 'diagnostic' | 'answer' | 'error'; text: string }
 
-/** Turn a task's event stream into bounded, readable activity rows. */
-export function activityRows(events: readonly TaskEventRecord[]): ActivityRow[] {
-  const rows: ActivityRow[] = []
-  let answer = ''
+/** Activity folded from a task's events so far; the cursor is the last event seen. */
+export type ActivityState = { cursor: number; rows: ActivityRow[]; answer: string }
+
+export const EMPTY_ACTIVITY: ActivityState = { cursor: 0, rows: [], answer: '' }
+
+/** Fold more events into bounded activity; streamed text becomes one answer. */
+export function appendActivity(state: ActivityState, events: readonly TaskEventRecord[]): ActivityState {
+  const rows = [...state.rows]
+  let answer = state.answer
+  let cursor = state.cursor
   for (const event of events) {
+    // A page that repeats events already folded in adds nothing.
+    if (event.seq <= cursor) continue
+    cursor = event.seq
     const data = event.data && typeof event.data === 'object' && !Array.isArray(event.data) ? event.data as JsonRecord : {}
     if (event.type === 'tool') {
       const tool = displayLine(data.tool, 80) ?? 'tool'
@@ -86,15 +97,23 @@ export function activityRows(events: readonly TaskEventRecord[]): ActivityRow[] 
       rows.push({ key: `${event.seq}`, kind: 'error', text: displayLine(data.error ?? data.message, MAX_ACTIVITY_TEXT) ?? 'The task reported an error' })
     }
   }
-  const bounded = rows.slice(-MAX_ACTIVITY_ROWS)
-  if (answer.trim()) bounded.push({ key: 'answer', kind: 'answer', text: answer.trim() })
-  return bounded
+  return { cursor, rows: rows.slice(-MAX_ACTIVITY_ROWS), answer }
+}
+
+/** The rows to show: tool and diagnostic activity, then the streamed answer. */
+export function activityView(state: ActivityState): ActivityRow[] {
+  return state.answer.trim() ? [...state.rows, { key: 'answer', kind: 'answer', text: state.answer.trim() }] : state.rows
+}
+
+/** Turn a task's event stream into bounded, readable activity rows. */
+export function activityRows(events: readonly TaskEventRecord[]): ActivityRow[] {
+  return activityView(appendActivity(EMPTY_ACTIVITY, events))
 }
 
 function ActivityPanel({ scope, session }: { scope: LiveScope; session: LiveSession | null }) {
   const [tasks, setTasks] = useState<{ key: string; rows: LiveTask[] } | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
-  const [events, setEvents] = useState<{ taskId: string; rows: TaskEventRecord[] } | null>(null)
+  const [activity, setActivity] = useState<{ taskId: string; state: ActivityState } | null>(null)
   const [error, setError] = useState(false)
   const key = `${scope.generation}:${session?.id ?? ''}`
   const keyRef = useRef(key)
@@ -103,7 +122,7 @@ function ActivityPanel({ scope, session }: { scope: LiveScope; session: LiveSess
   const sessionTasks = tasks && tasks.key === key ? tasks.rows : null
   const active = sessionTasks?.some((task) => !isTerminalStatus(task.rawStatus)) ?? false
   const current = sessionTasks?.find((task) => task.id === selected) ?? sessionTasks?.[0] ?? null
-  const currentEvents = current && events?.taskId === current.id ? events.rows : null
+  const currentActivity = current && activity?.taskId === current.id ? activity.state : null
 
   useEffect(() => {
     if (!session) return
@@ -132,14 +151,21 @@ function ActivityPanel({ scope, session }: { scope: LiveScope; session: LiveSess
     let timer: ReturnType<typeof setTimeout> | undefined
     const taskId = current.id
     const running = !isTerminalStatus(current.rawStatus)
+    // The server pages events, so follow the cursor and fold each page in.
+    let folded = activity?.taskId === taskId ? activity.state : EMPTY_ACTIVITY
     const load = async () => {
       try {
-        const result = await scope.bridge.api.invoke('tasks.events', { taskId, after: 0 })
-        if (stopped) return
-        setEvents({ taskId, rows: [...result.events] })
-        if (running) timer = setTimeout(() => { void load() }, ACTIVITY_POLL_MS)
+        for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
+          const result = await scope.bridge.api.invoke('tasks.events', { taskId, after: folded.cursor })
+          if (stopped) return
+          if (!result.events.length) break
+          folded = appendActivity(folded, result.events)
+          setActivity({ taskId, state: folded })
+        }
+        if (!stopped) setActivity({ taskId, state: folded })
+        if (running && !stopped) timer = setTimeout(() => { void load() }, ACTIVITY_POLL_MS)
       } catch {
-        if (!stopped) setEvents({ taskId, rows: [] })
+        if (!stopped) setActivity({ taskId, state: folded })
       }
     }
     void load()
@@ -152,7 +178,7 @@ function ActivityPanel({ scope, session }: { scope: LiveScope; session: LiveSess
   if (!sessionTasks.length) {
     return <p className="live-bench-empty">No recent tasks for this conversation. Only the {LIVE_TASK_LIMIT} most recent server tasks are searched.</p>
   }
-  const rows = currentEvents ? activityRows(currentEvents) : null
+  const rows = currentActivity ? activityView(currentActivity) : null
   return <div className="live-activity">
     <div className="live-activity-summary"><span>{sessionTasks.length} recent {sessionTasks.length === 1 ? 'task' : 'tasks'}</span>{active && <span className="live-activity-working">Working</span>}</div>
     <ul className="live-activity-tasks">

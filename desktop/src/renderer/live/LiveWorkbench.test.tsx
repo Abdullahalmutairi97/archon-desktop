@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DesktopBridge, JsonRecord, TaskEventRecord, WorkspaceRecord } from '../../shared/bridge/types'
 import { LiveChatView } from './LiveChat'
 import { liveProjects, liveSessions } from './liveModels'
-import { activityRows, checkoutChoices, defaultCheckout, LiveWorkbench } from './LiveWorkbench'
+import { activityRows, activityView, appendActivity, checkoutChoices, defaultCheckout, EMPTY_ACTIVITY, LiveWorkbench } from './LiveWorkbench'
 import type { LiveScope, LiveServer } from './useLiveServer'
 
 afterEach(() => cleanup())
@@ -49,6 +49,17 @@ describe('live workbench models', () => {
     // An unverified conversation has no trusted cwd.
     const [unverified] = liveSessions([{ ...sessionRow, ownership_state: 'unverified' }])
     expect(unverified.cwd).toBeNull()
+  })
+
+  it('follows the event cursor across pages', () => {
+    const event = (seq: number, text: string): TaskEventRecord => ({ seq, task_id: 't', type: 'message.delta', data: { text }, created_at: '', attempt_id: null })
+    const first = appendActivity(EMPTY_ACTIVITY, [event(1, 'Hello '), event(2, 'there')])
+    const second = appendActivity(first, [event(1001, ', page two')])
+    expect(first.cursor).toBe(2)
+    // A repeated page is ignored.
+    expect(appendActivity(first, [event(2, 'there')])).toEqual(first)
+    expect(second.cursor).toBe(1001)
+    expect(activityView(second).at(-1)).toEqual({ key: 'answer', kind: 'answer', text: 'Hello there, page two' })
   })
 
   it('turns task events into bounded activity with the streamed answer last', () => {
@@ -111,7 +122,8 @@ describe('live workbench', () => {
   })
 
   it('lists only this conversation\'s tasks and their activity', async () => {
-    const { bridge } = bridgeFor((operation) => {
+    const { bridge } = bridgeFor((operation, payload) => {
+      if (operation === 'tasks.events' && Number(payload.after) >= 1) return { events: [] }
       if (operation === 'workspaces.list') return { workspaces: [] }
       if (operation === 'tasks.list') return { tasks: [
         { id: 'task-1', status: 'completed', session_id: 'prime-session-1', prompt: 'Split the loop', runtime_id: 'prime' },
