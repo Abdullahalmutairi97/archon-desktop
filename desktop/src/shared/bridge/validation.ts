@@ -21,6 +21,7 @@ import type {
   RuntimeRecord,
   SessionMessageRecord,
   SessionMessagesPayload,
+  SessionsDeletePayload,
   SessionsListPayload,
   TaskByIdPayload,
   TaskEventRecord,
@@ -133,6 +134,7 @@ const operationNames = Object.freeze([
   'projects.head',
   'sessions.list',
   'sessions.messages',
+  'sessions.delete',
   'tasks.list',
   'events.cursor',
   'runtimes.list',
@@ -162,6 +164,8 @@ const MAX_TASK_ID_LENGTH = 200
 // ('prime-' plus a 200-character request key).
 const MAX_SESSION_ID_LENGTH = 206
 const MAX_SESSION_MESSAGES = 500
+// One removal request; the live session list asks for at most 200 rows.
+const MAX_SESSION_DELETE_IDS = 200
 const MAX_SESSION_MESSAGE_ID_LENGTH = 512
 // Matches the transport's backend response cap; content is never truncated here.
 const MAX_SESSION_MESSAGE_CONTENT_TOTAL = 2 * 1024 * 1024
@@ -493,6 +497,14 @@ function parseSessionMessagesPayload(value: unknown): SessionMessagesPayload {
   return Object.freeze({ sessionId: record.sessionId, limit: record.limit })
 }
 
+function parseSessionsDeletePayload(value: unknown): SessionsDeletePayload {
+  const record = exactObject(value, ['sessionIds'])
+  const sessionIds = readLocalArray(record.sessionIds, MAX_SESSION_DELETE_IDS)
+  if (sessionIds.length === 0 || !sessionIds.every(validSessionId)) return fail()
+  if (new Set(sessionIds).size !== sessionIds.length) return fail()
+  return Object.freeze({ sessionIds: Object.freeze(sessionIds) })
+}
+
 function parseTaskByIdPayload(value: unknown): TaskByIdPayload {
   const record = readOwnDataRecord(value, ['taskId'])
   if (Object.keys(record).length !== 1 || !validTaskId(record.taskId)) return fail()
@@ -550,6 +562,8 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseSessionsPayload(payload)])
     case 'sessions.messages':
       return Object.freeze([operation, parseSessionMessagesPayload(payload)])
+    case 'sessions.delete':
+      return Object.freeze([operation, parseSessionsDeletePayload(payload)])
     case 'tasks.list':
       return Object.freeze([operation, parseTasksPayload(payload)])
     case 'tasks.submit':
@@ -902,6 +916,13 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
         if (contentLength > MAX_SESSION_MESSAGE_CONTENT_TOTAL) return fail()
       }
       return Object.freeze({ messages: Object.freeze(messages) })
+    }
+    case 'sessions.delete': {
+      const record = exactObject(value, ['ok', 'deleted'])
+      if (record.ok !== true) return fail()
+      const deleted = readLocalArray(record.deleted, MAX_SESSION_DELETE_IDS)
+      if (deleted.length === 0 || !deleted.every(validSessionId) || new Set(deleted).size !== deleted.length) return fail()
+      return Object.freeze({ ok: true, deleted: Object.freeze(deleted) })
     }
     case 'projects.create': {
       const record = exactObject(value, ['project'])

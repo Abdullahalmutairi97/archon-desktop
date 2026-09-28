@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import type { DesktopBridge, SessionMessageRecord, TaskEventRecord, TaskRecord } from '../../shared/bridge/types'
 import { normalizeTaskView } from '../../shared/domain/queue'
 import { Icon } from '../shell/Icon'
+import { ConfirmDialog } from './LiveDialog'
 import {
   advanceTask,
   continuationBlocker,
+  deletionBlocker,
+  deletionFailureMessage,
   formatEpochSeconds,
   isTerminalStatus,
   liveTasks,
@@ -23,8 +26,9 @@ import {
 } from './liveModels'
 import { checkoutChoices, type CheckoutChoice } from './LiveWorkbench'
 import { Markdown } from './Markdown'
+import { ShareDialog } from './LiveSharing'
 import type { LiveScope, LiveServer } from './useLiveServer'
-import { LiveUnavailable } from './LiveViews'
+import { DELETE_DETAIL, LiveUnavailable } from './LiveViews'
 import './LiveViews.css'
 
 const POLL_DELAY_MS = 2_000
@@ -218,6 +222,7 @@ function LiveConversation({
   pollDelayMs,
   onConversationChanged,
   onNewConversation,
+  onDeleted,
 }: {
   scope: LiveScope
   sessionId: string
@@ -226,6 +231,7 @@ function LiveConversation({
   pollDelayMs: number
   onConversationChanged(): void
   onNewConversation(projectId: string | null): void
+  onDeleted(projectId: string | null): void
 }) {
   const { bridge } = scope
   const tracker = useTaskTracker(bridge, pollDelayMs)
@@ -237,7 +243,11 @@ function LiveConversation({
   const [notice, setNotice] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [sentPrompt, setSentPrompt] = useState<string | null>(null)
+  const [dialog, setDialog] = useState<'delete' | 'share' | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteFailure, setDeleteFailure] = useState<string | null>(null)
   const alive = useRef(true)
+  const deleteLock = useRef(false)
   const transcriptSerial = useRef(0)
   const inspectSerial = useRef(0)
   const submitLock = useRef(false)
@@ -337,6 +347,33 @@ function LiveConversation({
   if (!blocker && session?.active && !trackedTask) blocker = 'The server reports a task running in this conversation. Refresh to follow it.'
   const canSend = !blocker && draft.trim().length > 0 && draft.length <= MAX_PROMPT_LENGTH
 
+  let deleteBlocker = session
+    ? deletionBlocker(session)
+    : 'This conversation is not in the loaded session list. Refresh sessions to remove it.'
+  if (!deleteBlocker && (inFlight || submission.state !== 'idle')) deleteBlocker = 'A task is running in this conversation. Cancel its task first.'
+  if (!deleteBlocker && inspection === 'pending') deleteBlocker = 'Checking this conversation for running tasks…'
+
+  async function removeConversation(): Promise<void> {
+    if (deleteBlocker || deleteLock.current) return
+    deleteLock.current = true
+    setDeleting(true)
+    setDeleteFailure(null)
+    try {
+      await bridge.api.invoke('sessions.delete', { sessionIds: [sessionId] })
+      if (!alive.current) return
+      onDeleted(session?.projectId ?? null)
+    } catch (error) {
+      if (alive.current) {
+        setDeleteFailure(deletionFailureMessage(error))
+        setDialog(null)
+      }
+      onConversationChanged()
+    } finally {
+      deleteLock.current = false
+      if (alive.current) setDeleting(false)
+    }
+  }
+
   async function send(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     const prompt = draft
@@ -396,7 +433,26 @@ function LiveConversation({
       {session && session.ownership !== 'verified' && <span className="fixture-tag live-tag-review">{session.ownership === 'review_required' ? 'REVIEW REQUIRED' : 'UNVERIFIED'}</span>}
       <button type="button" className="text-button" onClick={() => setTranscriptRequest((value) => value + 1)} disabled={transcript.state === 'loading' || (transcript.state === 'ready' && transcript.refreshing)}>Reload</button>
       <button type="button" className="text-button" onClick={() => onNewConversation(session?.projectId ?? null)}>New conversation</button>
+      <button type="button" className="text-button" onClick={() => setDialog('share')} disabled={deleting}>Share</button>
+      <button type="button" className="text-button live-danger-text" onClick={() => { setDeleteFailure(null); setDialog('delete') }} disabled={!!deleteBlocker || deleting} title={deleteBlocker ?? undefined}>Delete conversation</button>
     </div>
+    {deleteFailure && <p className="live-dialog-error live-chat-alert" role="alert">{deleteFailure}</p>}
+    {dialog === 'delete' && <ConfirmDialog
+      eyebrow="REMOVE SERVER CONVERSATION"
+      title="Delete this conversation?"
+      detail={DELETE_DETAIL}
+      confirmLabel={deleting ? 'Removing…' : 'Delete conversation'}
+      busy={deleting}
+      onCancel={() => { if (!deleting) setDialog(null) }}
+      onConfirm={() => { void removeConversation() }}
+    >
+      <ul className="live-dialog-list" aria-label="Conversations to remove"><li dir="auto">{session?.title ?? sessionId}</li></ul>
+    </ConfirmDialog>}
+    {dialog === 'share' && <ShareDialog
+      bridge={bridge}
+      source={{ kind: 'session', title: session?.title ?? 'Server conversation', session: { id: sessionId, title: session?.title ?? 'Server conversation' } }}
+      onClose={() => setDialog(null)}
+    />}
 
     <div className="message-list live-message-list" ref={listRef} aria-label="Conversation transcript">
       {transcript.state === 'loading' && <p className="live-empty-line" role="status">Loading the conversation from the server…</p>}
@@ -681,6 +737,10 @@ export function LiveChatView({
       pollDelayMs={pollDelayMs}
       onConversationChanged={refresh}
       onNewConversation={onNewConversation}
+      onDeleted={(projectId) => {
+        refresh()
+        onNewConversation(projectId)
+      }}
     />
   }
   return <NewConversation

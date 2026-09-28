@@ -5,6 +5,7 @@ import {
   BackendTransportError,
   PROJECT_OPERATIONS,
   READ_ONLY_OPERATIONS,
+  SESSION_OPERATIONS,
   TASK_OPERATIONS,
   WORKSPACE_OPERATIONS,
   type BackendFetch,
@@ -241,6 +242,83 @@ describe('backend transport', () => {
       'runtimes.list', 'tasks.submit', 'tasks.get', 'tasks.events', 'tasks.cancel',
     ])
     expect(PROJECT_OPERATIONS).toEqual(['projects.create'])
+  })
+
+  it('keeps conversation removal in its own narrow operation set', () => {
+    expect(SESSION_OPERATIONS).toEqual(['sessions.delete'])
+    expect(READ_ONLY_OPERATIONS).not.toContain('sessions.delete')
+  })
+
+  it('removes a confirmed batch of conversations through one fixed DELETE route, exactly once', async () => {
+    const sessionIds = ['prime-session-1', 'pi-abc_2']
+    const fetcher = vi.fn<BackendFetch>(async () => response({ ok: true, deleted: sessionIds }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+
+    await expect(transport.invoke('sessions.delete', { sessionIds })).resolves.toEqual({ ok: true, deleted: sessionIds })
+    expect(fetcher).toHaveBeenCalledOnce()
+    const [url, init] = fetcher.mock.calls[0]
+    expect(String(url)).toBe('http://127.0.0.1:8000/api/sessions')
+    expect(init?.method).toBe('DELETE')
+    expect(init?.body).toBe(JSON.stringify({ session_ids: sessionIds }))
+    expect(init?.redirect).toBe('manual')
+    const headers = new Headers(init?.headers)
+    expect(headers.get('content-type')).toBe('application/json')
+    expect(headers.get('authorization')).toBe('Bearer TOKEN_SENTINEL')
+    expect(headers.get('idempotency-key')).toBeNull()
+  })
+
+  it('rejects hostile or oversized removal batches before fetch', async () => {
+    const fetcher = vi.fn<BackendFetch>(async () => response({ ok: true, deleted: ['x'] }))
+    const transport = new BackendTransport({ ...localConnection, fetch: fetcher })
+    for (const payload of [
+      { sessionIds: [] },
+      { sessionIds: ['../tasks'] },
+      { sessionIds: ['prime-1?x=1'] },
+      { sessionIds: ['prime-1', 'prime-1'] },
+      { sessionIds: Array.from({ length: 201 }, (_, index) => `prime-${index}`) },
+      { sessionIds: ['s'.repeat(207)] },
+      { sessionIds: ['prime-1'], projectId: 'project-1' },
+    ]) {
+      await expect(transport.invoke('sessions.delete', payload as never)).rejects.toMatchObject({ code: 'invalid_payload' })
+    }
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('reports a busy or unknown conversation distinctly and never retries a removal', async () => {
+    const payload = { sessionIds: ['prime-session-1'] }
+    const busyFetch = vi.fn<BackendFetch>(async () => response({ detail: 'private busy detail' }, 409))
+    const busy = await new BackendTransport({ ...localConnection, fetch: busyFetch })
+      .invoke('sessions.delete', payload).catch((error: unknown) => error)
+    expect(busy).toMatchObject({ code: 'session_busy' })
+    expect(String(busy)).toContain('Cancel its task first')
+    expect(String(busy)).not.toContain('private busy detail')
+    expect(busyFetch).toHaveBeenCalledOnce()
+
+    const missingFetch = vi.fn<BackendFetch>(async () => response({ detail: 'Session not found: prime-session-1' }, 404))
+    await expect(new BackendTransport({ ...localConnection, fetch: missingFetch }).invoke('sessions.delete', payload))
+      .rejects.toMatchObject({ code: 'session_not_found' })
+    expect(missingFetch).toHaveBeenCalledOnce()
+
+    const unavailableFetch = vi.fn<BackendFetch>(async () => response({ detail: 'recovery copy failed' }, 503))
+    await expect(new BackendTransport({ ...localConnection, fetch: unavailableFetch }).invoke('sessions.delete', payload))
+      .rejects.toMatchObject({ code: 'http_error' })
+    expect(unavailableFetch).toHaveBeenCalledOnce()
+
+    const droppedFetch = vi.fn<BackendFetch>(async () => { throw new Error('connection dropped') })
+    await expect(new BackendTransport({ ...localConnection, fetch: droppedFetch }).invoke('sessions.delete', payload))
+      .rejects.toMatchObject({ code: 'network_error' })
+    expect(droppedFetch).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a removal acknowledgement that does not name exactly the requested batch', async () => {
+    for (const deleted of [['prime-session-2'], ['prime-session-1'], ['prime-session-2', 'prime-session-1']]) {
+      const transport = new BackendTransport({
+        ...localConnection,
+        fetch: fetchStub(async () => response({ ok: true, deleted })),
+      })
+      await expect(transport.invoke('sessions.delete', { sessionIds: ['prime-session-1', 'prime-session-2'] }))
+        .rejects.toMatchObject({ code: 'invalid_response' })
+    }
   })
 
   it('keeps checkout creation in its own narrow operation set', () => {

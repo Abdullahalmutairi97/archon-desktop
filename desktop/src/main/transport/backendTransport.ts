@@ -42,19 +42,25 @@ export const TASK_OPERATIONS: readonly OperationName[] = Object.freeze([
   'tasks.cancel',
 ])
 
+/** Permanent removal of server conversations; the renderer confirms it first. */
+export const SESSION_OPERATIONS: readonly OperationName[] = Object.freeze([
+  'sessions.delete',
+])
+
 export const WORKSPACE_OPERATIONS: readonly OperationName[] = Object.freeze([
   'workspaces.provision',
   'workspaces.files.write',
   'workspaces.files.create',
 ])
 
-const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Object.freeze({
+const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST' | 'DELETE'>> = Object.freeze({
   readiness: 'GET',
   'projects.list': 'GET',
   'projects.create': 'POST',
   'projects.head': 'GET',
   'sessions.list': 'GET',
   'sessions.messages': 'GET',
+  'sessions.delete': 'DELETE',
   'tasks.list': 'GET',
   'events.cursor': 'GET',
   'runtimes.list': 'GET',
@@ -92,6 +98,7 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'projects.head': '/api/projects',
   'sessions.list': '/api/sessions',
   'sessions.messages': '/api/sessions',
+  'sessions.delete': '/api/sessions',
   'tasks.list': '/api/tasks',
   'events.cursor': '/api/events/cursor',
   'runtimes.list': '/api/runtimes',
@@ -125,6 +132,8 @@ const SAFE_MESSAGES = Object.freeze({
   connection_changed: 'The server connection changed while this request was running.',
   binary_file: 'Binary files cannot be previewed as text.',
   write_conflict: 'The file changed on the server. Reload it before saving again.',
+  session_busy: 'A selected conversation has a queued or running task. Cancel its task first.',
+  session_not_found: 'A selected conversation no longer exists on the server. Refresh the list.',
 } as const)
 
 export type BackendTransportErrorCode = keyof typeof SAFE_MESSAGES
@@ -430,6 +439,12 @@ function isSupportedResult(
       const requested = payload as OperationMap['sessions.messages']['payload']
       return Array.isArray(value.messages) && value.messages.length <= requested.limit
     }
+    if (operation === 'sessions.delete') {
+      // The server confirms exactly the batch it was asked to remove.
+      const requested = (payload as OperationMap['sessions.delete']['payload']).sessionIds
+      return Array.isArray(value.deleted) && value.deleted.length === requested.length &&
+        value.deleted.every((sessionId, index) => sessionId === requested[index])
+    }
     if (operation === 'workspaces.get') {
       const requestedWorkspaceId = (payload as OperationMap['workspaces.get']['payload']).workspaceId
       return isRecord(value.workspace) && value.workspace.workspace_id === requestedWorkspaceId
@@ -491,6 +506,12 @@ function checkResponseStatus(operation: OperationName, response: Response): void
   if (operation === 'workspaces.files.create' && response.status === 409) {
     throw new BackendTransportError('write_conflict')
   }
+  if (operation === 'sessions.delete') {
+    if (response.status === 200) return
+    if (response.status === 409) throw new BackendTransportError('session_busy')
+    if (response.status === 404) throw new BackendTransportError('session_not_found')
+    throw new BackendTransportError('http_error')
+  }
   if (operation === 'readiness' && (response.status === 200 || response.status === 503)) return
   if (operation === 'tasks.submit') {
     if (response.status === 202) return
@@ -547,6 +568,10 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
       approval_mode: 'auto',
       chat_only: false,
     })
+  }
+  if (operation === 'sessions.delete') {
+    const deletePayload = payload as OperationMap['sessions.delete']['payload']
+    return JSON.stringify({ session_ids: deletePayload.sessionIds })
   }
   if (operation === 'workspaces.provision') {
     const provisionPayload = payload as OperationMap['workspaces.provision']['payload']
@@ -831,7 +856,7 @@ function generationChanged(transport: BackendTransport, generation: number): boo
   return transport.generation !== generation
 }
 
-/** Fixed-route, memory-only transport for read-only state plus narrow task and workspace actions. */
+/** Fixed-route, memory-only transport for read-only state plus narrow task, workspace and conversation-removal actions. */
 export class BackendTransport {
   private readonly fetchImpl: BackendFetch
   private activeConnection: ActiveConnection | undefined
@@ -910,7 +935,7 @@ export class BackendTransport {
         Authorization: `Bearer ${connection.token}`,
       }
       if (operation === 'projects.create' || operation === 'tasks.submit' || operation === 'workspaces.provision' ||
-          operation === 'workspaces.files.write' || operation === 'workspaces.files.create') {
+          operation === 'workspaces.files.write' || operation === 'workspaces.files.create' || operation === 'sessions.delete') {
         headers['Content-Type'] = 'application/json'
       }
       if (operation === 'tasks.submit') {

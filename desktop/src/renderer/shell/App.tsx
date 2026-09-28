@@ -86,6 +86,12 @@ export function App() {
   const showLiveProject = useCallback((projectId: string) => {
     if (selectLive((current) => ({ ...current, projectId }))) setView('projects')
   }, [selectLive])
+  const forgetLiveSessions = useCallback((sessionIds: readonly string[]) => {
+    // A removed conversation that was open leaves the chat in the new-conversation state.
+    setLiveSelectionValue((current) => current?.sessionId && sessionIds.includes(current.sessionId)
+      ? { ...current, sessionId: null }
+      : current)
+  }, [])
   const openConnection = useCallback(() => setView('connection'), [])
   const openTasks = useCallback(() => setView('tasks'), [])
 
@@ -200,7 +206,7 @@ export function App() {
           onOpenConnection={openConnection}
           onOpenTasks={openTasks}
         />}
-        {live && view === 'sessions' && <LiveSessionsView server={liveServer} selectedSessionId={liveSelection?.sessionId ?? null} onOpenSession={openLiveSession} onNewConversation={startLiveConversation} onOpenConnection={openConnection} />}
+        {live && view === 'sessions' && <LiveSessionsView server={liveServer} selectedSessionId={liveSelection?.sessionId ?? null} onOpenSession={openLiveSession} onNewConversation={startLiveConversation} onOpenConnection={openConnection} onSessionsDeleted={forgetLiveSessions} />}
         {live && view === 'tasks' && <LiveTasksView server={liveServer} onOpenSession={openLiveSession} onOpenConnection={openConnection} />}
         {live && view === 'projects' && <LiveProjectsView
           server={liveServer}
