@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from .child_env import build_child_env
+from .native_diagnostics import NativeEventDiagnostics
 from .sandbox import RuntimeConfinement
 from .prime_session_lease import (
     LEASE_ENABLED_ENV as PRIME_LEASE_ENABLED_ENV,
@@ -431,16 +432,33 @@ class PrimeRunner:
             if pending:
                 yield bytes(pending)
 
+        diagnostics = NativeEventDiagnostics('prime')
+        handled_types = {
+            'message_update', 'tool_execution_start', 'tool_execution_end', 'message_end', 'agent_end',
+        }
+
+        async def report_diagnostic(row: dict[str, Any] | None) -> None:
+            if row is not None:
+                await emit('diagnostic', row)
+
         async def pump_json() -> None:
             nonlocal final_text
             async for raw in stdout_lines():
                 line = raw.decode(errors='replace').strip()
+                if not line:
+                    continue
                 try:
                     event = __import__('json').loads(line)
                 except ValueError:
-                    # Never present an unstructured final reply as thought.
+                    # Never present an unstructured record as thought or as an outcome.
+                    await report_diagnostic(diagnostics.note_malformed(f"line is not JSON ({len(line)} bytes)"))
+                    continue
+                if not isinstance(event, dict):
+                    await report_diagnostic(diagnostics.note_malformed("record is not a JSON object"))
                     continue
                 event_type = event.get('type')
+                if event_type not in handled_types:
+                    await report_diagnostic(diagnostics.note_unknown(event_type))
                 if event_type == 'message_update':
                     update = event.get('assistantMessageEvent') or {}
                     update_type = update.get('type')
@@ -520,6 +538,16 @@ class PrimeRunner:
             raise RunnerCancelled(task_id)
         if code:
             raise RuntimeError('\n'.join(stderr[-50:]) or f'Prime exited with code {code}')
+        if not final_text and diagnostics.malformed:
+            # The runtime succeeded but part of its output could not be read at
+            # all, so this turn has no verified answer. Fail closed instead of
+            # reporting an empty completion. An unhandled record *type* is only a
+            # diagnostic: the stream was readable, it simply carried nothing this
+            # runner interprets.
+            raise RuntimeError(
+                f"Prime produced no readable answer ({diagnostics.malformed} malformed, "
+                f"{diagnostics.unknown} unhandled records)"
+            )
         return {'text': final_text, 'exit_code': code, 'session_id': session_id}
 
     async def cancel(self, task_id: str) -> bool:

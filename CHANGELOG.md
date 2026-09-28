@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — unreadable runtime records become diagnostics
+
+- A native record this server cannot parse, or one whose type is not handled, is now counted and reported as a bounded `diagnostic` task event (`malformed_record` or `unknown_event_type`, at most four per run, with the running counts) instead of being dropped silently. A record that is valid JSON but not an object no longer aborts the stream. If a runtime exits successfully with unreadable output and no answer, the turn fails closed rather than completing with empty text, and the desktop shows the diagnostic in the task activity without treating it as assistant output.
+
 ## Unreleased — resume evidence through the API
 
 - Add an end-to-end evidence test for the P1 M1.6 list: a task that records a durable effect and then vanishes, a restart that reconciles it as `review_required` without a retry, an explicit resume that admits a new task for the same session, and a late completion for the interrupted attempt that cannot mutate the resumed task or its event ledger.

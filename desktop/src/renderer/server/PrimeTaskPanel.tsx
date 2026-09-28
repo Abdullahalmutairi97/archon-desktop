@@ -13,7 +13,7 @@ const MAX_ACTIVITY_TOTAL_LENGTH = 1_000
 type ProjectChoice = { id: string; name: string; primaryPath: string }
 type WorkspaceChoice = { id: string; projectId: string; root: string; generation: number }
 type PrimeTaskSummary = { id: string; status: string }
-type TaskActivity = { seq: number; kind: 'assistant' | 'tool'; text: string }
+type TaskActivity = { seq: number; kind: 'assistant' | 'tool' | 'diagnostic'; text: string }
 type Draft = { bridge: DesktopBridge; generation: number; projectId: string; prompt: string; workspaceId?: string }
 type Confirmation = Draft & { project: ProjectChoice; workspace?: WorkspaceChoice }
 type TaskProgress = {
@@ -131,6 +131,13 @@ function activityForEvent(event: TaskEventRecord): TaskActivity | null {
     return typeof data.text === 'string' && data.text.length > 0
       ? { seq: event.seq, kind: 'assistant', text: data.text.slice(0, MAX_ACTIVITY_ITEM_LENGTH) }
       : null
+  }
+  if (event.type === 'diagnostic') {
+    // A record the server could not read is shown as a diagnostic row; it never
+    // counts as assistant output and never implies the task finished.
+    const detail = typeof data.detail === 'string' ? data.detail.trim() : ''
+    if (!detail) return null
+    return { seq: event.seq, kind: 'diagnostic', text: `Unreadable runtime output: ${detail}`.slice(0, MAX_ACTIVITY_ITEM_LENGTH) }
   }
   if (event.type !== 'tool' || (data.phase !== 'start' && data.phase !== 'end')) return null
   const rawTool = typeof data.tool === 'string' ? data.tool.trim() : ''

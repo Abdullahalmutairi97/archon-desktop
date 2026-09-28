@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .child_env import build_child_env
+from .native_diagnostics import NativeEventDiagnostics
 from .sandbox import RuntimeConfinement
 from .runtimes import execution_cwd, validate_execution_mode
 
@@ -187,12 +188,34 @@ class PiRunner:
             stderr_task = asyncio.create_task(read_stderr())
             try:
                 assert process.stdout is not None
+                diagnostics = NativeEventDiagnostics("pi")
+                handled_types = {
+                    "session", "message_update", "message_end", "tool_execution_start", "tool_execution_end",
+                }
                 async for line in _stdout_jsonl_records(process.stdout):
+                    text = line.decode(errors="replace").strip()
+                    if not text:
+                        continue
                     try:
-                        event = json.loads(line.decode(errors="replace"))
+                        event = json.loads(text)
                     except json.JSONDecodeError:
+                        # A record this server cannot read is a diagnostic, never
+                        # an outcome; it must not complete or fail the turn.
+                        row = diagnostics.note_malformed(f"line is not JSON ({len(text)} bytes)")
+                        if row is not None:
+                            await emit("diagnostic", row)
+                        continue
+                    if not isinstance(event, dict):
+                        row = diagnostics.note_malformed("record is not a JSON object")
+                        if row is not None:
+                            await emit("diagnostic", row)
                         continue
                     typ = event.get("type")
+                    if typ not in handled_types:
+                        row = diagnostics.note_unknown(typ)
+                        if row is not None:
+                            await emit("diagnostic", row)
+                        continue
                     if typ == "session" and event.get("id"):
                         await emit("session", {"session_id": session_id})
                     elif typ == "message_update":
@@ -224,6 +247,14 @@ class PiRunner:
                     raise RuntimeError(stderr or f"Pi exited with status {rc}")
                 if failure:
                     raise RuntimeError(failure)
+                if not answer and diagnostics.malformed:
+                    # The runtime succeeded but part of its output could not be
+                    # read at all, so this turn has no verified answer. An
+                    # unhandled record type is only a diagnostic.
+                    raise RuntimeError(
+                        f"Pi produced no readable answer ({diagnostics.malformed} malformed, "
+                        f"{diagnostics.unknown} unhandled records)"
+                    )
                 return {"text": answer, "session_id": session_id}
             except BaseException:
                 await terminate_process_tree(process, identity)

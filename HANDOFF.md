@@ -134,10 +134,11 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    the migration import/rollback shapes beyond the snapshot cases, and duplicate
    project *names*, which live in the separate Hermes projects database that the
    Archon migration never reads.
-6. **P5 remainder** — event normalization and an approval binding for the adapters
-   themselves; the broker and its scoped auth states are done. No tool/MCP adapter
-   consumes the broker yet, so the two-channel bypass check (named tool versus
-   shell/direct HTTP) is not demonstrated.
+6. **P5 remainder** — event normalization is done (bounded diagnostics for
+   unreadable or unhandled native records). An approval binding for the adapters
+   themselves is still open, and no tool/MCP adapter consumes the broker yet, so the
+   two-channel bypass check (named tool versus shell/direct HTTP) is not
+   demonstrated.
 7. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
    unstarted; the operator deferred these earlier — confirm before starting).
 

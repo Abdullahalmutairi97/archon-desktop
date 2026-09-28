@@ -151,6 +151,10 @@ describe('PrimeTaskPanel', () => {
         { seq: 3, task_id: 'task-1', type: 'tool', data: { phase: 'end', tool: 'read_file', detail: 'TOOL_OUTPUT_SECRET' } },
         { seq: 4, task_id: 'task-1', type: 'output', data: { text: 'THINKING_SECRET' } },
         { seq: 5, task_id: 'task-1', type: 'unrecognized.event', data: { secret: 'UNKNOWN_EVENT_SECRET' } },
+        { seq: 6, task_id: 'task-1', type: 'diagnostic', data: {
+          kind: 'malformed_record', runtime: 'prime', malformed: 1, unknown: 0,
+          detail: 'line is not JSON (15 bytes)', secret: 'DIAGNOSTIC_SECRET',
+        } },
       ] }
       return defaults(operation)
     })
@@ -169,6 +173,9 @@ describe('PrimeTaskPanel', () => {
     expect(activity).not.toHaveTextContent('TOOL_OUTPUT_SECRET')
     expect(activity).not.toHaveTextContent('THINKING_SECRET')
     expect(activity).not.toHaveTextContent('UNKNOWN_EVENT_SECRET')
+    // An unreadable runtime record is shown as a diagnostic, never as output.
+    expect(activity).toHaveTextContent('Unreadable runtime output: line is not JSON (15 bytes)')
+    expect(activity).not.toHaveTextContent('DIAGNOSTIC_SECRET')
     expect(screen.getByText('running', { selector: '.task-status' })).toBeInTheDocument()
     expect(screen.queryByText(/(?:TARGET_SECRET|TOOL_OUTPUT_SECRET|THINKING_SECRET|UNKNOWN_EVENT_SECRET)/u)).not.toBeInTheDocument()
   })
