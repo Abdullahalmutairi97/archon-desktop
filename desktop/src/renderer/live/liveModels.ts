@@ -79,7 +79,7 @@ export type TrackedTask = {
   eventsCheckFailed: boolean
 }
 
-const SERVER_ID_PATTERN = /^[A-Za-z0-9_-]{1,200}$/u
+const SERVER_ID_PATTERN = /^[A-Za-z0-9_-]{1,206}$/u
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu
 const MAX_TITLE_LENGTH = 160
 const MAX_PREVIEW_LENGTH = 240
