@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — handoff accuracy
+
+- Update `HANDOFF.md` for the current published state: a "progress since this handoff" list of the twelve published slices, corrected "what is left" items with the exact remaining work per item, the two gates this host cannot qualify, and the check commands that match the repository today.
+
 ## Unreleased — language profiles in the desktop
 
 - Add a read-only Language profiles surface for the active checkout: it lists each pinned language profile, the install state of every pinned extension and debugger adapter (with the reason when a state is not `installed`), the capabilities this host cannot provide, and any installed extension that no verified pin covers. The report crosses a fixed validated bridge path (`archon:language-profiles:list` → `GET /api/local/workspaces/{id}/language-profiles`), unknown fields are refused instead of forwarded, and the panel states that the record is not a behavioural qualification.

@@ -44,6 +44,53 @@ Do not merge, deploy or release. Target: every change is committed, published, a
   ```
 - `umask 0022` matters: a `0002` umask makes a permission-ancestry test fail.
 
+## Progress since this handoff was written
+
+Fifteen slices are committed on the branch (this list plus the handoff update);
+each was checked locally (backend `pytest`, desktop `typecheck && test &&
+licenses:check && build`) and published with the API publisher, and CI is green
+on the head.
+
+- **P5 secret broker** (done): isolated credential-holding broker, single-use
+  grants bound to principal/tool/argument digest/attempt/workspace
+  generation/ledger epoch, the broker performs the upstream call itself, bounded
+  and redacted results, a private 0600 ledger, owner-only routes, a runner
+  delegation channel and scoped provider auth states. An independent adversarial
+  review found one medium and eight low defects; the medium (a credential echoed
+  as a JSON object key reached the caller) and five lows are fixed with tests.
+- **P3 write lease** (mostly done): file save/create, workspace service start, the
+  code-server handoff and terminal creation each require the lease and refuse a
+  competing live holder (409) before writing, with a blocked-handover test each.
+  Kernels/debugger processes have no implementation to fence, and existing tmux
+  children are not revoked by a later handover.
+- **P3 isolation** (mostly done): host evidence record plus probe-verified
+  enforcement for services — memory, CPU quota, task limit, workspace-only
+  filesystem confinement and no-network isolation. Each declared control is
+  refused before launch unless the probe observed it. Reproduced end to end with
+  real services (denied `/tmp` write; `ENETUNREACH`). The agent-runtime profile
+  (a sandboxed Prime/Pi child) is still unimplemented.
+- **P2D** (mostly done): two fresh `npm ci` workspaces built byte-identical
+  packages, and `desktop/scripts/native-hostile-frame-check.mjs` runs the real
+  app and passes twelve checks. Two gates are **blocked on this host and recorded,
+  not worked around**: the Chromium OS sandbox (no setuid helper; AppArmor blocks
+  unprivileged user namespaces) and the native keyring (Electron selects no
+  protected Linux backend, so the store degrades to memory-only).
+- **P4 language profiles** (partial): four pinned extensions are licence- and
+  digest-verified and installed, an owner-only endpoint reports honest states and
+  gaps, and the desktop shows the same record. No breakpoint/debug flow is
+  exercised, and Pylance cannot be provided here.
+- **P1** (partial): native Prime session leases are compatible in both directions
+  against the installed Prime Agent module; migration evidence covers duplicate
+  project mappings, native ids, tombstones and queued/running tasks. An explicit
+  resume exercised end to end through the API is still missing, as are some
+  import/rollback shapes.
+- **P6–P8**: not started. The operator deferred these earlier; confirm before
+  starting either of them.
+
+One publish attempt hung on a network read for ten minutes; killing it and
+re-running the publisher was safe and produced the expected commit. Check that a
+publish actually printed its commit line before polling CI.
+
 ## What is done (do not redo)
 
 - **Attach**: one-use tickets → single server-fenced control lease → read-only denial → bounded key frames → main-relayed streaming.
@@ -61,13 +108,45 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
 
 ## What is left (highest value first)
 
-1. **P5 secret broker** — isolated credential-holding channel so tool/MCP calls never receive raw secrets; scoped provider auth states; event normalization; approval binding to action digest/attempt/generation.
-2. **P4 debugger + language profiles** — pinned extensions with licensing/source verification for code-server; honest "unknown/unsupported feature" reporting.
-3. **P3 write-lease enforcement** — require the lease in every write path (file writes, services handoff, kernels/debuggers) and test a blocked handoff.
-4. **P3 isolation qualification** — demonstrate filesystem/network/CPU/PID controls around a runtime on this host, or record the gate as blocked.
-5. **P2D** — native keyring + hostile-frame tests; two fresh `npm ci` package builds for reproducibility.
-6. **P1** — native Prime lock compatibility and the remaining evidence tests.
-7. **P6–P8** — collaboration, release/ops qualification, enhancements (currently unstarted; the operator deferred these earlier — confirm before starting).
+1. **Agent-runtime isolation profile** — run a Prime/Pi child inside a bounded
+   sandbox (read-only host, writable checkout and runtime state) with a
+   behavioural probe and a fail-closed refusal. This is the remainder of "P3
+   isolation qualification": service-level controls are done, the runtime child
+   is not. Do not enable it by default, and do not claim runtime compatibility
+   without a real provider turn inside the profile.
+2. **P4 debug flow** — a breakpoint/debug flow for the workspace IDE. `ms-python.debugpy`
+   is pinned and installed, but Archon exposes no debug-launch surface and no debug
+   session has been exercised, so the roadmap box stays open. Also open: Pylance is
+   proprietary and cannot be provided from this marketplace, and there is no
+   JavaScript debugger adapter pin.
+3. **P3 write-lease remainder** — fence the writers the lease does not reach:
+   kernels, debugger/run tasks (no implementation exists to fence yet) and existing
+   detached tmux children, which a later handover does not revoke.
+4. **P2D blocked gates** — the Chromium OS sandbox and the native keyring need a
+   host that provides them (setuid `chrome-sandbox` or unprivileged user namespaces;
+   a protected Linux secret-service backend). Both are recorded in
+   `docs/releases/p2d-fresh-builds.md`. Re-run the native check on such a host.
+5. **P1 evidence remainder** — an explicit resume as a new attempt exercised end to
+   end through the API, and the migration import/rollback shapes (duplicate project
+   *names* live in the separate Hermes projects database, which the Archon
+   migration never reads).
+6. **P5 remainder** — event normalization and an approval binding for the adapters
+   themselves; the broker and its scoped auth states are done. No tool/MCP adapter
+   consumes the broker yet, so the two-channel bypass check (named tool versus
+   shell/direct HTTP) is not demonstrated.
+7. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
+   unstarted; the operator deferred these earlier — confirm before starting).
+
+### Gates that must not be reported as passed
+
+- Chromium OS sandbox on this host: blocked (`chrome-sandbox` is not setuid, and
+  `kernel.apparmor_restrict_unprivileged_userns=1`).
+- Native keyring persistence on this host: blocked (Electron selects no protected
+  Linux backend; the store keeps the token in main-process memory and writes
+  nothing). The fallback behaviour is verified; the protected path is not.
+- Baseline parity with the frozen v0.3.0 app: the build manifest still says
+  `baselineParity: unverified`.
+- Real provider turns under any new isolation profile: not run.
 
 ## Practical notes
 
