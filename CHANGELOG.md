@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — stale work can be stopped when a runtime identity changes
+
+- Add owner-only `GET /api/local/resources/stale-work`, which judges every queued and running task against the runtime identity installed now: a running task by the digest its newest attempt snapshot recorded, a queued task by its conversation (it would resume under the changed identity). Only a `stale` state is marked `stop`; unrecorded work is reported and kept, and a task already cancelling is left alone.
+- Add owner-only `POST /api/local/resources/stale-work/stop` with `{"confirm": true}`. It cancels each stale task through the engine's existing cancel path, which records the intent first and, for running work, waits for the runner to reap the process group, then reports `cancelled`, `cancel-requested` or `failed` per task. Nothing restarts the work automatically: a resume of that conversation is still refused, and the owner starts a new one.
+
 ## Unreleased — approved install requests are provisioned through a managed store
 
 - Add owner-only `POST /api/local/resources/install-requests/{id}/provision` with `{"artifact": "<file name>", "confirm": true}`. The artefact is a bare file name in the staging directory (`ARCHON_DESKTOP_RESOURCE_STAGING_DIR`, default `<data_dir>/resource-staging`, private 0700); it must be a regular file owned by and writable only by this account, and is opened without following links. Its bytes are hashed while they are copied into `<data_dir>/resource-store/objects/<sha256>` (read-only; owner-executable for a runtime), and nothing is kept unless they match the approved digest. `current/<name>` is then switched to it with an atomic link replace.

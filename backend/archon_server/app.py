@@ -92,6 +92,7 @@ from .resource_snapshots import (
     ResourceSnapshotError,
     ResourceSnapshotStore,
     ResourceSnapshotUnavailable,
+    plan_stale_work,
     session_identity_state,
 )
 from .language_profiles import describe_profiles as describe_language_profiles
@@ -513,6 +514,12 @@ class ResourceRollbackRequest(BaseModel):
 
     confirm: bool = Field(strict=True)
     digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class StaleWorkStopRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = Field(strict=True)
 
 
 class ResourceInstallDecisionRequest(BaseModel):
@@ -2263,6 +2270,63 @@ def create_app(
             )
         except (ResourceSnapshotUnavailable, ResourceSnapshotError) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    def stale_work_plan() -> list[dict[str, Any]]:
+        """Active work judged against the runtime identity installed now."""
+        if resource_snapshots is None:
+            raise HTTPException(status_code=503, detail="Resource snapshots are unavailable")
+        active = store.active(200)
+        try:
+            digests = resource_snapshots.digest_by_task(
+                [row["id"] for row in active if row.get("status") == "running"]
+            )
+        except (ResourceSnapshotUnavailable, ResourceSnapshotError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return plan_stale_work(
+            active, task_digests=digests, current_digest=runtime_digest,
+            conversation_state=conversation_identity,
+        )
+
+    @app.get("/api/local/resources/stale-work", dependencies=[Depends(require_local_owner)])
+    async def local_resource_stale_work():
+        """Which queued or running work would run under a runtime identity that changed."""
+        plan = stale_work_plan()
+        return JSONResponse(
+            content={
+                "work": plan,
+                "stale": sum(1 for row in plan if row["action"] == "stop"),
+                "note": (
+                    "A cached runtime cannot be revoked inside a live process, so work whose "
+                    "recorded identity is no longer installed can only be stopped. Nothing is "
+                    "stopped until the owner confirms, and unrecorded work is never stopped."
+                ),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/local/resources/stale-work/stop", dependencies=[Depends(require_local_owner)])
+    async def local_resource_stale_work_stop(payload: StaleWorkStopRequest):
+        """Cancel the stale work through the engine, which waits for the runner to reap it."""
+        if payload.confirm is not True:
+            raise HTTPException(status_code=400, detail="Stopping work requires explicit confirmation")
+        results: list[dict[str, Any]] = []
+        for row in stale_work_plan():
+            if row["action"] != "stop":
+                continue
+            task_id = row["taskId"]
+            try:
+                await engine.cancel(task_id)
+                status_now = store.get(task_id).get("status")
+            except Exception as exc:  # report every task; one failure must not hide the rest
+                logger.exception("stopping stale work failed for %s", task_id)
+                results.append({**row, "outcome": "failed", "error": type(exc).__name__})
+                continue
+            results.append({
+                **row,
+                "outcome": "cancelled" if status_now == "cancelled" else "cancel-requested",
+                "statusNow": status_now,
+            })
+        return JSONResponse(content={"results": results}, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/local/resources/snapshots", dependencies=[Depends(require_local_owner)])
     async def local_resource_snapshots(task_id: str | None = None, limit: int = Query(32, ge=1, le=128)):

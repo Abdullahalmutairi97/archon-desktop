@@ -384,3 +384,101 @@ def test_a_stale_identity_blocks_resuming_a_conversation(tmp_path):
         fresh = client.get("/api/local/resources/sessions", headers=headers).json()
         fresh_row = next(item for item in fresh["sessions"] if item["sessionId"] == other.json()["task"]["session_id"])
         assert fresh_row["state"] == "unrecorded" and fresh_row["resumeAllowed"] is True
+
+
+def test_the_stale_work_plan_stops_only_work_proven_to_run_under_a_changed_identity():
+    from archon_server.resource_snapshots import plan_stale_work
+
+    tasks = [
+        {"id": "running-stale", "status": "running", "runtime_id": "prime", "session_id": "s1"},
+        {"id": "running-current", "status": "running", "runtime_id": "prime", "session_id": "s2"},
+        {"id": "running-unrecorded", "status": "running", "runtime_id": "prime", "session_id": "s3"},
+        {"id": "running-vanished", "status": "running", "runtime_id": "pi", "session_id": "s4"},
+        {"id": "queued-stale-resume", "status": "queued", "runtime_id": "prime", "session_id": "s5"},
+        {"id": "queued-fresh", "status": "queued", "runtime_id": "prime", "session_id": None},
+        {"id": "finished", "status": "completed", "runtime_id": "prime", "session_id": "s1"},
+        {"id": "stopping", "status": "cancelling", "runtime_id": "prime", "session_id": "s1"},
+    ]
+    digests = {"running-stale": OTHER_DIGEST, "running-current": DIGEST, "running-unrecorded": None,
+               "running-vanished": DIGEST}
+    installed = {"prime": DIGEST, "pi": None}
+    conversations = {"s5": {"state": "stale", "resumeAllowed": False, "recordedDigest": OTHER_DIGEST,
+                            "currentDigest": DIGEST, "reason": "changed"}}
+
+    plan = plan_stale_work(
+        tasks, task_digests=digests, current_digest=installed.get,
+        conversation_state=lambda session: conversations.get(session, {"state": "unrecorded"}),
+    )
+    rows = {row["taskId"]: row for row in plan}
+    # Only active work is considered; a task already being stopped is left alone.
+    assert set(rows) == {"running-stale", "running-current", "running-unrecorded", "running-vanished",
+                         "queued-stale-resume", "queued-fresh"}
+    assert rows["running-stale"]["action"] == "stop"
+    assert rows["running-stale"]["recordedDigest"] == OTHER_DIGEST
+    assert rows["running-stale"]["currentDigest"] == DIGEST
+    assert rows["running-current"]["action"] == "keep" and rows["running-current"]["state"] == "current"
+    # No recorded identity is no evidence of a change: never stopped on a guess.
+    assert rows["running-unrecorded"]["action"] == "keep"
+    assert rows["running-unrecorded"]["state"] == "unrecorded"
+    # A recorded identity with nothing installed to match it is the fail-closed direction.
+    assert rows["running-vanished"]["action"] == "stop"
+    assert rows["queued-stale-resume"]["action"] == "stop"
+    # A fresh queued turn records its identity when it starts; nothing to revoke yet.
+    assert rows["queued-fresh"]["action"] == "keep"
+
+
+def test_stale_work_is_reported_and_stopped_only_on_confirmation(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from archon_server.app import create_app
+    from archon_server.config import Settings
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime_binary = tmp_path / "prime-runtime"
+    runtime_binary.write_bytes(b"#!/bin/sh\nexit 0\n")
+    runtime_binary.chmod(0o755)
+    settings = Settings(
+        archon_root=tmp_path, hermes_home=tmp_path / ".hermes", data_dir=tmp_path / ".data",
+        auth_token="legacy-token", local_owner_mode=True, start_worker=False,
+        prime_executable=runtime_binary,
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        first = client.post("/api/tasks", headers=headers,
+                            json={"prompt": "first", "cwd": str(workspace), "profile": "prime",
+                                  "approval_mode": "auto"}).json()["task"]
+        digest = next(row["executable_digest"] for row in client.app.state.runtimes.describe()
+                      if row["id"] == "prime")
+        client.app.state.resource_snapshots.record(
+            task_id=first["id"], attempt_id="attempt-1", runtime_id="prime",
+            manifests=[{"id": "prime", "available": True, "executable_digest": digest}],
+        )
+        queued = client.post("/api/tasks", headers=headers,
+                             json={"prompt": "continue", "session_id": first["session_id"],
+                                   "profile": "prime", "approval_mode": "auto"})
+        assert queued.status_code == 202, queued.text
+        queued_id = queued.json()["task"]["id"]
+
+        assert client.get("/api/local/resources/stale-work").status_code == 401
+        report = client.get("/api/local/resources/stale-work", headers=headers).json()
+        assert report["stale"] == 0
+
+        # The runtime changes underneath the queued continuation.
+        runtime_binary.write_bytes(b"#!/bin/sh\nexit 1\n")
+        report = client.get("/api/local/resources/stale-work", headers=headers).json()
+        stale_ids = {row["taskId"] for row in report["work"] if row["action"] == "stop"}
+        assert queued_id in stale_ids and report["stale"] == len(stale_ids)
+        # Reporting stops nothing.
+        assert client.app.state.store.get(queued_id)["status"] == "queued"
+
+        assert client.post("/api/local/resources/stale-work/stop", json={"confirm": True}).status_code == 401
+        assert client.post("/api/local/resources/stale-work/stop", headers=headers,
+                           json={"confirm": False}).status_code == 400
+        stopped = client.post("/api/local/resources/stale-work/stop", headers=headers, json={"confirm": True})
+        assert stopped.status_code == 200, stopped.text
+        results = {row["taskId"]: row for row in stopped.json()["results"]}
+        assert results[queued_id]["outcome"] == "cancelled"
+        assert client.app.state.store.get(queued_id)["status"] == "cancelled"
+        after = client.get("/api/local/resources/stale-work", headers=headers).json()
+        assert queued_id not in {row["taskId"] for row in after["work"]}

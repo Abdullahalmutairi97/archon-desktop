@@ -797,6 +797,15 @@ class TaskStore:
             ).fetchall()
         return [_decode(row) for row in rows]
 
+    def active(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Queued, running and cancelling tasks, oldest first, however old they are."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM tasks WHERE status IN ('queued','running','cancelling') "
+                "ORDER BY created_at ASC LIMIT ?", (max(1, min(limit, 500)),)
+            ).fetchall()
+        return [_decode(row) for row in rows]
+
     def has_running_session(self, session_id: str) -> bool:
         with self.db.connect() as conn:
             return conn.execute(

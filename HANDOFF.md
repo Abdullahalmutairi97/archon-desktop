@@ -178,8 +178,10 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    reports the state and `POST /api/tasks` refuses a stale resume with 409). Still open in
    the same roadmap item: resource definitions and assignments, managed installation
    requests, a real update/rollback pipeline (this ledger installs nothing), and stopping
-   or restarting *running* work when a cached resource cannot be revoked — the check
-   reports a live task, it never kills one. Declarative resource definitions and their
+   or restarting *running* work when a cached resource cannot be revoked — now an explicit,
+   confirmed owner action (`GET/POST /api/local/resources/stale-work[/stop]`) that cancels
+   stale queued/running work through the reaping cancel path; nothing stops or restarts
+   work automatically. Declarative resource definitions and their
    scope assignments now exist too, with the fixed precedence
    `agent > workspace > project`, an effective-configuration view that reports declared
    against measured digests (`current`/`drifted`/`unobserved`/`configuration-only`), and the

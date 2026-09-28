@@ -540,3 +540,49 @@ def session_identity_state(
         "resumeAllowed": True,
         "reason": "Every attempt recorded the identity that is installed now.",
     }
+
+
+def plan_stale_work(
+    tasks: Iterable[Mapping[str, Any]],
+    *,
+    task_digests: Mapping[str, str | None],
+    current_digest: Callable[[Any], str | None],
+    conversation_state: Callable[[str], Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Decide which active work runs under a runtime identity that is no longer installed.
+
+    A running task is judged by the identity its newest attempt recorded; a queued task
+    is judged by its conversation, because it has not recorded an identity of its own
+    yet and would resume under the changed one. Only a `stale` state is stopped: an
+    unrecorded identity is no evidence of a change, so that work is kept and reported.
+    A task that is already being cancelled is left to finish its own cancellation.
+    """
+    plan: list[dict[str, Any]] = []
+    for task in tasks:
+        status = task.get("status")
+        if status not in {"queued", "running"}:
+            continue
+        task_id = task.get("id")
+        runtime = task.get("runtime_id")
+        session_id = task.get("session_id")
+        if status == "running":
+            state = session_identity_state(
+                recorded_digests=[task_digests.get(task_id)], current_digest=current_digest(runtime),
+            )
+        elif isinstance(session_id, str) and session_id:
+            state = dict(conversation_state(session_id))
+        else:
+            state = {"state": "unrecorded", "recordedDigest": None, "currentDigest": None,
+                     "reason": "A new conversation records its identity when its first attempt starts."}
+        plan.append({
+            "taskId": task_id,
+            "status": status,
+            "runtime": runtime,
+            "sessionId": session_id,
+            "state": state.get("state"),
+            "recordedDigest": state.get("recordedDigest"),
+            "currentDigest": state.get("currentDigest"),
+            "reason": state.get("reason"),
+            "action": "stop" if state.get("state") == "stale" else "keep",
+        })
+    return plan
