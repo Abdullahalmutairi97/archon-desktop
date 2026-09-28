@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import http.server
 import socket
 import socketserver
@@ -11,10 +12,13 @@ from pathlib import Path
 import pytest
 
 from archon_server.db import Database
+from archon_server.services import workspace_gateway as gateway_module
 from archon_server.services.workspace_gateway import (
     WorkspaceGatewayRequestRejected,
+    WorkspaceGatewayResponseTooLarge,
     WorkspaceGatewayServiceUnavailable,
     WorkspaceGatewayTicketUnavailable,
+    WorkspaceGatewayUpstreamError,
     WorkspacePreviewGateway,
 )
 from archon_server.services.workspace_services import WorkspaceServiceConflict, WorkspaceServiceManager, WorkspaceServiceNotFound
@@ -272,7 +276,9 @@ async def test_preview_requires_a_single_port_or_a_named_choice(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_truncated_response_is_flagged(tmp_path):
+async def test_a_reply_cut_at_the_cap_is_refused_not_passed_off_as_whole(tmp_path):
+    """A forward that could only return part of a body says so, and the preview
+    refuses the reply instead of relaying the part as if it were complete."""
     manager = await _running_manager(tmp_path, {
         "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": 4173}],
     })
@@ -282,8 +288,8 @@ async def test_truncated_response_is_flagged(tmp_path):
 
     gateway = WorkspacePreviewGateway(manager, forward=fake_forward)
     preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
-    result = await gateway.proxy(preview["ticket"], method="GET", path="", query="", headers={}, body=b"")
-    assert result["truncated"] is True
+    with pytest.raises(WorkspaceGatewayResponseTooLarge):
+        await gateway.proxy(preview["ticket"], method="GET", path="", query="", headers={}, body=b"")
 
 
 @pytest.mark.asyncio
@@ -596,11 +602,20 @@ def test_the_websocket_bridge_can_carry_a_socket_target(tmp_path):
     asyncio.run(scenario())
     assert received == ["hello"]
 
-def test_a_large_ide_asset_is_forwarded_without_truncation(tmp_path):
-    """The editor bundle is far larger than a typical API response, so the cap must
-    clear it while still bounding what the gateway holds and flags anything bigger."""
-    from archon_server.services import workspace_gateway as gateway_module
 
+class _QuietUnixServer(socketserver.ThreadingUnixStreamServer):
+    """A unix-socket service that does not report a client hanging up on it."""
+
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        return
+
+
+@pytest.mark.asyncio
+async def test_a_large_ide_asset_streams_whole_and_a_larger_one_is_aborted(tmp_path, monkeypatch):
+    """The editor bundle is far larger than a typical API response, so the cap must
+    clear it; a body past the cap is aborted rather than cut and passed off as whole."""
     body = b"x" * (8 * 1024 * 1024)
 
     class _BigHandler(http.server.BaseHTTPRequestHandler):
@@ -613,23 +628,519 @@ def test_a_large_ide_asset_is_forwarded_without_truncation(tmp_path):
             self.end_headers()
             self.wfile.write(body)
 
-    socket_path = Path(tempfile.mkdtemp(prefix="archon-big-")) / "asset.sock"
-    server = socketserver.ThreadingUnixStreamServer(str(socket_path), _BigHandler)
-    server.daemon_threads = True
+    short_state = Path(tempfile.mkdtemp(prefix="archon-big-"))
+    manager = _startable_manager(tmp_path, state_root=short_state)
+    socket_path = manager.socket_path(WORKSPACE_ID, "web")
+    socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    server = _QuietUnixServer(str(socket_path), _BigHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        result = asyncio.run(gateway_module._unix_forward(str(socket_path), "GET", "/asset.js", {}, b"", 15.0))
-        assert result["status"] == 200 and len(result["body"]) == len(body) and result["truncated"] is False
+        await manager.define(WORKSPACE_ID, {
+            "name": "web", "argv": ["/bin/echo"],
+            "ports": [{"name": "http", "unixSocket": str(socket_path)}],
+        })
+        await manager.start(WORKSPACE_ID, "web")
+        gateway = WorkspacePreviewGateway(manager)
+        preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+        whole = await gateway.proxy(preview["ticket"], method="GET", path="asset.js", query="", headers={}, body=b"")
+        assert whole["status"] == 200 and len(whole["body"]) == len(body)
 
-        # A response above the cap is still truncated, and says so.
-        original = gateway_module._MAX_RESPONSE_BYTES
-        gateway_module._MAX_RESPONSE_BYTES = 1024
-        try:
-            capped = asyncio.run(gateway_module._unix_forward(str(socket_path), "GET", "/asset.js", {}, b"", 15.0))
-        finally:
-            gateway_module._MAX_RESPONSE_BYTES = original
-        assert capped["truncated"] is True and len(capped["body"]) == 1024
+        monkeypatch.setattr(gateway_module, "_MAX_RESPONSE_BYTES", 1024)
+        with pytest.raises(WorkspaceGatewayResponseTooLarge):
+            await gateway.proxy(preview["ticket"], method="GET", path="asset.js", query="", headers={}, body=b"")
+        await manager.stop(WORKSPACE_ID, "web", confirm=True)
     finally:
         server.shutdown()
         server.server_close()
 
+
+# ------------------------------------------------------------------ streaming
+
+
+async def _pending_watchdogs() -> list[asyncio.Task]:
+    """Binding re-checks still running; a finished preview response leaves none.
+
+    A cancelled task finishes on the loop's next pass, so let that pass run first.
+    """
+    await asyncio.sleep(0)
+    return [
+        task for task in asyncio.all_tasks()
+        if not task.done()
+        and task.get_coro().__qualname__.endswith("schedule_revalidation.<locals>.watch")
+    ]
+
+
+async def _until_peer_closes(reader: asyncio.StreamReader) -> None:
+    try:
+        while await reader.read(65536):
+            pass
+    except ConnectionError:
+        pass
+
+
+@contextlib.asynccontextmanager
+async def _scripted_upstream(respond, *, unix_path: Path | None = None):
+    """Answer each connection with `respond(head, reader, writer)` in the test's loop.
+
+    Running the target in the same loop lets a test pace a response chunk by chunk
+    and see the moment the gateway lets go of the connection.
+    """
+    handlers: set[asyncio.Task] = set()
+
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        handlers.add(asyncio.current_task())
+        try:
+            head = await reader.readuntil(b"\r\n\r\n")
+            await respond(head, reader, writer)
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            writer.close()
+
+    if unix_path is None:
+        server = await asyncio.start_server(serve, "127.0.0.1", 0)
+        address = server.sockets[0].getsockname()[1]
+    else:
+        unix_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        server = await asyncio.start_unix_server(serve, path=str(unix_path))
+        address = str(unix_path)
+    try:
+        yield address
+    finally:
+        server.close()
+        for task in handlers:
+            task.cancel()
+        await asyncio.gather(*handlers, return_exceptions=True)
+
+
+async def _streaming_gateway(tmp_path: Path, port: int):
+    manager = await _running_manager(tmp_path, {
+        "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": port}],
+    })
+    gateway = WorkspacePreviewGateway(manager)
+    preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+    return manager, gateway, preview["ticket"]
+
+
+@pytest.mark.asyncio
+async def test_a_preview_body_streams_before_the_target_finishes(tmp_path):
+    """A chunk reaches the preview as soon as the target sends it, not once the
+    whole response is done, and the head is filtered before the first byte."""
+    release = asyncio.Event()
+    heads: list[bytes] = []
+
+    async def respond(head, reader, writer):
+        heads.append(head)
+        writer.write(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nSet-Cookie: session=secret\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n5\r\nfirst\r\n"
+        )
+        await writer.drain()
+        await release.wait()
+        writer.write(b"6\r\nsecond\r\n0\r\n\r\n")
+        await writer.drain()
+
+    async with _scripted_upstream(respond) as port:
+        _manager_, gateway, ticket = await _streaming_gateway(tmp_path, port)
+        stream = await gateway.proxy_stream(
+            ticket, method="GET", path="log", query="n=1",
+            headers={"accept": "text/plain", "authorization": "Bearer secret", "cookie": "x=1"},
+            body=b"",
+        )
+        try:
+            assert stream.status == 200
+            assert stream.headers["content-type"] == "text/plain"
+            assert "set-cookie" not in stream.headers and "transfer-encoding" not in stream.headers
+            assert await asyncio.wait_for(anext(stream), timeout=5) == b"first"
+            assert not release.is_set()
+            release.set()
+            assert [chunk async for chunk in stream] == [b"second"]
+        finally:
+            await stream.aclose()
+    request = heads[0].lower()
+    assert request.startswith(b"get /log?n=1 http/1.1\r\n")
+    assert b"accept: text/plain" in request
+    assert b"authorization" not in request and b"cookie" not in request
+    await asyncio.sleep(0)
+    assert await _pending_watchdogs() == []
+
+
+@pytest.mark.asyncio
+async def test_a_socket_target_streams_an_event_stream(tmp_path):
+    release = asyncio.Event()
+
+    async def respond(head, reader, writer):
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: one\n\n")
+        await writer.drain()
+        await release.wait()
+        writer.write(b"data: two\n\n")
+        await writer.drain()
+
+    short_state = Path(tempfile.mkdtemp(prefix="archon-gw-sse-"))
+    manager = _startable_manager(tmp_path, state_root=short_state)
+    socket_path = manager.socket_path(WORKSPACE_ID, "web")
+    async with _scripted_upstream(respond, unix_path=socket_path):
+        await manager.define(WORKSPACE_ID, {
+            "name": "web", "argv": ["/bin/echo"],
+            "ports": [{"name": "http", "unixSocket": str(socket_path)}],
+        })
+        await manager.start(WORKSPACE_ID, "web")
+        gateway = WorkspacePreviewGateway(manager)
+        preview = await gateway.open(WORKSPACE_ID, "web", expected_generation=1)
+        stream = await gateway.proxy_stream(
+            preview["ticket"], method="GET", path="events", query="",
+            headers={"accept": "text/event-stream"}, body=b"",
+        )
+        try:
+            assert stream.headers["content-type"] == "text/event-stream"
+            assert await asyncio.wait_for(anext(stream), timeout=5) == b"data: one\n\n"
+            release.set()
+            # The target closing its end is the end of an undelimited body.
+            assert [chunk async for chunk in stream] == [b"data: two\n\n"]
+        finally:
+            await stream.aclose()
+        await manager.stop(WORKSPACE_ID, "web", confirm=True)
+    assert await _pending_watchdogs() == []
+
+
+@pytest.mark.asyncio
+async def test_a_body_that_outgrows_the_cap_is_aborted_not_cut_short(tmp_path, monkeypatch):
+    monkeypatch.setattr(gateway_module, "_MAX_RESPONSE_BYTES", 1024)
+    more = asyncio.Event()
+    gone = asyncio.Event()
+
+    async def respond(head, reader, writer):
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n" + b"x" * 600)
+        await writer.drain()
+        await more.wait()
+        try:
+            for _ in range(4):
+                writer.write(b"x" * 600)
+                await writer.drain()
+        except ConnectionError:
+            pass
+        await _until_peer_closes(reader)
+        gone.set()
+
+    async with _scripted_upstream(respond) as port:
+        _manager_, gateway, ticket = await _streaming_gateway(tmp_path, port)
+        stream = await gateway.proxy_stream(ticket, method="GET", path="blob", query="", headers={}, body=b"")
+        received = await asyncio.wait_for(anext(stream), timeout=5)
+        assert received == b"x" * 600
+        more.set()
+        with pytest.raises(WorkspaceGatewayResponseTooLarge):
+            while True:
+                received += await asyncio.wait_for(anext(stream), timeout=5)
+        # Nothing past the cap was handed on, and the target connection is gone.
+        assert len(received) <= 1024
+        await asyncio.wait_for(gone.wait(), timeout=5)
+    assert await _pending_watchdogs() == []
+
+
+@pytest.mark.asyncio
+async def test_a_declared_length_over_the_cap_is_refused_before_any_byte(tmp_path, monkeypatch):
+    monkeypatch.setattr(gateway_module, "_MAX_RESPONSE_BYTES", 1024)
+    gone = asyncio.Event()
+
+    async def respond(head, reader, writer):
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n")
+        await writer.drain()
+        if head.startswith(b"HEAD "):
+            return
+        await _until_peer_closes(reader)
+        gone.set()
+
+    async with _scripted_upstream(respond) as port:
+        _manager_, gateway, ticket = await _streaming_gateway(tmp_path, port)
+        with pytest.raises(WorkspaceGatewayResponseTooLarge):
+            await gateway.proxy_stream(ticket, method="GET", path="big", query="", headers={}, body=b"")
+        await asyncio.wait_for(gone.wait(), timeout=5)
+        # A HEAD reply carries no body, so its declared length is no reason to refuse it.
+        head = await gateway.proxy(ticket, method="HEAD", path="big", query="", headers={}, body=b"")
+        assert head["status"] == 200 and head["body"] == b"" and "content-length" not in head["headers"]
+    assert await _pending_watchdogs() == []
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_target_is_dropped_after_the_idle_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr(gateway_module, "_IDLE_TIMEOUT_SECONDS", 0.2)
+    closed: list[str] = []
+
+    async def respond(head, reader, writer):
+        path = head.split(b" ", 2)[1].decode()
+        if path == "/body":
+            writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nfirst\r\n")
+            await writer.drain()
+        # Then say nothing more - or nothing at all - until the gateway gives up.
+        await _until_peer_closes(reader)
+        closed.append(path)
+
+    async with _scripted_upstream(respond) as port:
+        _manager_, gateway, ticket = await _streaming_gateway(tmp_path, port)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with pytest.raises(WorkspaceGatewayUpstreamError):
+            await gateway.proxy_stream(ticket, method="GET", path="head", query="", headers={}, body=b"")
+        stream = await gateway.proxy_stream(ticket, method="GET", path="body", query="", headers={}, body=b"")
+        assert await asyncio.wait_for(anext(stream), timeout=5) == b"first"
+        with pytest.raises(WorkspaceGatewayUpstreamError):
+            await asyncio.wait_for(anext(stream), timeout=5)
+        assert loop.time() - started < 3
+        for _ in range(250):
+            if len(closed) == 2:
+                break
+            await asyncio.sleep(0.02)
+        assert sorted(closed) == ["/body", "/head"]
+    assert await _pending_watchdogs() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["stop", "remove", "generation"])
+async def test_an_open_stream_stops_when_its_binding_changes(tmp_path, monkeypatch, change):
+    """A long response is re-checked like a WebSocket: a stopped or removed service
+    or a new generation ends it promptly, even while the target sits quiet."""
+    monkeypatch.setattr(gateway_module, "_AUTHORIZE_INTERVAL_SECONDS", 0.05)
+    gone = asyncio.Event()
+
+    async def respond(head, reader, writer):
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: one\n\n")
+        await writer.drain()
+        await _until_peer_closes(reader)
+        gone.set()
+
+    async with _scripted_upstream(respond) as port:
+        manager, gateway, ticket = await _streaming_gateway(tmp_path, port)
+        stream = await gateway.proxy_stream(ticket, method="GET", path="events", query="", headers={}, body=b"")
+        assert await asyncio.wait_for(anext(stream), timeout=5) == b"data: one\n\n"
+        if change == "stop":
+            await manager.stop(WORKSPACE_ID, "web", confirm=True)
+        elif change == "remove":
+            await manager.remove(WORKSPACE_ID, "web", confirm=True)
+        else:
+            with manager.database.transaction() as conn:
+                conn.execute("UPDATE workspaces SET generation=2 WHERE workspace_id=?", (WORKSPACE_ID,))
+        # The idle timeout is a minute, so only the binding check can end this in time.
+        with pytest.raises(WorkspaceGatewayTicketUnavailable):
+            await asyncio.wait_for(anext(stream), timeout=5)
+        await asyncio.wait_for(gone.wait(), timeout=5)
+    assert await _pending_watchdogs() == []
+
+
+@pytest.mark.asyncio
+async def test_a_request_waiting_for_its_head_stops_when_its_binding_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(gateway_module, "_AUTHORIZE_INTERVAL_SECONDS", 0.05)
+    gone = asyncio.Event()
+
+    async def respond(head, reader, writer):
+        await _until_peer_closes(reader)
+        gone.set()
+
+    async with _scripted_upstream(respond) as port:
+        manager, gateway, ticket = await _streaming_gateway(tmp_path, port)
+        pending = asyncio.ensure_future(
+            gateway.proxy_stream(ticket, method="GET", path="poll", query="", headers={}, body=b"")
+        )
+        await asyncio.sleep(0.1)
+        assert not pending.done()
+        await manager.stop(WORKSPACE_ID, "web", confirm=True)
+        with pytest.raises(WorkspaceGatewayTicketUnavailable):
+            await asyncio.wait_for(pending, timeout=5)
+        await asyncio.wait_for(gone.wait(), timeout=5)
+    assert await _pending_watchdogs() == []
+
+
+@pytest.mark.asyncio
+async def test_closing_a_stream_early_releases_the_target(tmp_path):
+    gone = asyncio.Event()
+
+    async def respond(head, reader, writer):
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: one\n\n")
+        await writer.drain()
+        await _until_peer_closes(reader)
+        gone.set()
+
+    async with _scripted_upstream(respond) as port:
+        _manager_, gateway, ticket = await _streaming_gateway(tmp_path, port)
+        stream = await gateway.proxy_stream(ticket, method="GET", path="events", query="", headers={}, body=b"")
+        assert await asyncio.wait_for(anext(stream), timeout=5) == b"data: one\n\n"
+        await stream.aclose()
+        await asyncio.wait_for(gone.wait(), timeout=5)
+        await asyncio.sleep(0)
+        assert await _pending_watchdogs() == []
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_a_target_or_header_that_could_split_the_request_is_refused(tmp_path):
+    """The request line is written verbatim, so a decoded line break in the path or
+    a header value is refused before any connection, on either kind of target."""
+    connections: list[bytes] = []
+
+    async def respond(head, reader, writer):
+        connections.append(head)
+
+    short_state = Path(tempfile.mkdtemp(prefix="archon-gw-split-"))
+    manager = _startable_manager(tmp_path, state_root=short_state)
+    socket_path = manager.socket_path(WORKSPACE_ID, "sock")
+    async with _scripted_upstream(respond) as port, _scripted_upstream(respond, unix_path=socket_path):
+        await manager.define(WORKSPACE_ID, {
+            "name": "web", "argv": ["/bin/echo"], "ports": [{"name": "http", "port": port}],
+        })
+        await manager.define(WORKSPACE_ID, {
+            "name": "sock", "argv": ["/bin/echo"],
+            "ports": [{"name": "http", "unixSocket": str(socket_path)}],
+        })
+        await manager.start(WORKSPACE_ID, "web")
+        await manager.start(WORKSPACE_ID, "sock")
+        gateway = WorkspacePreviewGateway(manager)
+        for name in ("web", "sock"):
+            ticket = (await gateway.open(WORKSPACE_ID, name, expected_generation=1))["ticket"]
+            for path in ("a\r\nX-Injected: 1", "a b", "a\tb"):
+                with pytest.raises(ValueError):
+                    await gateway.proxy_stream(ticket, method="GET", path=path, query="", headers={}, body=b"")
+            with pytest.raises(ValueError):
+                await gateway.proxy_stream(
+                    ticket, method="GET", path="ok", query="", headers={"accept": "a\r\nX-Injected: 1"}, body=b"",
+                )
+        await asyncio.sleep(0.05)
+    assert connections == []
+    assert await _pending_watchdogs() == []
+
+
+@contextlib.asynccontextmanager
+async def _served_preview(tmp_path: Path, port_entry: dict):
+    """Run the real app under uvicorn in this loop with one previewable service.
+
+    The preview route streams, so it is exercised over a real HTTP/1.1 connection,
+    where an aborted body and a client that goes away are both visible.
+    """
+    import uvicorn
+
+    from archon_server.app import create_app
+    from archon_server.config import Settings
+
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+    )
+    app = create_app(settings)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, log_config=None, access_log=False, timeout_graceful_shutdown=2))
+    serving = asyncio.create_task(server.serve(sockets=[listener]))
+    try:
+        for _ in range(1000):
+            if server.started or serving.done():
+                break
+            await asyncio.sleep(0.01)
+        assert server.started
+        services = app.state.local_workspace_services
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir(exist_ok=True)
+        services.database.create_workspace(
+            workspace_id=WORKSPACE_ID,
+            root=str(workspace_root),
+            owner_id=services.owner_id,
+            project_id="project-test",
+            generation=1,
+            isolation_profile="git-checkout",
+        )
+
+        async def fake_spawn(*_argv, **_kwargs):
+            return _GateProcess()
+
+        services._spawn = fake_spawn
+        await services.define(WORKSPACE_ID, {"name": "web", "argv": ["/bin/echo"], "ports": [port_entry]})
+        await services.start(WORKSPACE_ID, "web")
+        preview = await app.state.local_workspace_preview.open(WORKSPACE_ID, "web", expected_generation=1)
+        yield port, preview["ticket"]
+    finally:
+        server.should_exit = True
+        await asyncio.wait_for(serving, timeout=15)
+        listener.close()
+
+
+async def _preview_get(port: int, ticket: str, path: str):
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(
+        f"GET /api/local/preview/{ticket}/{path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+        "Accept: text/event-stream\r\n\r\n".encode("ascii")
+    )
+    await writer.drain()
+    head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+    return head.lower(), reader, writer
+
+
+@pytest.mark.asyncio
+async def test_the_preview_route_relays_an_event_stream_as_it_arrives(tmp_path):
+    release = asyncio.Event()
+    gone = asyncio.Event()
+
+    async def respond(head, reader, writer):
+        writer.write(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nSet-Cookie: session=secret\r\n\r\n"
+            b"data: one\n\n"
+        )
+        await writer.drain()
+        await release.wait()
+        writer.write(b"data: two\n\n")
+        await writer.drain()
+        await _until_peer_closes(reader)
+        gone.set()
+
+    async with _scripted_upstream(respond) as target_port:
+        async with _served_preview(tmp_path, {"name": "http", "port": target_port}) as (port, ticket):
+            head, reader, writer = await _preview_get(port, ticket, "events")
+            assert head.startswith(b"http/1.1 200")
+            assert b"content-type: text/event-stream" in head and b"cache-control: no-store" in head
+            assert b"set-cookie" not in head and b"transfer-encoding: chunked" in head
+            await asyncio.wait_for(reader.readuntil(b"data: one\n\n"), timeout=5)
+            assert not release.is_set()
+            release.set()
+            await asyncio.wait_for(reader.readuntil(b"data: two\n\n"), timeout=5)
+            # The preview view going away drops the target connection too.
+            writer.close()
+            await asyncio.wait_for(gone.wait(), timeout=5)
+            for _ in range(100):
+                if not await _pending_watchdogs():
+                    break
+                await asyncio.sleep(0.02)
+            assert await _pending_watchdogs() == []
+
+
+@pytest.mark.asyncio
+async def test_the_preview_route_refuses_or_aborts_a_body_over_the_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(gateway_module, "_MAX_RESPONSE_BYTES", 1024)
+
+    async def respond(head, reader, writer):
+        if head.startswith(b"GET /declared "):
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n")
+            await writer.drain()
+        else:
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n")
+            for _ in range(4):
+                writer.write(b"x" * 600)
+                await writer.drain()
+                await asyncio.sleep(0.02)
+        await _until_peer_closes(reader)
+
+    async with _scripted_upstream(respond) as target_port:
+        async with _served_preview(tmp_path, {"name": "http", "port": target_port}) as (port, ticket):
+            head, _reader, writer = await _preview_get(port, ticket, "declared")
+            assert head.startswith(b"http/1.1 502")
+            writer.close()
+
+            head, reader, writer = await _preview_get(port, ticket, "streamed")
+            assert head.startswith(b"http/1.1 200") and b"transfer-encoding: chunked" in head
+            rest = await asyncio.wait_for(reader.read(), timeout=5)
+            # The connection ends without the terminating chunk: the client sees an
+            # aborted transfer, never a short body presented as complete.
+            assert not rest.endswith(b"0\r\n\r\n")
+            assert rest.count(b"x") <= 1024
+            writer.close()

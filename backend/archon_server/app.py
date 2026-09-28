@@ -18,7 +18,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .config import Settings
@@ -124,7 +124,9 @@ from .services.workspace_gateway import (
     WorkspaceGatewayRequestRejected,
     WorkspaceGatewayServiceUnavailable,
     WorkspaceGatewayTicketUnavailable,
+    WorkspaceGatewayUpstreamError,
     WorkspacePreviewGateway,
+    WorkspacePreviewStream,
 )
 from .runner_enrollment import (
     RunnerAuthenticationError,
@@ -780,6 +782,29 @@ def _sse_event_batch(store: TaskStore, cursor: int, limit: int = 512) -> tuple[i
             f"id: {cursor}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
         )
     return cursor, frames
+
+
+class _PreviewStreamResponse(StreamingResponse):
+    """Relay a preview body as it arrives, and never complete one that was cut.
+
+    The status and headers are already on the wire when the body can fail, so
+    the only honest signal left is to end the transfer without its terminating
+    chunk: the client sees an aborted response, not a short complete one. The
+    target connection is released however the response ends, including when
+    the client goes away mid-stream.
+    """
+
+    def __init__(self, stream: WorkspacePreviewStream):
+        super().__init__(stream, status_code=stream.status)
+        self._preview_stream = stream
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        except WorkspaceGatewayError as exc:
+            logger.warning("Preview response stopped before it completed: %s", exc)
+        finally:
+            self._preview_stream.close()
 
 
 def create_app(
@@ -2868,7 +2893,7 @@ def create_app(
         body = await request.body()
         headers = {key.lower(): value for key, value in request.headers.items()}
         try:
-            result = await workspace_preview_gateway().proxy(
+            stream = await workspace_preview_gateway().proxy_stream(
                 ticket,
                 method=request.method,
                 path=path,
@@ -2881,12 +2906,18 @@ def create_app(
         except WorkspaceGatewayRequestRejected as exc:
             status_code = 413 if "too large" in str(exc) else 405
             raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-        response = Response(content=result["body"], status_code=result["status"])
-        for key, value in result["headers"].items():
-            response.headers[key] = value
-        if result["truncated"]:
-            response.headers["x-archon-preview-truncated"] = "1"
-        response.headers["cache-control"] = "no-store"
+        except WorkspaceGatewayUpstreamError as exc:
+            # Nothing was relayed yet: the target did not answer, stalled before
+            # its head, or declared a body larger than a preview may carry.
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        try:
+            response = _PreviewStreamResponse(stream)
+            for key, value in stream.headers.items():
+                response.headers[key] = value
+            response.headers["cache-control"] = "no-store"
+        except BaseException:
+            stream.close()
+            raise
         return response
 
     preview_origin = settings.local_server_url.rstrip("/")
