@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — the policy deny floor guards the other privileged gates
+
+- The same policy helper now guards workspace file create (`files.create`), file save (`files.write`), terminal creation (`terminal.create`), service start (`service.start`) and runtime selection at task admission (`runtime.<id>`). A recorded deny returns 403 with the deciding scope in the detail; a capability with no entry is unchanged, so only a deny alters behaviour. A narrower allow still cannot re-open what a broader scope denied.
+
 ## Unreleased — hard policy precedence with a deny floor
 
 - Add owner-only policy entries (`GET/PUT/DELETE /api/local/policy`) evaluated over one fixed chain, `global` > `project` > `workspace` > `agent`, with a deny floor: any matching `deny` decides, a matching `allow` decides only when nothing denies, and no entry means `unset` — never allowed. A narrower scope can therefore only narrow; it cannot widen a denial or re-open a reference. `GET /api/local/policy/effective` explains one decision with the chain, every matching entry and the deciding scope.

@@ -1347,6 +1347,8 @@ def create_app(
         revoked by a later handover.
         """
         current_owner_workspace(workspace_id)
+        enforce_policy("terminal.create", workspace=workspace_id,
+                       agent=str(principal["principal_id"]))
         claim_workspace_write(workspace_id, str(principal["principal_id"]))
         try:
             terminal = await workspace_terminal_service().create(
@@ -2317,9 +2319,24 @@ def create_app(
             raise HTTPException(status_code=503, detail="Policy storage is unavailable")
         return policy
 
-    def enforce_policy(capability: str, *, principal: str | None = None) -> None:
-        """Refuse a denied capability with the deciding scope, and never guess an allow."""
-        decided = policy_service().effective(capability=capability, agent=principal)
+    def enforce_policy(
+        capability: str,
+        *,
+        principal: str | None = None,
+        project: str | None = None,
+        workspace: str | None = None,
+        agent: str | None = None,
+    ) -> None:
+        """Refuse a denied capability, naming the scope that decided it.
+
+        The caller's principal is the narrowest scope unless an explicit agent scope is
+        given, and a capability with no entry passes: `unset` is never an allow, but it is
+        also not a denial, so only a recorded deny changes behaviour.
+        """
+        decided = policy_service().effective(
+            capability=capability, project=project, workspace=workspace,
+            agent=agent if agent is not None else principal,
+        )
         if decided["decision"] == "deny":
             raise HTTPException(status_code=403, detail=decided["reason"])
 
@@ -2517,6 +2534,8 @@ def create_app(
         principal=Depends(require_local_owner),
     ):
         current_owner_workspace(workspace_id)
+        enforce_policy("service.start", workspace=workspace_id,
+                       agent=str(principal["principal_id"]))
         # Starting a workspace service hands a process write access to the root.
         claim_workspace_write(workspace_id, str(principal["principal_id"]))
         try:
@@ -3109,6 +3128,9 @@ def create_app(
             )
             registry.validate({"runtime_id": task_runtime, "approval_mode": payload.approval_mode,
                                "chat_only": payload.chat_only})
+            # A denied runtime cannot be selected, whatever a narrower scope says.
+            enforce_policy(f"runtime.{capability_token(str(task_runtime))}",
+                           project=payload.project_id)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
@@ -3409,7 +3431,9 @@ def create_app(
         out-of-process writers.
         """
         workspace = current_owner_workspace(workspace_id)
-        claim_workspace_write(workspace_id, request_write_holder(authorization))
+        holder = request_write_holder(authorization)
+        enforce_policy("files.write", workspace=workspace_id, agent=holder)
+        claim_workspace_write(workspace_id, holder)
         root = workspace["root"]
         try:
             with workspace_file_write_lock:
@@ -3448,7 +3472,9 @@ def create_app(
         An active workspace task is still refused separately.
         """
         workspace = current_owner_workspace(workspace_id)
-        claim_workspace_write(workspace_id, request_write_holder(authorization))
+        holder = request_write_holder(authorization)
+        enforce_policy("files.create", workspace=workspace_id, agent=holder)
+        claim_workspace_write(workspace_id, holder)
         root = workspace["root"]
         try:
             with workspace_file_write_lock:

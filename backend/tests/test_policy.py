@@ -247,3 +247,88 @@ def _paired_owner_headers(socket_path: Path) -> dict[str, str]:
         }).encode() + b"\n")
         credential = json.loads(stream.readline())["credential"]
     return {"Authorization": f"Bearer {credential['access_token']}"}
+
+def test_a_denied_capability_is_refused_on_every_gate_that_uses_the_helper(tmp_path):
+    """The same helper guards terminals, services, file writes and runtime selection."""
+    from fastapi.testclient import TestClient
+
+    from archon_server.app import create_app
+    from archon_server.config import Settings
+
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+        local_workspace_terminal_tmux_executable=str(_fake_tmux(tmp_path)),
+    )
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    workspace_root.chmod(0o700)
+    workspace_id = "workspace-" + "b" * 32
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        client.app.state.store.db.create_workspace(
+            workspace_id=workspace_id, root=str(workspace_root),
+            owner_id=f"local-uid:{os.geteuid()}", project_id="project-policy",
+            generation=1, isolation_profile="git-checkout",
+        )
+        file_body = {"path": "notes.txt", "content": "changed", "expected_content": "hello"}
+
+        # With no policy entry every gate keeps its own behaviour.
+        allowed = client.post(f"/api/workspaces/{workspace_id}/files/create", headers=headers,
+                              json={"path": "notes.txt", "content": "hello"})
+        assert allowed.status_code in {200, 201}, allowed.text
+
+        denied_capabilities = ["files.create", "files.write", "terminal.create", "service.start"]
+        for capability in denied_capabilities:
+            client.put("/api/local/policy", headers=headers, json={
+                "scope": "workspace", "scopeId": workspace_id, "capability": capability, "effect": "deny",
+                "note": "blocked for this checkout",
+            })
+        client.put("/api/local/policy", headers=headers, json={
+            "scope": "global", "scopeId": "*", "capability": "runtime.pi", "effect": "deny",
+        })
+
+        created = client.post(f"/api/workspaces/{workspace_id}/files/create", headers=headers,
+                              json={"path": "second.txt", "content": "hello"})
+        assert created.status_code == 403
+        assert "denied by workspace:" in created.json()["detail"]
+
+        written = client.post(f"/api/workspaces/{workspace_id}/files/write", headers=headers,
+                              json=file_body)
+        assert written.status_code == 403
+        terminal = client.post(f"/api/local/workspaces/{workspace_id}/terminals", headers=headers,
+                               json={"expectedGeneration": 1})
+        assert terminal.status_code == 403
+        started = client.post(f"/api/local/workspaces/{workspace_id}/services/anything/start",
+                              headers=headers)
+        assert started.status_code == 403
+        # A denied runtime is refused at admission, before any task is stored.
+        before = len(client.app.state.store.list(50))
+        task = client.post("/api/tasks", headers=headers, json={
+            "prompt": "run", "profile": "pi", "approval_mode": "auto",
+        })
+        assert task.status_code == 403
+        assert "runtime.pi" in task.json()["detail"]
+        assert len(client.app.state.store.list(50)) == before
+
+        # A narrower allow cannot re-open what a broader scope denied.
+        client.put("/api/local/policy", headers=headers, json={
+            "scope": "agent", "scopeId": f"local-uid:{os.geteuid()}", "capability": "runtime.pi",
+            "effect": "allow",
+        })
+        still_denied = client.post("/api/tasks", headers=headers, json={
+            "prompt": "run", "profile": "pi", "approval_mode": "auto",
+        })
+        assert still_denied.status_code == 403
+
+
+def _fake_tmux(tmp_path: Path) -> Path:
+    script = tmp_path / "fake-tmux"
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+    return script
+

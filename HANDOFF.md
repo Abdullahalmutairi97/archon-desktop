@@ -193,8 +193,9 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    fixed chain `global` > `project` > `workspace` > `agent`, a deny floor (any deny decides,
    a narrower scope cannot widen it, no entry is `unset` not allowed), an explaining
    `GET /api/local/policy/effective`, and enforcement at grant minting (before the workspace
-   lookup) and again at invocation. Still open in that item: adopting the same helper on the
-   other privileged gates (workspace services, terminals, runtimes).
+   lookup) and again at invocation. The same helper now guards file create/save, terminal
+   creation, service start and runtime selection (`runtime.<id>` at task admission); a deny
+   returns 403 with the deciding scope, and an unset capability leaves behaviour unchanged.
 
 10. **P6–P8** — collaboration, release/ops qualification, enhancements (currently
    unstarted; the operator deferred these earlier — confirm before starting).
