@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — diagnostic records are encrypted at rest
+
+- The diagnostic capture ledger (`GET/DELETE /api/local/diagnostics`) is now written as an AES-256-GCM envelope under a random key drawn when the server starts and held only in its memory. A copied data directory or backup carries no readable record: not the detail, the kind, the task or the runtime. Each write uses a fresh nonce, and the envelope's authenticated data binds its version and key id.
+- A ledger left by an earlier process cannot be decrypted after a restart; it is deleted once and counted in `discardedUnreadableLedgers`, exactly as if its records had expired. A ledger under the current key that fails authentication is tampering and answers 503. The status reports `encryptedAtRest`, the cipher and `keyScope: process-memory`.
+- The key's protection against another process of the same account rests on the server clearing its dumpable flag, which denies `/proc/<pid>/mem`; it is not an OS boundary.
+- New backend dependency: `cryptography` (lockfile updated). **Reinstall backend dependencies (`backend/.venv/bin/python -m pip install -e './backend'`) before restarting a deployed server.** If the package is missing, the server still starts with diagnostic capture off and its routes answering 503; it never falls back to plaintext.
+
+## Unreleased — a runtime deny decides before availability
+
+- Task admission evaluates the `runtime.<id>` policy as soon as the runtime is resolved, before checking whether the runtime is installed, so a denied runtime answers 403 on every host instead of 503 where it happens to be absent. This fixes the backend CI job, where Pi is not installed.
+
 ## Unreleased — the policy deny floor guards the other privileged gates
 
 - The same policy helper now guards workspace file create (`files.create`), file save (`files.write`), terminal creation (`terminal.create`), service start (`service.start`) and runtime selection at task admission (`runtime.<id>`). A recorded deny returns 403 with the deciding scope in the detail; a capability with no entry is unchanged, so only a deny alters behaviour. A narrower allow still cannot re-open what a broader scope denied.

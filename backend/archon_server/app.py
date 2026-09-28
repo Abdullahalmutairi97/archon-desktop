@@ -960,11 +960,15 @@ def create_app(
                                    projects=catalog, cwd=task.get('cwd'), session=session)
         task['cwd'] = revalidate_workspace(task.get('cwd'), admitted.authorized_roots)
 
-    # Bounded, redacted, expiring capture of runner diagnostics; the engine sink
-    # never fails a turn, and no raw process output is stored.
-    diagnostic_capture = DiagnosticCapture(
-        settings.data_dir.expanduser().resolve() / "diagnostic-capture"
-    )
+    # Bounded, redacted, expiring capture of runner diagnostics, encrypted at rest;
+    # the engine sink never fails a turn, and no raw process output is stored. When
+    # the ledger cannot be kept safely, capture is off and its routes answer 503.
+    try:
+        diagnostic_capture = DiagnosticCapture(
+            settings.data_dir.expanduser().resolve() / "diagnostic-capture"
+        )
+    except DiagnosticCaptureUnavailable:
+        diagnostic_capture = None
     # Immutable per-attempt snapshots of the identity a turn ran with, plus the
     # runtime pins a person accepted. Snapshots are written before the runner
     # starts and are never overwritten.
@@ -1029,7 +1033,7 @@ def create_app(
 
     engine = TaskEngine(store, selected_runner, settings.worker_poll_seconds, settings.quota_retry_seconds,
                         registry=registry, preflight=preflight, journal=journal,
-                        diagnostic_sink=diagnostic_capture.record_mapping,
+                        diagnostic_sink=diagnostic_capture.record_mapping if diagnostic_capture else None,
                         snapshot_sink=record_attempt_snapshot)
     for adapter in selected_runner.values():
         if isinstance(adapter, (PrimeRunner, PiRunner)):

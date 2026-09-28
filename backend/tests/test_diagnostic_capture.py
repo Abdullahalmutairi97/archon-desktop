@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import stat
@@ -56,9 +57,9 @@ def test_credentials_are_redacted_before_storage(tmp_path):
     assert b"abc123" not in ledger
     assert b"sk-live-abcdefghijklmnop" not in ledger
     assert b"AKIAIOSFODNN7EXAMPLE" not in ledger
-    assert b"[REDACTED]" in ledger
     details = [row["detail"] for row in capture.list(10)]
     assert all("abc123" not in detail for detail in details)
+    assert any("[REDACTED]" in detail for detail in details)
 
 
 def test_redaction_keeps_ordinary_diagnostic_text():
@@ -130,6 +131,88 @@ def test_an_unsafe_or_tampered_ledger_fails_closed(tmp_path):
     path.write_bytes(json.dumps({"version": 1, "entries": [row]}).encode())
     with pytest.raises(DiagnosticCaptureUnavailable):
         capture.list(5)
+
+
+def test_the_ledger_is_encrypted_at_rest_under_a_key_held_only_in_memory(tmp_path):
+    key = bytes(range(32))
+    capture = DiagnosticCapture(tmp_path / "capture", key=key)
+    capture.record(kind="runner_error", detail="runtime prime could not parse line 7",
+                   task_id="task-plain", runtime="prime")
+    root = tmp_path / "capture"
+    ledger = (root / "diagnostics.json").read_bytes()
+    # Nothing a record carries is readable on disk: not the detail, the kind or its identity.
+    for fragment in (b"could not parse", b"runner_error", b"task-plain", b"prime", b"expiresAt"):
+        assert fragment not in ledger
+    envelope = json.loads(ledger)
+    assert set(envelope) == {"version", "cipher", "keyId", "nonce", "ciphertext"}
+    assert envelope["version"] == 2 and envelope["cipher"] == "AES-256-GCM"
+    # The key is never persisted next to the ledger.
+    assert sorted(path.name for path in root.iterdir()) == ["diagnostics.json"]
+    assert key.hex().encode() not in ledger
+    # A fresh nonce is used for every write, so identical content never repeats on disk.
+    capture.clear()
+    first = json.loads((root / "diagnostics.json").read_bytes())["nonce"]
+    capture.clear()
+    assert json.loads((root / "diagnostics.json").read_bytes())["nonce"] != first
+    # The same key reads it back.
+    reopened = DiagnosticCapture(root, key=key)
+    assert reopened.list(5) == []
+
+
+def test_a_ledger_from_a_previous_process_key_is_discarded_not_trusted(tmp_path):
+    root = tmp_path / "capture"
+    DiagnosticCapture(root).record(kind="other", detail="written before a restart")
+    # A new process draws a new key: the old records are unreadable and dropped.
+    restarted = DiagnosticCapture(root)
+    assert restarted.list(5) == []
+    status = restarted.status()
+    assert status["entryCount"] == 0
+    assert status["encryptedAtRest"] is True
+    assert status["discardedUnreadableLedgers"] == 1
+    # Writing replaces the unreadable ledger with one under the current key.
+    restarted.record(kind="other", detail="after the restart")
+    assert [row["detail"] for row in restarted.list(5)] == ["after the restart"]
+    assert restarted.status()["discardedUnreadableLedgers"] == 1
+
+
+def test_a_tampered_ciphertext_under_the_current_key_fails_closed(tmp_path):
+    root = tmp_path / "capture"
+    capture = DiagnosticCapture(root, key=b"k" * 32)
+    capture.record(kind="other", detail="authentic")
+    path = root / "diagnostics.json"
+    envelope = json.loads(path.read_bytes())
+    ciphertext = bytearray(base64.b64decode(envelope["ciphertext"]))
+    ciphertext[0] ^= 0x01
+    envelope["ciphertext"] = base64.b64encode(bytes(ciphertext)).decode()
+    path.write_bytes(json.dumps(envelope).encode())
+    with pytest.raises(DiagnosticCaptureUnavailable):
+        capture.list(5)
+    # A wrong-sized key is refused outright.
+    with pytest.raises(ValueError):
+        DiagnosticCapture(tmp_path / "other", key=b"short")
+
+
+def test_missing_encryption_support_disables_capture_instead_of_storing_plaintext(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from archon_server import diagnostic_capture as module
+    from archon_server.app import create_app
+    from archon_server.config import Settings
+
+    monkeypatch.setattr(module, "AESGCM", None)
+    with pytest.raises(DiagnosticCaptureUnavailable):
+        DiagnosticCapture(tmp_path / "capture")
+    assert not (tmp_path / "capture" / "diagnostics.json").exists()
+
+    # The server still starts; only the diagnostics surface reports itself unavailable.
+    settings = Settings(
+        archon_root=tmp_path, hermes_home=tmp_path / ".hermes", data_dir=tmp_path / ".data",
+        auth_token="legacy-token", local_owner_mode=True, start_worker=False,
+    )
+    with TestClient(create_app(settings)) as client:
+        assert client.app.state.diagnostic_capture is None
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        assert client.get("/api/local/diagnostics", headers=headers).status_code == 503
 
 
 def test_constructor_bounds_and_limit_validation(tmp_path):

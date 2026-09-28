@@ -10,7 +10,16 @@ module stores only the bounded diagnostic records the runners already produce
 * caps each record and the whole ledger, and refuses to load a ledger that does not
   match its schema, an unsafe mode or an unexpected owner,
 * expires every record after a TTL, pruned on read and on write,
+* encrypts the ledger at rest with AES-256-GCM under a key that exists only in this
+  process's memory, so a copied data directory or backup holds no readable record,
 * and reports `rawCapture: false` so a client never assumes full output is stored.
+
+The key is drawn when the server starts and is never written anywhere. A ledger left
+by an earlier process therefore cannot be read after a restart; it is discarded as if
+it had expired and the count is reported, while a ledger under the current key that
+fails authentication is treated as tampered and refused. The key's protection against
+another process running as the same account rests on the server clearing its dumpable
+flag (`hardening.py`), which denies `/proc/<pid>/mem` to such a process.
 
 Raw output capture is deliberately not implemented: there is no reliable way to
 prove that an arbitrary runtime's stdout or stderr excludes credentials, and the
@@ -18,6 +27,9 @@ roadmap rule is to disable raw capture when it cannot be excluded.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -28,9 +40,26 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+except ImportError:  # pragma: no cover - exercised by patching AESGCM to None
+    # Without an AEAD the ledger cannot be written safely, so capture turns itself
+    # off instead of storing plaintext; the rest of the server keeps working.
+    AESGCM = None  # type: ignore[assignment,misc]
+
+    class InvalidTag(Exception):  # type: ignore[no-redef]
+        """Placeholder so the decrypt path still names the failure it catches."""
+
 _MAX_ENTRIES = 64
 _MAX_ENTRY_CHARS = 512
 _MAX_LEDGER_BYTES = 256 * 1024
+# The envelope carries the ciphertext base64-encoded, plus a small fixed header.
+_MAX_ENVELOPE_BYTES = _MAX_LEDGER_BYTES * 2
+_KEY_BYTES = 32
+_NONCE_BYTES = 12
+_CIPHER = "AES-256-GCM"
+_ENVELOPE_VERSION = 2
 _MIN_TTL_SECONDS = 60
 _MAX_TTL_SECONDS = 30 * 24 * 3600
 _ALLOWED_KINDS = frozenset({"malformed_record", "unknown_event_type", "runner_error", "other"})
@@ -96,17 +125,30 @@ class DiagnosticCapture:
         max_entries: int = _MAX_ENTRIES,
         ttl_seconds: int = 24 * 3600,
         now: Callable[[], datetime] | None = None,
+        key: bytes | None = None,
     ):
         if isinstance(max_entries, bool) or not isinstance(max_entries, int) or not 1 <= max_entries <= 512:
             raise ValueError("max_entries must be between 1 and 512")
         if (isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int)
                 or not _MIN_TTL_SECONDS <= ttl_seconds <= _MAX_TTL_SECONDS):
             raise ValueError("ttl_seconds must be between 60 and 2592000")
+        if AESGCM is None:
+            raise DiagnosticCaptureUnavailable(
+                "diagnostic capture needs the cryptography package to encrypt its ledger"
+            )
         self._root = _private_root(root)
         self._path = self._root / "diagnostics.json"
         self._max_entries = max_entries
         self._ttl = ttl_seconds
         self._now = now or (lambda: datetime.now(timezone.utc))
+        if key is None:
+            key = os.urandom(_KEY_BYTES)
+        if not isinstance(key, bytes) or len(key) != _KEY_BYTES:
+            raise ValueError("the capture key must be 32 bytes")
+        self._aead = AESGCM(key)
+        # A non-secret label that tells this key's ledger from an earlier process's.
+        self._key_id = hmac.new(key, b"archon-diagnostic-capture-key-id", hashlib.sha256).hexdigest()[:32]
+        self._discarded = 0
 
     # -- writes -------------------------------------------------------------
 
@@ -182,10 +224,15 @@ class DiagnosticCapture:
             "ttlSeconds": self._ttl,
             "maxEntryChars": _MAX_ENTRY_CHARS,
             "rawCapture": False,
+            "encryptedAtRest": True,
+            "cipher": _CIPHER,
+            "keyScope": "process-memory",
+            "discardedUnreadableLedgers": self._discarded,
             "note": (
                 "Only bounded diagnostic records are stored, never raw process output: a "
                 "runtime's text cannot be proven free of credentials, so raw capture stays "
-                "disabled."
+                "disabled. The ledger is encrypted under a key held only in this process's "
+                "memory, so records written before a restart are discarded."
             ),
         }
 
@@ -221,6 +268,53 @@ class DiagnosticCapture:
                 kept.append(row)
         document["entries"] = kept[-self._max_entries:]
 
+    def _associated_data(self) -> bytes:
+        return f"archon-diagnostic-capture:v{_ENVELOPE_VERSION}:{self._key_id}".encode("ascii")
+
+    def _seal(self, plaintext: bytes) -> bytes:
+        nonce = os.urandom(_NONCE_BYTES)
+        ciphertext = self._aead.encrypt(nonce, plaintext, self._associated_data())
+        envelope = {
+            "version": _ENVELOPE_VERSION,
+            "cipher": _CIPHER,
+            "keyId": self._key_id,
+            "nonce": base64.b64encode(nonce).decode("ascii"),
+            "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+        }
+        return json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+    def _open(self, payload: bytes) -> bytes | None:
+        """Decrypt an envelope, or return None when an earlier process's key wrote it.
+
+        Only the key id separates the two cases, and forging it merely discards the
+        ledger, which anyone able to write it could do by deleting it. Under the
+        current key id, any failure to authenticate is tampering and fails closed.
+        """
+        try:
+            envelope = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise DiagnosticCaptureUnavailable("capture ledger is malformed") from exc
+        if (not isinstance(envelope, dict)
+                or set(envelope) != {"version", "cipher", "keyId", "nonce", "ciphertext"}
+                or envelope["version"] != _ENVELOPE_VERSION or envelope["cipher"] != _CIPHER
+                or not isinstance(envelope["keyId"], str)
+                or not isinstance(envelope["nonce"], str)
+                or not isinstance(envelope["ciphertext"], str)):
+            raise DiagnosticCaptureUnavailable("capture ledger has an unsupported schema")
+        if not hmac.compare_digest(envelope["keyId"], self._key_id):
+            return None
+        try:
+            nonce = base64.b64decode(envelope["nonce"], validate=True)
+            ciphertext = base64.b64decode(envelope["ciphertext"], validate=True)
+        except ValueError as exc:
+            raise DiagnosticCaptureUnavailable("capture ledger is malformed") from exc
+        if len(nonce) != _NONCE_BYTES:
+            raise DiagnosticCaptureUnavailable("capture ledger is malformed")
+        try:
+            return self._aead.decrypt(nonce, ciphertext, self._associated_data())
+        except InvalidTag as exc:
+            raise DiagnosticCaptureUnavailable("capture ledger failed authentication") from exc
+
     def _load(self) -> dict[str, Any]:
         try:
             descriptor = os.open(
@@ -233,15 +327,27 @@ class DiagnosticCapture:
         try:
             info = os.fstat(descriptor)
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > _MAX_LEDGER_BYTES):
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > _MAX_ENVELOPE_BYTES):
                 raise DiagnosticCaptureUnavailable("capture ledger is unsafe or oversized")
-            payload = os.read(descriptor, _MAX_LEDGER_BYTES + 1)
+            payload = os.read(descriptor, _MAX_ENVELOPE_BYTES + 1)
         finally:
             os.close(descriptor)
-        if len(payload) > _MAX_LEDGER_BYTES:
+        if len(payload) > _MAX_ENVELOPE_BYTES:
             raise DiagnosticCaptureUnavailable("capture ledger is oversized")
+        plaintext = self._open(payload)
+        if plaintext is None:
+            # An earlier process's ledger can never be read again: drop it once so it
+            # is counted once, and so no unreadable ciphertext lingers on disk.
+            try:
+                self._path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise DiagnosticCaptureUnavailable("unreadable capture ledger could not be removed") from exc
+            self._discarded += 1
+            return self._empty()
         try:
-            data = json.loads(payload.decode("utf-8"))
+            data = json.loads(plaintext.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise DiagnosticCaptureUnavailable("capture ledger is malformed") from exc
         if not isinstance(data, dict) or set(data) != {"version", "entries"} or data["version"] != 1:
@@ -265,9 +371,10 @@ class DiagnosticCapture:
         self._prune(document)
         if len(document["entries"]) > self._max_entries:
             raise DiagnosticCaptureError("capture ledger limit reached")
-        payload = json.dumps(document, separators=(",", ":"), sort_keys=True).encode("utf-8")
-        if len(payload) > _MAX_LEDGER_BYTES:
+        plaintext = json.dumps(document, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        if len(plaintext) > _MAX_LEDGER_BYTES:
             raise DiagnosticCaptureError("capture ledger limit reached")
+        payload = self._seal(plaintext)
         temporary = self._root / ("." + uuid.uuid4().hex + ".diagnostics.tmp")
         descriptor = -1
         try:

@@ -156,8 +156,9 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    (`docs/releases/p5-runtime-compatibility.md`); the panel asserts nothing ready without a
    verified provider state. Event normalization, the approval binding and bounded
    diagnostic *records* are done (owner-only `GET/DELETE /api/local/diagnostics`, redacted,
-   capped and expiring; raw output capture stays disabled by design). Encryption of that
-   ledger at rest is not implemented. Originally: event normalization and the approval binding are done
+   capped, expiring and encrypted at rest under a per-process in-memory key; raw output
+   capture stays disabled by design). Deploying this needs `cryptography` in the backend
+   venv: reinstall backend dependencies before restarting the service. Originally: event normalization and the approval binding are done
    (bounded diagnostics for unreadable or unhandled native records; the Codex
    approval broker binds each prompt to its request id, process generation and exact
    action, and denies stale, replayed, unauthorized and expired decisions). What is
