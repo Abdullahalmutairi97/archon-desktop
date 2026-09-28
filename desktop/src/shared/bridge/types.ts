@@ -519,6 +519,26 @@ export interface OperationMap {
     payload: EmptyPayload
     result: { runtimes: readonly RuntimeRecord[] }
   }
+  /** Honest per-provider authentication state. The server never returns a value. */
+  'secrets.authStates': {
+    payload: EmptyPayload
+    result: {
+      providers: readonly {
+        provider: string
+        state: 'unavailable' | 'unverified' | 'verified'
+        references: number
+        purpose: readonly string[]
+        verifiedAt: string | null
+        lastAttemptAt: string | null
+        lastFailureReason: string | null
+      }[]
+      epoch: number
+      /** Where the broker reads credentials from, e.g. `process-environment`. */
+      secretSource: string
+      secretValuesExposed: false
+      note: string
+    }
+  }
   'tasks.submit': {
     payload: TaskSubmitPayload
     result: { task: TaskRecord }

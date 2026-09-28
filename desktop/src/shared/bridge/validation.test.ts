@@ -280,6 +280,29 @@ describe('finite desktop bridge validation', () => {
     }, 'projects.create')).toThrow(TypeError)
   })
 
+  it('accepts an empty auth-state request and refuses a response that carries a value', () => {
+    expect(parseOperationRequest('secrets.authStates', {})).toEqual(['secrets.authStates', {}])
+    expect(() => parseOperationRequest('secrets.authStates', { provider: 'prime' })).toThrow(TypeError)
+    const state = {
+      providers: [{
+        provider: 'prime', state: 'unverified', references: 1, purpose: ['provider'],
+        verifiedAt: null, lastAttemptAt: '2026-09-28T00:00:00Z', lastFailureReason: 'no call yet',
+      }],
+      epoch: 3, secretSource: 'process-environment', secretValuesExposed: false, note: 'never a value',
+    }
+    expect(parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, state, 'secrets.authStates')).toEqual(state)
+    // A response that claims to expose values, uses an unknown state, or carries
+    // a value-shaped field is refused rather than shown.
+    for (const bad of [
+      { ...state, secretValuesExposed: true },
+      { ...state, providers: [{ ...state.providers[0], state: 'ready' }] },
+      { ...state, providers: [{ ...state.providers[0], value: 'sk-live-secret' }] },
+      { ...state, providers: [{ ...state.providers[0], references: -1 }] },
+    ]) {
+      expect(() => parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, bad, 'secrets.authStates')).toThrow(TypeError)
+    }
+  })
+
   it('accepts only the narrow Prime submit/get/events/cancel payloads', () => {
     expect(parseOperationRequest('runtimes.list', {})).toEqual(['runtimes.list', {}])
     expect(parseOperationRequest('tasks.submit', { projectId: 'project-1', prompt: 'Inspect this project' })).toEqual([

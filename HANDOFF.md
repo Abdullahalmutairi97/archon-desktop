@@ -151,7 +151,10 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
    (`backend/tests/test_resume_evidence.py`, `test_migration_restore_evidence.py`).
    The one shape a reviewer may still ask for is duplicate project *names*, which live
    in the separate Hermes projects database that the Archon migration never reads.
-7. **P5 remainder** — event normalization, the approval binding and bounded
+7. **P5 remainder** — runtime choices in the server view now come from the manifest and
+   the provider authentication state, with a published and coverage-tested matrix
+   (`docs/releases/p5-runtime-compatibility.md`); the panel asserts nothing ready without a
+   verified provider state. Event normalization, the approval binding and bounded
    diagnostic *records* are done (owner-only `GET/DELETE /api/local/diagnostics`, redacted,
    capped and expiring; raw output capture stays disabled by design). Encryption of that
    ledger at rest is not implemented. Originally: event normalization and the approval binding are done

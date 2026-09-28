@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import type { ConnectionDescription, DesktopBridge, JsonRecord, LocalCodexProjectDto } from '../../shared/bridge/types'
 import { PrimeTaskPanel } from './PrimeTaskPanel'
+import { RuntimeCompatibility } from './RuntimeCompatibility'
 import { WorkspaceFileBrowser, type WorkspaceReadOnlyFilePort } from './WorkspaceFileBrowser'
 import { WorkspaceConsole } from './WorkspaceConsole'
 import { LanguageProfiles } from './LanguageProfiles'
@@ -612,5 +613,6 @@ export function ServerCollections({
     </div>}
     {(data || currentWorkspaceLoadState?.state === 'ready') && <p className="server-collections-note">Counts show rows returned; the server may cap session, task and workspace lists.</p>}
     {data && bridge && connection && <PrimeTaskPanel key={generation} bridge={bridge} connection={connection} projects={data.projects} tasks={data.tasks} workspaces={workspaceRecords} />}
+    {bridge && connection?.configured === true && <RuntimeCompatibility key={generation} bridge={bridge} generation={connection.generation} />}
   </section>
 }

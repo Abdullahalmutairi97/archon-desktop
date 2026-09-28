@@ -228,6 +228,7 @@ describe('backend transport', () => {
       'sessions.list',
       'tasks.list',
       'events.cursor',
+      'secrets.authStates',
       'workspaces.list',
       'workspaces.get',
       'workspaces.files.list',

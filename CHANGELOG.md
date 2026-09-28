@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — runtime choices come from the manifest and the auth state
+
+- The server view now has a Runtime compatibility panel that derives what may be chosen from `GET /api/runtimes` and the provider authentication state, instead of a hardcoded list. A runtime is `ready` only when the executable, its declared version and one brokered provider call were all observed; an unavailable executable, an unverified version or an absent/unverified credential state render as `unavailable` or `unverified` with the specific reason. Every capability the manifest publishes has a row, an unsupported capability is shown as `unsupported` rather than hidden, and a test fails if the manifest gains a key the table does not cover. The matrix and its limits are published in `docs/releases/p5-runtime-compatibility.md`.
+- Add the read-only `secrets.authStates` bridge operation (`GET /api/local/secrets/auth-states`) with strict validation: the response is refused unless it carries `secretValuesExposed: false`, a known state per provider and bounded fields, so a value-carrying response can never reach the renderer.
+
 ## Unreleased — the IDE listens on a private socket, not a loopback port
 
 - `POST /api/local/workspaces/{id}/services/code-server` now binds code-server to a unix socket under this server's private service state root (`--socket`, `--socket-mode 600`, parent directory `0700`) instead of a loopback TCP port. code-server runs with `--auth none`, so a loopback port was a full write-capable IDE for any host-local process; a socket in a private directory is openable only by this account, and a different local account is denied. The preview gateway resolves either declared target kind for HTTP and WebSockets, so the ticket-gated preview still reaches the IDE, and a caller that still sends a port gets the same socket definition.

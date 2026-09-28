@@ -440,7 +440,9 @@ describe('ServerCollections', () => {
     })
     const { rerender } = render(<ServerCollections bridge={bridge} connection={connection(true, 1)} />)
 
-    await waitFor(() => expect(apiInvoke).toHaveBeenCalledTimes(4))
+    await waitFor(() => expect(
+      apiInvoke.mock.calls.filter(([operation]) => ['projects.list', 'sessions.list', 'tasks.list', 'workspaces.list'].includes(operation as string)),
+    ).toHaveLength(4))
     generation = 2
     rerender(<ServerCollections bridge={bridge} connection={connection(true, 2)} />)
 
@@ -529,6 +531,8 @@ describe('ServerCollections', () => {
     expect(await screen.findByText('SERVER access rejected')).toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('Return to Connection to re-enter the server token.')
     expect(screen.queryByRole('button', { name: 'Retry SERVER data' })).not.toBeInTheDocument()
-    expect(apiInvoke).toHaveBeenCalledTimes(4)
+    // Only the collection reads are requested; the runtime panel is not reached
+    // because the connection was rejected.
+    expect(apiInvoke.mock.calls.filter(([operation]) => ['projects.list', 'sessions.list', 'tasks.list', 'workspaces.list'].includes(operation as string))).toHaveLength(4)
   })
 })

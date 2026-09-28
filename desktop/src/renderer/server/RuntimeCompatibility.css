@@ -1,0 +1,17 @@
+.runtime-compatibility { margin-top: 1rem; font-size: 0.8rem; }
+.runtime-compatibility-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.runtime-compatibility h4 { margin: 0; font-size: 0.85rem; }
+.runtime-compatibility ul { list-style: none; margin: 0.5rem 0 0; padding: 0; display: grid; gap: 0.5rem; }
+.runtime-row { border: 1px solid var(--border, #2a2a2a); border-radius: 4px; padding: 0.5rem; }
+.runtime-row-heading { display: flex; align-items: center; gap: 0.5rem; }
+.runtime-state { text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.04em; }
+.runtime-state-ready { color: #7fd18f; }
+.runtime-state-unverified { color: #d8c07a; }
+.runtime-state-unavailable { color: #f08a8a; }
+.runtime-reason { margin: 0.35rem 0; color: var(--muted, #9a9a9a); }
+.runtime-facts, .runtime-capabilities { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 0.25rem 0.75rem; margin: 0.25rem 0 0; }
+.runtime-facts dt, .runtime-capabilities dt { font-size: 0.7rem; color: var(--muted, #9a9a9a); }
+.runtime-facts dd, .runtime-capabilities dd { margin: 0; }
+.capability-absent { color: var(--muted, #9a9a9a); }
+.runtime-note { margin: 0.5rem 0 0; color: var(--muted, #9a9a9a); }
+.runtime-compatibility-error { color: #f08a8a; margin: 0.35rem 0 0; }

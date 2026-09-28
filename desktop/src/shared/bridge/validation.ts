@@ -132,6 +132,7 @@ const operationNames = Object.freeze([
   'tasks.list',
   'events.cursor',
   'runtimes.list',
+  'secrets.authStates',
   'tasks.submit',
   'tasks.get',
   'tasks.events',
@@ -478,6 +479,7 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
     case 'projects.list':
     case 'events.cursor':
     case 'runtimes.list':
+    case 'secrets.authStates':
     case 'workspaces.list':
       return Object.freeze([operation, parseEmptyPayload(payload)])
     case 'workspaces.provision':
@@ -668,6 +670,50 @@ function exactObject(value: unknown, allowedKeys: readonly string[]): Record<str
   return record
 }
 
+
+const AUTH_STATES = new Set(['unavailable', 'unverified', 'verified'])
+
+/**
+ * Per-provider authentication state. The server contract is that no secret value
+ * is ever present, so a response carrying anything value-shaped is refused here
+ * rather than displayed.
+ */
+function parseSecretAuthStates(value: unknown): OperationMap['secrets.authStates']['result'] {
+  const record = exactObject(value, ['providers', 'epoch', 'secretSource', 'secretValuesExposed', 'note'])
+  if (record.secretValuesExposed !== false) return fail()
+  if (!boundedString(record.secretSource, 64) || !boundedString(record.note, 2_000)) return fail()
+  if (typeof record.epoch !== 'number' || !Number.isSafeInteger(record.epoch) || record.epoch < 0) return fail()
+  if (!Array.isArray(record.providers) || record.providers.length > 64) return fail()
+  const providers = record.providers.map((item) => {
+    const row = exactObject(item, [
+      'provider', 'state', 'references', 'purpose', 'verifiedAt', 'lastAttemptAt', 'lastFailureReason',
+    ])
+    if (!boundedString(row.provider, 128) || typeof row.state !== 'string' || !AUTH_STATES.has(row.state)) return fail()
+    if (typeof row.references !== 'number' || !Number.isSafeInteger(row.references) || row.references < 0) return fail()
+    if (!Array.isArray(row.purpose) || row.purpose.length > 16
+      || row.purpose.some((entry) => !boundedString(entry, 64))) return fail()
+    for (const key of ['verifiedAt', 'lastAttemptAt', 'lastFailureReason'] as const) {
+      if (row[key] !== null && !boundedString(row[key], 512, true)) return fail()
+    }
+    return Object.freeze({
+      provider: row.provider,
+      state: row.state as 'unavailable' | 'unverified' | 'verified',
+      references: row.references,
+      purpose: Object.freeze(row.purpose as string[]),
+      verifiedAt: row.verifiedAt as string | null,
+      lastAttemptAt: row.lastAttemptAt as string | null,
+      lastFailureReason: row.lastFailureReason as string | null,
+    })
+  })
+  return Object.freeze({
+    providers: Object.freeze(providers),
+    epoch: record.epoch,
+    secretSource: record.secretSource,
+    secretValuesExposed: false as const,
+    note: record.note,
+  })
+}
+
 function parseRuntimeRecord(value: unknown): RuntimeRecord {
   const record = boundedJsonRecord(value)
   if (record.id !== 'prime' && record.id !== 'pi') return fail()
@@ -835,6 +881,8 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       if (!Array.isArray(record.runtimes) || record.runtimes.length > 100) return fail()
       return Object.freeze({ runtimes: Object.freeze(record.runtimes.map(parseRuntimeRecord)) })
     }
+    case 'secrets.authStates':
+      return parseSecretAuthStates(value)
     case 'tasks.submit':
     case 'tasks.get': {
       const record = exactObject(value, ['task'])
