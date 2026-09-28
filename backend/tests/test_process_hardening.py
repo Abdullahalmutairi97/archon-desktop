@@ -102,10 +102,29 @@ def test_the_server_entry_point_clears_the_flag_before_listening(monkeypatch):
     monkeypatch.setattr(main_module, "create_app", lambda _value: events.append("app") or "app")
     monkeypatch.setattr(main_module.uvicorn, "run", lambda *_args, **_kwargs: events.append("run"))
     monkeypatch.setattr(
-        main_module, "disable_process_dumpability", lambda: events.append("harden") or True,
+        main_module, "ensure_process_environment_is_private", lambda: events.append("harden") or True,
     )
 
     main_module.main()
 
     # Hardening happens after configuration is validated and before the listener runs.
     assert events == ["validate", "harden", "app", "run"]
+
+
+@LINUX_ONLY
+def test_the_server_logs_when_a_host_refuses_the_hardening(monkeypatch, caplog):
+    """A host that cannot close the channel must say so instead of staying silent."""
+    import logging
+
+    import archon_server.hardening as hardening
+
+    monkeypatch.setattr(hardening, "disable_process_dumpability", lambda: False)
+    with caplog.at_level(logging.WARNING, logger=hardening.logger.name):
+        assert hardening.ensure_process_environment_is_private() is False
+    assert any("hardening is unavailable" in record.message for record in caplog.records)
+
+    caplog.clear()
+    monkeypatch.setattr(hardening, "disable_process_dumpability", lambda: True)
+    with caplog.at_level(logging.WARNING, logger=hardening.logger.name):
+        assert hardening.ensure_process_environment_is_private() is True
+    assert caplog.records == []

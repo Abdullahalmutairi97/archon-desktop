@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — review fixes for the newest security code
+
+- **Lease race (high).** `WorkspaceWriteLease.acquire`/`release` were unlocked read-modify-write cycles, so two writers could both record themselves as holder. Each cycle now runs under an in-process lock plus an flock on a private `<root>/.leases.lock`, with thread and cross-process tests that assert exactly one holder.
+- **Confinement probes (medium).** Both probes accepted sandboxes that enforce nothing: the filesystem probe's "denied" leg wrote `/etc` (unwritable here even unsandboxed) and ignored its `writable_root` argument, and the network probe had no positive control. The filesystem probe now proves an unsandboxed write to an unbound control directory succeeds, then requires that same write to fail and the bound directory to stay writable; the network probe serves a loopback listener and requires the unsandboxed control connect to succeed before requiring the sandboxed one to fail. A failing control makes each probe return False, with tests that fail against the old code.
+- **Wrong-shaped native records (medium).** Valid JSON with wrong field types raised out of the stream readers. Each runner now handles a record in a guarded handler, so an unexpected shape becomes a bounded `diagnostic` instead of an internal error, and a turn with no answer still fails closed.
+- **Silent hardening failure (medium).** The server logged nothing when the host refused `PR_SET_DUMPABLE`; `ensure_process_environment_is_private()` now warns with the pid and the channel that stays open, and a test asserts the warning.
+- **Terminal input (low).** Sending a line into a workspace shell now requires the write lease; interrupt stays available to the owner because stopping a runaway command must not depend on lease ownership.
+- **Native-session bind (low).** A resumed native session now binds its own session file instead of the whole native session store, so the sandbox cannot rewrite another session's transcript.
+
 ## Unreleased — approval binding evidence recorded
 
 - Record the approval-binding evidence for the P5 box: the local Codex approval broker binds each prompt to the protocol request id and app-server process generation, and accepts an answer only when session, thread, task, kind, command or canonical changed paths, cwd, reason and diffs all match, denying stale generations, inactive tasks, unknown or replayed requests, a path that became a symlink while the dialog was open, disconnects and timeouts. Prime, Pi and Hermes have no interactive approval prompt, and the secret broker binds its grants to the action digest and identity fields.

@@ -167,6 +167,27 @@ Guiding constraints read from `AGENTS.md`, `docs/roadmap/*` and `docs/releases/*
 - Broker isolation against a same-uid process: not achieved. The named-tool and
   environment channels are filtered and `/proc/<server>/environ` is denied; the ledger,
   the pairing socket and direct provider access are not.
+
+## Host changes made on this machine (outside the repository)
+
+These are deliberate operator-visible changes, each reversible:
+
+- `~/.config/systemd/user/archon-desktop-prime.service.d/proc-privacy.conf` puts
+  `~/.local/share/archon-proc-privacy` on that unit's `PYTHONPATH`, whose
+  `sitecustomize.py` clears the process dumpable flag at interpreter start. Verified:
+  the restarted server's `/proc/<pid>/environ` is `PermissionError`, its `/proc/<pid>/stat`
+  is still readable, the unit is active and `/api/health` answers 200. Rollback: delete
+  the drop-in and the directory, then `systemctl --user daemon-reload` and restart.
+- The workspace-service extensions (code-server 4.139.1 and four digest-verified VSIX
+  files) are installed under `~/.local/share/code-server/extensions`.
+- Portable preview packages were built under `desktop/release/` (git-ignored); the newest
+  one, commit `63c6ab0`, has sha256
+  `978146586c7f15065fc7913d2868d05054f03e86eb97782d3bcc7133a3fcf9b7` and passes the
+  native check 13/13.
+
+Still exposed to same-uid readers on this host, and not fixed here: an unrelated auth
+service (`GOTRUE_JWT_SECRET`, `GOTRUE_EXTERNAL_APPLE_SECRET`), the agent-harness
+processes, and each unit's own 0600 `EnvironmentFile`.
 - Debug session under the workspace IDE: never exercised. `ms-python.debugpy` is pinned
   and installed, but Archon has no debug-launch surface and code-server exposes no
   session flag, so no breakpoint, DAP message or adapter activation has been observed.

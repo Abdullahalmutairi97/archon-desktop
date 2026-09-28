@@ -22,8 +22,11 @@ reads to other same-uid processes. It is deliberately narrow.
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 import sys
+
+logger = logging.getLogger(__name__)
 
 PR_SET_DUMPABLE = 4  # linux/prctl.h
 PR_GET_DUMPABLE = 3
@@ -43,6 +46,23 @@ def disable_process_dumpability() -> bool:
     except (OSError, AttributeError, ValueError):
         return False
     return result == 0
+
+
+def ensure_process_environment_is_private() -> bool:
+    """Clear the dumpable flag and say so loudly when the host refuses.
+
+    A host or kernel that rejects the call keeps running, because refusing to start
+    would be worse, but the failure must not be silent: the warning names the exact
+    channel that stays open.
+    """
+    hardened = disable_process_dumpability()
+    if not hardened:
+        logger.warning(
+            "process environment hardening is unavailable: /proc/%s/environ stays readable "
+            "by other same-uid processes on this host",
+            os.getpid(),
+        )
+    return hardened
 
 
 def process_dumpable() -> bool | None:

@@ -36,6 +36,7 @@ def test_diagnostics_are_bounded_and_deduplicate_unknown_types():
 
 
 def _fake_runtime(tmp_path: Path, lines: list[str]) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     executable = tmp_path / "fake-runtime"
     # Each line must reach stdout as written, including JSON objects and arrays.
     body = "\n".join("print(" + json.dumps(line) + ")" for line in lines)
@@ -150,3 +151,67 @@ async def test_a_flood_of_malformed_records_stays_bounded(tmp_path):
     diagnostics = [data for kind, data in emitted if kind == "diagnostic"]
     assert len(diagnostics) == MAX_DIAGNOSTIC_EMISSIONS
     assert [row["malformed"] for row in diagnostics] == [1, 2, 3, 4]
+
+@pytest.mark.asyncio
+async def test_wrong_field_types_become_diagnostics_not_crashes(tmp_path):
+    """Valid JSON with wrong field types must not raise out of the stream reader."""
+    prime_records = [
+        json.dumps({"type": "message_update", "assistantMessageEvent": "not-an-object"}),
+        json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "thinking_end", "message": []}}),
+        json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": "x"}}),
+        json.dumps({"type": "tool_execution_start", "args": ["not", "an", "object"]}),
+        json.dumps({"type": "tool_execution_end", "result": "not-an-object"}),
+        json.dumps({"type": "message_end", "message": ["not", "an", "object"]}),
+        json.dumps({"type": "agent_end", "messages": "not-a-list"}),
+        json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "ok"}}),
+        json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}}),
+    ]
+    emitted: list[tuple[str, dict]] = []
+
+    async def emit(kind, data):
+        emitted.append((kind, data))
+
+    result = await PrimeRunner(_fake_runtime(tmp_path, prime_records), tmp_path / "sessions", tmp_path).run(
+        {"id": "shape-prime", "approval_mode": "auto", "prompt": "go", "cwd": str(tmp_path)}, emit
+    )
+    assert result["text"] == "ok"
+    diagnostics = [data for kind, data in emitted if kind == "diagnostic"]
+    # Four emissions is the bound, and every wrong-shape record is a malformed row;
+    # the three that follow the bound are counted but not emitted.
+    assert [row["kind"] for row in diagnostics] == ["malformed_record"] * 4
+    assert [row["malformed"] for row in diagnostics] == [1, 2, 3, 4]
+    assert all("unexpected shape" in (row["detail"] or "") for row in diagnostics)
+
+    pi_records = [
+        json.dumps({"type": "message_update", "assistantMessageEvent": 7}),
+        json.dumps({"type": "message_end", "message": "not-an-object"}),
+        json.dumps({"type": "tool_execution_start", "args": "not-an-object"}),
+        json.dumps({"type": "tool_execution_end", "result": [1, 2]}),
+        json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "ok"}}),
+        json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}}),
+    ]
+    pi_emitted: list[tuple[str, dict]] = []
+
+    async def pi_emit(kind, data):
+        pi_emitted.append((kind, data))
+
+    pi_result = await PiRunner(_fake_runtime(tmp_path / "pi", pi_records), tmp_path / "pi-sessions", tmp_path).run(
+        {"id": "shape-pi", "approval_mode": "auto", "prompt": "go", "cwd": str(tmp_path)}, pi_emit
+    )
+    assert pi_result["text"] == "ok"
+    pi_diagnostics = [data for kind, data in pi_emitted if kind == "diagnostic"]
+    assert len(pi_diagnostics) == 4
+    assert all("unexpected shape" in (row["detail"] or "") for row in pi_diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_unreadable_shapes_still_fail_a_turn_without_an_answer(tmp_path):
+    """Wrong field types are diagnostics, but a turn with no answer still fails closed."""
+    records = [json.dumps({"type": "message_end", "message": ["not", "an", "object"]})]
+    with pytest.raises(RuntimeError) as failed:
+        await PrimeRunner(_fake_runtime(tmp_path, records), tmp_path / "sessions", tmp_path).run(
+            {"id": "shape-only", "approval_mode": "auto", "prompt": "go", "cwd": str(tmp_path)},
+            lambda *_args: asyncio.sleep(0),
+        )
+    assert "no readable answer" in str(failed.value)
+

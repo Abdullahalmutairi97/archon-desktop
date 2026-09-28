@@ -12,14 +12,17 @@ the bounded charset keeps the ledger a plain, line-free JSON object.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import stat
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 _WORKSPACE_ID = re.compile(r"workspace-[A-Za-z0-9._-]{1,190}\Z")
 _HOLDER = re.compile(r"[A-Za-z0-9._:/-]{1,128}\Z")
@@ -67,7 +70,34 @@ class WorkspaceWriteLease:
             raise ValueError("max_ttl_seconds must be between 5 and 3600")
         self._root = _private_root(root)
         self._path = self._root / "leases.json"
+        self._lock_path = self._root / ".leases.lock"
+        self._thread_lock = threading.Lock()
         self._max_ttl = max_ttl_seconds
+
+    @contextmanager
+    def _exclusive(self) -> Iterator[None]:
+        """Serialize a read-modify-write cycle across threads and processes.
+
+        The ledger is replaced atomically, so a reader never sees a torn file, but
+        ``acquire`` decides from a snapshot and then writes: without this lock two
+        callers can both observe a free workspace and both record themselves as the
+        holder. The in-process lock covers the API thread pool; the descriptor lock
+        covers a second Archon process sharing this ledger.
+        """
+        with self._thread_lock:
+            descriptor = os.open(
+                self._lock_path,
+                os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            try:
+                opened = os.fstat(descriptor)
+                if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
+                    raise WorkspaceWriteLeaseUnavailable("write-lease lock file is unsafe")
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                yield
+            finally:
+                os.close(descriptor)
 
     def acquire(self, workspace_id: Any, holder: Any, ttl_seconds: Any = None) -> dict[str, str]:
         workspace = self._validate_workspace(workspace_id)
@@ -76,29 +106,31 @@ class WorkspaceWriteLease:
         ttl = self._max_ttl if ttl_seconds is None else ttl_seconds
         if isinstance(ttl, bool) or not isinstance(ttl, int) or not _MIN_TTL <= ttl <= self._max_ttl:
             raise ValueError("ttl_seconds is invalid")
-        leases = self._load()
-        existing = leases.get(workspace)
-        if isinstance(existing, dict) and existing.get("holder") != holder and not self._expired(existing):
-            raise WorkspaceWriteLeaseBusy(f"workspace is held by {existing.get('holder')}")
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
-        leases[workspace] = {"holder": holder, "expiresAt": expires_at.isoformat()}
-        self._save(leases)
-        return {"workspaceId": workspace, "holder": holder, "expiresAt": leases[workspace]["expiresAt"]}
+        with self._exclusive():
+            leases = self._load()
+            existing = leases.get(workspace)
+            if isinstance(existing, dict) and existing.get("holder") != holder and not self._expired(existing):
+                raise WorkspaceWriteLeaseBusy(f"workspace is held by {existing.get('holder')}")
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+            leases[workspace] = {"holder": holder, "expiresAt": expires_at.isoformat()}
+            self._save(leases)
+            return {"workspaceId": workspace, "holder": holder, "expiresAt": leases[workspace]["expiresAt"]}
 
     def release(self, workspace_id: Any, holder: Any) -> None:
         workspace = self._validate_workspace(workspace_id)
         if not isinstance(holder, str) or not _HOLDER.fullmatch(holder):
             raise ValueError("holder is invalid")
-        leases = self._load()
-        existing = leases.get(workspace)
-        if not isinstance(existing, dict) or self._expired(existing):
+        with self._exclusive():
+            leases = self._load()
+            existing = leases.get(workspace)
+            if not isinstance(existing, dict) or self._expired(existing):
+                leases.pop(workspace, None)
+                self._save(leases)
+                raise WorkspaceWriteLeaseNotHolder("no active write lease to release")
+            if existing.get("holder") != holder:
+                raise WorkspaceWriteLeaseNotHolder("a different holder owns the write lease")
             leases.pop(workspace, None)
             self._save(leases)
-            raise WorkspaceWriteLeaseNotHolder("no active write lease to release")
-        if existing.get("holder") != holder:
-            raise WorkspaceWriteLeaseNotHolder("a different holder owns the write lease")
-        leases.pop(workspace, None)
-        self._save(leases)
 
     def status(self, workspace_id: Any) -> dict[str, Any]:
         workspace = self._validate_workspace(workspace_id)

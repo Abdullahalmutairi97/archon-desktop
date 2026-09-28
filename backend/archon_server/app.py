@@ -1210,8 +1210,16 @@ def create_app(
         workspace_id: str,
         session_id: str,
         payload: WorkspaceTerminalInputRequest,
+        principal=Depends(require_local_owner),
     ):
+        """Send one line into a workspace shell while holding the write lease.
+
+        Driving an existing shell is a write action, so it is refused while another
+        writer holds the lease. Interrupt stays available to the owner: stopping a
+        runaway command must not depend on who holds the lease.
+        """
         current_owner_workspace(workspace_id)
+        claim_workspace_write(workspace_id, str(principal["principal_id"]))
         try:
             await workspace_terminal_service().send_line(workspace_id, session_id, payload.line)
         except WorkspaceTerminalInputOutcomeUnknown as exc:

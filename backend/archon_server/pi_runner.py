@@ -192,6 +192,48 @@ class PiRunner:
                 handled_types = {
                     "session", "message_update", "message_end", "tool_execution_start", "tool_execution_end",
                 }
+
+                async def handle_event(record: dict) -> None:
+                    nonlocal answer, failure
+                    typ = record.get("type")
+                    if typ not in handled_types:
+                        row = diagnostics.note_unknown(typ)
+                        if row is not None:
+                            await emit("diagnostic", row)
+                        return
+                    if typ == "session" and record.get("id"):
+                        await emit("session", {"session_id": session_id})
+                    elif typ == "message_update":
+                        update = record.get("assistantMessageEvent") or {}
+                        if not isinstance(update, dict):
+                            raise TypeError("assistantMessageEvent is not an object")
+                        if update.get("type") == "text_delta":
+                            text = str(update.get("delta") or "")
+                            answer += text
+                            await emit("message.delta", {"message_id": task_id, "text": text, "session_id": session_id})
+                        elif update.get("type") == "thinking_delta":
+                            await emit("thinking", {"text": str(update.get("delta") or "")})
+                    elif typ == "message_end":
+                        message = record.get("message") or {}
+                        if not isinstance(message, dict):
+                            raise TypeError("message is not an object")
+                        if message.get("role") == "assistant":
+                            if not answer:
+                                answer = _content(message)
+                            if message.get("errorMessage"):
+                                failure = str(message["errorMessage"])
+                            await emit("message.done", {"session_id": session_id})
+                    elif typ == "tool_execution_start":
+                        args = record.get("args") or {}
+                        if not isinstance(args, dict):
+                            raise TypeError("tool args are not an object")
+                        await emit("tool", {"id": record.get("toolCallId"), "phase": "start", "tool": record.get("toolName"), "target": json.dumps(args)})
+                    elif typ == "tool_execution_end":
+                        result = record.get("result") or {}
+                        if not isinstance(result, dict):
+                            raise TypeError("tool result is not an object")
+                        await emit("tool", {"id": record.get("toolCallId"), "phase": "end", "tool": record.get("toolName"), "detail": _content(result), "exit_code": 1 if record.get("isError") else 0})
+
                 async for line in _stdout_jsonl_records(process.stdout):
                     text = line.decode(errors="replace").strip()
                     if not text:
@@ -199,8 +241,8 @@ class PiRunner:
                     try:
                         event = json.loads(text)
                     except json.JSONDecodeError:
-                        # A record this server cannot read is a diagnostic, never
-                        # an outcome; it must not complete or fail the turn.
+                        # A record this server cannot read is a diagnostic, never an
+                        # outcome; it must not complete or fail the turn.
                         row = diagnostics.note_malformed(f"line is not JSON ({len(text)} bytes)")
                         if row is not None:
                             await emit("diagnostic", row)
@@ -210,34 +252,16 @@ class PiRunner:
                         if row is not None:
                             await emit("diagnostic", row)
                         continue
-                    typ = event.get("type")
-                    if typ not in handled_types:
-                        row = diagnostics.note_unknown(typ)
+                    try:
+                        await handle_event(event)
+                    except (AttributeError, TypeError, ValueError, IndexError, KeyError):
+                        # Wrong field shapes are diagnostics too, never internal errors.
+                        row = diagnostics.note_malformed(
+                            f"record of type {event.get('type')!r} has an unexpected shape"
+                        )
                         if row is not None:
                             await emit("diagnostic", row)
-                        continue
-                    if typ == "session" and event.get("id"):
-                        await emit("session", {"session_id": session_id})
-                    elif typ == "message_update":
-                        delta = event.get("assistantMessageEvent") or {}
-                        if delta.get("type") == "text_delta":
-                            text = str(delta.get("delta") or "")
-                            answer += text
-                            await emit("message.delta", {"message_id": task_id, "text": text, "session_id": session_id})
-                        elif delta.get("type") == "thinking_delta":
-                            await emit("thinking", {"text": str(delta.get("delta") or "")})
-                    elif typ == "message_end":
-                        msg = event.get("message") or {}
-                        if msg.get("role") == "assistant":
-                            if not answer:
-                                answer = _content(msg)
-                            if msg.get("errorMessage"):
-                                failure = str(msg.get("errorMessage"))
-                            await emit("message.done", {"session_id": session_id})
-                    elif typ == "tool_execution_start":
-                        await emit("tool", {"id": event.get("toolCallId"), "phase": "start", "tool": event.get("toolName"), "target": json.dumps(event.get("args") or {})})
-                    elif typ == "tool_execution_end":
-                        await emit("tool", {"id": event.get("toolCallId"), "phase": "end", "tool": event.get("toolName"), "detail": _content(event.get("result") or {}), "exit_code": 1 if event.get("isError") else 0})
+
                 rc = await process.wait()
                 stderr = await stderr_task
                 if self._cancellation_requested(task, task_id, attempt_key):

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from archon_server.app import create_app
 from archon_server.config import Settings
 from archon_server.local_pairing import LOCAL_PAIRING_AUDIENCE
+from archon_server.services.workspace_terminal import WorkspaceTerminalService
 from archon_server.workspace_write_lease import (
     WorkspaceWriteLease,
     WorkspaceWriteLeaseBusy,
@@ -19,6 +20,13 @@ from archon_server.workspace_write_lease import (
 
 
 WORKSPACE_ID = "workspace-0123456789abcdef0123456789abcdef"
+
+
+def _fake_tmux(tmp_path):
+    """A minimal tmux stand-in: enough for the terminal service to create a session."""
+    from tests.test_workspace_terminal import _fake_tmux as build
+
+    return build(tmp_path)
 
 
 def test_write_lease_is_exclusive_and_releasable(tmp_path):
@@ -218,3 +226,129 @@ def test_static_token_writes_use_their_own_writer_identity(tmp_path):
         ).json()
         # The static token is a distinct writer identity from a paired desktop.
         assert held["holder"] == "server-token:owner"
+
+def test_concurrent_acquires_from_threads_yield_one_holder(tmp_path):
+    """Two writers must not both acquire: the ledger cycle is serialized."""
+    import threading
+
+    leases = WorkspaceWriteLease(tmp_path / "leases")
+    winners: list[str] = []
+    losers: list[str] = []
+    barrier = threading.Barrier(8)
+    lock = threading.Lock()
+
+    def contend(index: int) -> None:
+        holder = f"writer-{index}"
+        barrier.wait()
+        try:
+            leases.acquire(WORKSPACE_ID, holder, 60)
+        except WorkspaceWriteLeaseBusy:
+            with lock:
+                losers.append(holder)
+            return
+        with lock:
+            winners.append(holder)
+
+    threads = [threading.Thread(target=contend, args=(index,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert len(winners) == 1, (winners, losers)
+    assert len(losers) == 7
+    assert leases.status(WORKSPACE_ID)["holder"] == winners[0]
+    leases.release(WORKSPACE_ID, winners[0])
+    assert leases.status(WORKSPACE_ID)["held"] is False
+
+
+def _contend_in_subprocess(root: str, holder: str, barrier, results) -> None:
+    """One cross-process contender; the barrier makes every attempt concurrent."""
+    from archon_server.workspace_write_lease import (
+        WorkspaceWriteLease, WorkspaceWriteLeaseBusy,
+    )
+
+    leases = WorkspaceWriteLease(root)
+    barrier.wait()
+    try:
+        leases.acquire(WORKSPACE_ID, holder, 60)
+    except WorkspaceWriteLeaseBusy:
+        results.put(("busy", holder))
+        return
+    results.put(("acquired", holder))
+
+
+def test_concurrent_acquires_from_processes_yield_one_holder(tmp_path):
+    """A second Archon process sharing the ledger must not double-acquire."""
+    import multiprocessing
+
+    root = tmp_path / "leases"
+    WorkspaceWriteLease(root)  # create the private root first
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(4)
+    results = context.Queue()
+    workers = [
+        context.Process(target=_contend_in_subprocess, args=(str(root), f"proc-{index}", barrier, results))
+        for index in range(4)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=60)
+
+    outcomes = [results.get(timeout=10) for _ in workers]
+    acquired = [holder for state, holder in outcomes if state == "acquired"]
+    assert len(acquired) == 1, outcomes
+    assert len([state for state, _ in outcomes if state == "busy"]) == 3
+    reopened = WorkspaceWriteLease(root)
+    assert reopened.status(WORKSPACE_ID)["holder"] == acquired[0]
+
+def test_terminal_input_requires_the_lease_but_interrupt_does_not(tmp_path):
+    """Driving a shell is a write action; stopping a runaway command is not."""
+    settings = Settings(
+        archon_root=tmp_path,
+        hermes_home=tmp_path / ".hermes",
+        data_dir=tmp_path / ".data",
+        auth_token="legacy-token",
+        local_owner_mode=True,
+        start_worker=False,
+        local_workspace_terminal_tmux_executable=str(_fake_tmux(tmp_path)),
+    )
+    with TestClient(create_app(settings)) as client:
+        headers = _paired_owner_headers(settings.local_pairing_socket_path)
+        workspace_root = tmp_path / "terminal-checkout"
+        workspace_root.mkdir()
+        workspace_root.chmod(0o700)
+        workspace_id = "workspace-ffffffffffffffffffffffffffffffff"
+        client.app.state.store.db.create_workspace(
+            workspace_id=workspace_id,
+            root=str(workspace_root),
+            owner_id=f"local-uid:{os.geteuid()}",
+            project_id="project-terminal-input",
+            generation=1,
+            isolation_profile="git-checkout",
+        )
+        lease_url = f"/api/local/workspaces/{workspace_id}/write-lease"
+        created = client.post(f"/api/local/workspaces/{workspace_id}/terminals", headers=headers,
+                              json={"expectedGeneration": 1})
+        assert created.status_code == 201, created.text
+        session_id = created.json()["terminal"]["sessionId"]
+        input_url = f"/api/local/workspaces/{workspace_id}/terminals/{session_id}/input"
+        interrupt_url = f"/api/local/workspaces/{workspace_id}/terminals/{session_id}/interrupt"
+
+        # Creating the terminal claimed the lease for the owner, so hand it over first.
+        owner = f"local-uid:{os.geteuid()}"
+        assert client.request("DELETE", lease_url, headers=headers, json={"holder": owner}).status_code == 200
+        assert client.post(lease_url, headers=headers,
+                           json={"holder": "desktop-editor", "ttlSeconds": 300}).status_code == 200
+        blocked = client.post(input_url, headers=headers, json={"line": "touch /tmp/should-not-run"})
+        assert blocked.status_code == 409
+        assert "desktop-editor" in blocked.json()["detail"]
+        assert client.post(interrupt_url, headers=headers).status_code in (200, 409, 504)
+
+        # The lease holder may drive the shell again after taking the workspace back.
+        assert client.request("DELETE", lease_url, headers=headers,
+                              json={"holder": "desktop-editor"}).status_code == 200
+        allowed = client.post(input_url, headers=headers, json={"line": "echo hello"})
+        assert allowed.status_code in (200, 504)
+

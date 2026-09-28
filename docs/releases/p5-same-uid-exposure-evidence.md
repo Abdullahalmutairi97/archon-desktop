@@ -59,3 +59,32 @@ The bullet stays open. To demonstrate it, one of these is required:
 Until then, do not describe the broker as preventing shell or direct-HTTP access. Its own
 docstring and `docs/security.md` say capability boundary, not OS sandbox, and this record
 is the evidence for that wording.
+
+## Running-instance remediation (2026-09-28)
+
+The check above was about this repository's code. A review then found that the
+instance actually running on this host had none of it: PID 3318,
+`archon-desktop-prime.service`, from a different checkout
+(`~/projects/archon-desktop`) built before this work, was dumpable and its
+environment (with `ARCHON_DESKTOP_AUTH_TOKEN` and the Telegram token) was readable
+by any same-uid process.
+
+That instance was remediated without touching its code, because the flag is reset
+on `execve` and so cannot be set by a wrapper script:
+
+- `~/.local/share/archon-proc-privacy/sitecustomize.py` (mode 0600) clears the
+  dumpable flag at interpreter start; `site` imports it automatically.
+- `~/.config/systemd/user/archon-desktop-prime.service.d/proc-privacy.conf` puts
+  that directory on the unit's `PYTHONPATH`.
+- `systemctl --user daemon-reload && systemctl --user restart archon-desktop-prime.service`.
+
+Verified after the restart: `/proc/<new pid>/environ` raises `PermissionError`
+(errno 13), `/proc/<pid>/stat` stays readable, the unit is `active` and
+`/api/health` answers 200. Rollback: remove the drop-in and the hook directory,
+then `daemon-reload` and restart.
+
+Remaining same-uid exposure on this host, measured afterwards with a `/proc` audit:
+an unrelated auth service (`GOTRUE_JWT_SECRET`, `GOTRUE_EXTERNAL_APPLE_SECRET`) and
+several agent-harness processes still expose their environments, and each systemd
+unit's `EnvironmentFile` (mode 0600, same uid) is still readable by that uid. Those
+need their own treatment — a different uid, a container user, or the same hook.

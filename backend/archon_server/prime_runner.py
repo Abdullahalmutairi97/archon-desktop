@@ -342,11 +342,16 @@ class PrimeRunner:
             ),
         )
         if self.isolation.enabled:
-            # Confine the runtime child in the workspace and its own state
-            # directory; a private temp directory keeps scratch writes bounded.
+            # Confine the runtime child to the workspace, its own session state and a
+            # private temp directory. A resumed native session binds that one session
+            # file rather than the whole native session store, so the sandbox cannot
+            # rewrite another session's transcript. Prime may write beside the file
+            # (artifacts, caches); those writes fail closed here and a real provider
+            # turn inside the profile has not been run, which is why the profile is
+            # off by default.
             temp_root = self.session_root / session_id / "tmp"
             temp_root.mkdir(parents=True, exist_ok=True)
-            writable = [agent_path.parent if agent_session else session_dir, temp_root]
+            writable = [agent_path if agent_session else session_dir, temp_root]
             argv = self.isolation.command(argv=argv, cwd=cwd, writable_roots=writable)
             child_env["TMPDIR"] = str(temp_root)
         process = await asyncio.create_subprocess_exec(
@@ -456,69 +461,115 @@ class PrimeRunner:
                 if not isinstance(event, dict):
                     await report_diagnostic(diagnostics.note_malformed("record is not a JSON object"))
                     continue
-                event_type = event.get('type')
-                if event_type not in handled_types:
-                    await report_diagnostic(diagnostics.note_unknown(event_type))
-                if event_type == 'message_update':
-                    update = event.get('assistantMessageEvent') or {}
-                    update_type = update.get('type')
-                    if update_type == 'text_delta':
-                        delta = update.get('delta', '')
-                        if isinstance(delta, str) and delta:
-                            await emit('message.delta', {
-                                'message_id': f'prime-reply-{task_id}',
-                                'session_id': session_id,
-                                'text': delta,
-                            })
-                    elif update_type == 'text_end':
-                        await emit('message.done', {
+        async def handle_event(event: dict) -> None:
+            nonlocal final_text
+            event_type = event.get('type')
+            if event_type not in handled_types:
+                await report_diagnostic(diagnostics.note_unknown(event_type))
+            if event_type == 'message_update':
+                update = event.get('assistantMessageEvent') or {}
+                if not isinstance(update, dict):
+                    raise TypeError('assistantMessageEvent is not an object')
+                update_type = update.get('type')
+                if update_type == 'text_delta':
+                    delta = update.get('delta', '')
+                    if isinstance(delta, str) and delta:
+                        await emit('message.delta', {
                             'message_id': f'prime-reply-{task_id}',
                             'session_id': session_id,
+                            'text': delta,
                         })
-                    elif update_type == 'thinking_delta':
-                        index = int(update.get('contentIndex', 0))
-                        delta = update.get('delta', '')
-                        if isinstance(delta, str) and delta:
-                            streamed_thinking.add(index)
-                            await emit('output', {'text': delta})
-                    elif update_type == 'thinking_end':
-                        content = event.get('message', {}).get('content', [])
-                        index = int(update.get('contentIndex', 0))
-                        thought = content[index].get('thinking', '') if index < len(content) else ''
-                        # Older Prime versions may only emit thinking_end. Newer
-                        # versions already streamed the block as thinking_delta.
-                        if index not in streamed_thinking and str(thought).strip():
-                            await emit('output', {'text': str(thought).strip()})
-                elif event_type == 'tool_execution_start':
-                    args = event.get('args') or {}
-                    target = str(args.get('code') or args.get('path') or args.get('url') or '')
-                    await emit('tool', {'phase': 'start', 'id': str(event.get('toolCallId', '')), 'tool': str(event.get('toolName', 'tool')), 'target': target})
-                elif event_type == 'tool_execution_end':
-                    result = event.get('result') or {}
-                    details = result.get('details') or {}
-                    chunks = result.get('content') or []
-                    detail = '\n'.join(str(chunk.get('text', '')) for chunk in chunks if isinstance(chunk, dict)).strip()
-                    if len(detail) > MAX_EVENT_TEXT:
-                        room = MAX_EVENT_TEXT - len(_EVENT_TRUNCATION_MARKER)
-                        detail = detail[:room] + _EVENT_TRUNCATION_MARKER
-                    await emit('tool', {
-                        'phase': 'end', 'id': str(event.get('toolCallId', '')), 'tool': str(event.get('toolName', 'tool')),
-                        'target': '', 'detail': detail, 'duration': (details.get('durationMs') or 0) / 1000,
-                        'exit_code': 1 if event.get('isError') else 0,
+                elif update_type == 'text_end':
+                    await emit('message.done', {
+                        'message_id': f'prime-reply-{task_id}',
+                        'session_id': session_id,
                     })
-                elif event_type == 'message_end':
+                elif update_type == 'thinking_delta':
+                    index = int(update.get('contentIndex', 0))
+                    delta = update.get('delta', '')
+                    if isinstance(delta, str) and delta:
+                        streamed_thinking.add(index)
+                        await emit('output', {'text': delta})
+                elif update_type == 'thinking_end':
                     message = event.get('message') or {}
+                    if not isinstance(message, dict):
+                        raise TypeError('message is not an object')
+                    content = message.get('content') or []
+                    if not isinstance(content, list):
+                        raise TypeError('message content is not a list')
+                    index = int(update.get('contentIndex', 0))
+                    block = content[index] if 0 <= index < len(content) else None
+                    thought = block.get('thinking', '') if isinstance(block, dict) else ''
+                    # Older Prime versions may only emit thinking_end. Newer
+                    # versions already streamed the block as thinking_delta.
+                    if index not in streamed_thinking and str(thought).strip():
+                        await emit('output', {'text': str(thought).strip()})
+            elif event_type == 'tool_execution_start':
+                args = event.get('args') or {}
+                if not isinstance(args, dict):
+                    raise TypeError('tool args are not an object')
+                target = str(args.get('code') or args.get('path') or args.get('url') or '')
+                await emit('tool', {'phase': 'start', 'id': str(event.get('toolCallId', '')), 'tool': str(event.get('toolName', 'tool')), 'target': target})
+            elif event_type == 'tool_execution_end':
+                result = event.get('result') or {}
+                if not isinstance(result, dict):
+                    raise TypeError('tool result is not an object')
+                details = result.get('details') or {}
+                details = details if isinstance(details, dict) else {}
+                chunks = result.get('content') or []
+                chunks = chunks if isinstance(chunks, list) else []
+                detail = '\n'.join(str(chunk.get('text', '')) for chunk in chunks if isinstance(chunk, dict)).strip()
+                if len(detail) > MAX_EVENT_TEXT:
+                    room = MAX_EVENT_TEXT - len(_EVENT_TRUNCATION_MARKER)
+                    detail = detail[:room] + _EVENT_TRUNCATION_MARKER
+                await emit('tool', {
+                    'phase': 'end', 'id': str(event.get('toolCallId', '')), 'tool': str(event.get('toolName', 'tool')),
+                    'target': '', 'detail': detail, 'duration': (details.get('durationMs') or 0) / 1000,
+                    'exit_code': 1 if event.get('isError') else 0,
+                })
+            elif event_type == 'message_end':
+                message = event.get('message') or {}
+                if not isinstance(message, dict):
+                    raise TypeError('message is not an object')
+                if message.get('role') == 'assistant':
+                    text = text_content(message)
+                    if text:
+                        final_text = text
+            elif event_type == 'agent_end':
+                messages = event.get('messages') or []
+                if not isinstance(messages, list):
+                    raise TypeError('messages is not a list')
+                for message in reversed(messages):
+                    if not isinstance(message, dict):
+                        continue
                     if message.get('role') == 'assistant':
                         text = text_content(message)
                         if text:
                             final_text = text
-                elif event_type == 'agent_end':
-                    for message in reversed(event.get('messages') or []):
-                        if message.get('role') == 'assistant':
-                            text = text_content(message)
-                            if text:
-                                final_text = text
-                                break
+                            break
+
+        async def pump_json() -> None:
+            async for raw in stdout_lines():
+                line = raw.decode(errors='replace').strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    # Never present an unstructured record as thought or as an outcome.
+                    await report_diagnostic(diagnostics.note_malformed(f"line is not JSON ({len(line)} bytes)"))
+                    continue
+                if not isinstance(event, dict):
+                    await report_diagnostic(diagnostics.note_malformed("record is not a JSON object"))
+                    continue
+                try:
+                    await handle_event(event)
+                except (AttributeError, TypeError, ValueError, IndexError, KeyError):
+                    # A record whose fields have the wrong shape is a diagnostic too:
+                    # reading it must never raise out of the stream reader.
+                    await report_diagnostic(diagnostics.note_malformed(
+                        f"record of type {event.get('type')!r} has an unexpected shape"
+                    ))
 
         async def pump_stderr() -> None:
             while raw := await process.stderr.readline():

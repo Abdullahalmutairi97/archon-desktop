@@ -10,12 +10,14 @@ from pathlib import Path
 
 import pytest
 
+from archon_server import sandbox
 from archon_server.sandbox import (
     RuntimeConfinement,
     RuntimeConfinementUnavailable,
     bubblewrap_argv,
     confined_command,
     probe_filesystem_confinement,
+    probe_network_isolation,
 )
 
 WORKSPACE_DIRNAME = "checkout"
@@ -118,3 +120,105 @@ async def test_prime_runner_runs_inside_the_sandbox_and_stays_in_its_workspace(t
     assert not Path("/etc/.archon-runtime-probe").exists()
     # The sandbox is applied to the runtime child, not to the supervisor wrapper.
     assert runner.isolation.enabled is True
+
+
+def _recording_run(monkeypatch) -> list[str]:
+    """Record every sandbox output while a probe runs, without changing behaviour."""
+    outputs: list[str] = []
+    real_run = sandbox._run
+
+    def recording_run(argv, **kwargs):
+        result = real_run(argv, **kwargs)
+        outputs.append(result.stdout if result is not None else "")
+        return result
+
+    monkeypatch.setattr(sandbox, "_run", recording_run)
+    return outputs
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is unavailable on this host")
+def test_filesystem_probe_refuses_a_sandbox_that_ignores_the_confinement_request(tmp_path, monkeypatch):
+    """Regression: a sandbox that confines nothing must not pass the probe.
+
+    With the filesystem left unconfined, the unbound control directory stays
+    writable inside the sandbox, so the probe must refuse the host. The earlier
+    probe tested `/etc`, which this account cannot write with no sandbox at all,
+    and therefore accepted exactly this host.
+    """
+    checkout = tmp_path / WORKSPACE_DIRNAME
+    checkout.mkdir()
+    real_argv = sandbox.bubblewrap_argv
+    monkeypatch.setattr(
+        sandbox, "bubblewrap_argv", lambda roots, **kwargs: real_argv(roots, confine_filesystem=False),
+    )
+    outputs = _recording_run(monkeypatch)
+
+    assert probe_filesystem_confinement(checkout) is False
+    # The sandbox ran and allowed both writes, so the refusal is the probe's.
+    assert outputs and "control_visible=True" in outputs[-1]
+    assert "denied=False" in outputs[-1] and "allowed=True" in outputs[-1]
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is unavailable on this host")
+def test_network_probe_refuses_a_sandbox_that_ignores_the_namespace_option(monkeypatch):
+    """Regression: reaching this host's listener inside the sandbox is not isolation."""
+    real_argv = sandbox.bubblewrap_argv
+    monkeypatch.setattr(
+        sandbox, "bubblewrap_argv",
+        lambda roots, **kwargs: [item for item in real_argv(roots, **kwargs) if item != "--unshare-net"],
+    )
+    outputs = _recording_run(monkeypatch)
+
+    assert probe_network_isolation() is False
+    # The sandboxed connect reached the listener this process serves.
+    assert outputs and "connect=0" in outputs[-1]
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is unavailable on this host")
+def test_filesystem_probe_requires_the_unsandboxed_control_write(tmp_path, monkeypatch):
+    """A control that cannot write at all proves nothing, so the probe refuses."""
+    checkout = tmp_path / WORKSPACE_DIRNAME
+    checkout.mkdir()
+    attempted: list[Path] = []
+
+    def failing_control(directory, name):
+        attempted.append(Path(directory) / name)
+        return False
+
+    monkeypatch.setattr(sandbox, "_control_write_succeeds", failing_control)
+
+    assert probe_filesystem_confinement(checkout) is False
+    # The unsandboxed control ran, and it targeted the unbound directory.
+    assert attempted
+    assert attempted[0].name == sandbox.CONTROL_FILENAME
+    assert attempted[0].parent.name == sandbox.CONTROL_DIRNAME
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is unavailable on this host")
+def test_network_probe_requires_the_unsandboxed_control_connect(monkeypatch):
+    """A listener this host cannot reach proves nothing, so the probe refuses."""
+    attempted: list[tuple[str, int]] = []
+
+    def failing_control(host, port):
+        attempted.append((host, port))
+        return False
+
+    monkeypatch.setattr(sandbox, "_control_connect", failing_control)
+
+    assert probe_network_isolation() is False
+    # The control connect ran against the loopback listener this process serves.
+    assert attempted
+    host, port = attempted[0]
+    assert host == sandbox.LOOPBACK_HOST and port > 0
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is unavailable on this host")
+def test_filesystem_probe_requires_the_writable_root_to_stay_writable(tmp_path):
+    """A declared root the sandbox cannot write is refused, even with the host read-only."""
+    checkout = tmp_path / WORKSPACE_DIRNAME
+    checkout.mkdir()
+    os.chmod(checkout, 0o500)
+    try:
+        assert probe_filesystem_confinement(checkout) is False
+    finally:
+        os.chmod(checkout, 0o700)
