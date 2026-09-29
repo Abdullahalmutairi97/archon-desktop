@@ -1,6 +1,7 @@
 import type { ShellPreferences, ThemeId } from './themes'
 import { THEMES } from './themes'
 import { Icon } from '../shell/Icon'
+import { useOverlay } from '../shell/overlays'
 
 const FONT_SCALES: ShellPreferences['fontScale'][] = [0.9, 1, 1.1, 1.2]
 
@@ -13,6 +14,7 @@ export function AppearanceStudio({
   onChange(value: ShellPreferences): void
   onClose(): void
 }) {
+  useOverlay()
   const patch = (change: Partial<ShellPreferences>) => onChange({ ...value, ...change })
 
   return <div className="modal-scrim" role="presentation" onMouseDown={(event) => {

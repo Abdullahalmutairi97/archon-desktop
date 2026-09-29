@@ -3,6 +3,7 @@ import type { BrowserViewBridge, BrowserViewState, WorkspacePreviewBounds } from
 import { Icon } from '../shell/Icon'
 import { normalizeBrowserAddress, type BrowserLink } from './browserLinks'
 import './LiveBrowser.css'
+import { useOverlayOpen } from '../shell/overlays'
 
 /**
  * Bounds of the page surface, clipped to the scrolling workbench so the native
@@ -74,12 +75,14 @@ export function LiveBrowser({ bridge, links }: { bridge: BrowserViewBridge | und
   }, [bridge, apply])
 
   const isOpen = page !== null
+  const covered = useOverlayOpen()
   useEffect(() => {
     if (!bridge || !isOpen) return
     const box = surface.current
     if (!box) return
     const send = (): void => {
-      void bridge.bounds(surfaceBounds(box) ?? HIDDEN_BOUNDS).catch(() => undefined)
+      // A dialog or palette is open: the native page must not draw over it.
+      void bridge.bounds((covered ? null : surfaceBounds(box)) ?? HIDDEN_BOUNDS).catch(() => undefined)
     }
     const observer = new ResizeObserver(send)
     observer.observe(box)
@@ -92,7 +95,7 @@ export function LiveBrowser({ bridge, links }: { bridge: BrowserViewBridge | und
       window.removeEventListener('resize', send)
       window.removeEventListener('scroll', send, true)
     }
-  }, [bridge, isOpen])
+  }, [bridge, isOpen, covered])
 
   async function run(action: () => Promise<BrowserViewState>, failure: string): Promise<void> {
     const id = ++serial.current

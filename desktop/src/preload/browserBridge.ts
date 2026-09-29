@@ -3,8 +3,10 @@ import { BROWSER_CHANNELS, parseBrowserRequest, parseBrowserResponse, parseBrows
 import type { LocalCodexIpcInvoker } from './localCodexBridge'
 
 function invoke<T>(ipc: LocalCodexIpcInvoker, channel: string, input: unknown): Promise<T> {
-  const request = parseBrowserRequest(channel, [input])
-  return ipc.invoke(channel, request).then((value) => parseBrowserResponse(channel, value) as T)
+  // Validate here, then send the argument itself: main parses the same
+  // argument again, so sending the parsed form would wrap it twice.
+  parseBrowserRequest(channel, [input])
+  return ipc.invoke(channel, input).then((value) => parseBrowserResponse(channel, value) as T)
 }
 
 /** Renderer-visible browser methods are finite; main re-validates every address. */

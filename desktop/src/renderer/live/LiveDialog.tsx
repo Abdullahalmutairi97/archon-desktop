@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { MAX_CONVERSATION_NAME } from './conversationNames'
+import { useOverlay } from '../shell/overlays'
 import './LiveViews.css'
 
 const FOCUSABLE = 'button:not(:disabled), textarea:not(:disabled), select:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
@@ -29,6 +30,7 @@ export function LiveDialog({
   children: ReactNode
   footer: ReactNode
 }) {
+  useOverlay()
   const titleId = useId()
   const dialog = useRef<HTMLElement>(null)
   const cancelRef = useRef(onCancel)

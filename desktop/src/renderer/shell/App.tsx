@@ -16,6 +16,7 @@ import { useLiveServer } from '../live/useLiveServer'
 import { FIXTURE_PROJECTS, FIXTURE_SESSIONS, FIXTURE_TASKS, runtimeLabel, sessionForId } from './fixtures'
 import { Icon } from './Icon'
 import { isPreviewView, Sidebar, type LiveSidebarData, type WorkspaceView } from './Sidebar'
+import { useOverlay } from './overlays'
 import { TitleBar } from './TitleBar'
 import { resolveShellShortcut, type BenchId } from './shortcuts'
 import { WorkspaceBench } from './WorkspaceBench'
@@ -339,6 +340,7 @@ function ProjectsView({ selectedProjectId, onSelectSession, onViewChat }: { sele
 }
 
 function CommandPalette({ preview, live, onClose, onNavigate, onAppearance, onBench }: { preview: boolean; live: boolean; onClose(): void; onNavigate(view: WorkspaceView): void; onAppearance(): void; onBench(tab: BenchId): void }) {
+  useOverlay()
   return <div className="modal-scrim palette-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <section className="command-palette" role="dialog" aria-modal="true" aria-labelledby="palette-title">
       <div className="palette-search"><Icon name="search" /><h2 id="palette-title">Quick actions</h2><button className="icon-button" aria-label="Close quick actions" onClick={onClose}><Icon name="close" /></button></div>

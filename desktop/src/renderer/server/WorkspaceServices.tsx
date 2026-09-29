@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorkspacePreviewBridge, WorkspaceServiceDefinitionInput, WorkspaceServiceDto, WorkspaceServicesBridge } from '../../shared/bridge/types'
 import './WorkspaceServices.css'
+import { useOverlayOpen } from '../shell/overlays'
 
 const EMPTY_LOGS = { name: '', text: '', truncated: false }
 
@@ -68,13 +69,15 @@ export function WorkspaceServices({
   // The native preview is drawn over the window; it must not outlive this panel.
   useEffect(() => () => { void Promise.resolve().then(() => preview.close()).catch(() => undefined) }, [preview])
 
+  const covered = useOverlayOpen()
   useEffect(() => {
     if (!previewName) return
     const box = previewBox.current
     if (!box) return
     const send = (): void => {
       const rect = box.getBoundingClientRect()
-      void preview.bounds({
+      // A dialog or palette is open: move the native preview out of its way.
+      void preview.bounds(covered ? { x: -2, y: -2, width: 1, height: 1 } : {
         x: Math.round(rect.x), y: Math.round(rect.y),
         width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)),
       })
@@ -84,7 +87,7 @@ export function WorkspaceServices({
     window.addEventListener('resize', send)
     send()
     return () => { observer.disconnect(); window.removeEventListener('resize', send) }
-  }, [preview, previewName])
+  }, [preview, previewName, covered])
 
   function optionalNumber(text: string, minimum: number, maximum: number): number | null | undefined {
     const trimmed = text.trim()

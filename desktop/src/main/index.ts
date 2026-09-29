@@ -9,6 +9,7 @@ import {
 } from './windowSecurity'
 import { createConnectionService } from './connectionService'
 import { registerBridgeHandlers } from './registerBridge'
+import { allowShellPermission } from './security/shellPermissions'
 import { TrustedShellFrameGuard, type TrustedShellIpcEvent } from './security/TrustedShellFrameGuard'
 import { CredentialStore } from './storage/credentialStore'
 import { ProfileStore } from './storage/profileStore'
@@ -98,8 +99,12 @@ function createMainWindow(): BrowserWindow {
   const trustedDocumentUrl = devOrigin ? `${devOrigin}/` : rendererFileUrl
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-attach-webview', (event) => event.preventDefault())
-  window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-  window.webContents.session.setPermissionCheckHandler(() => false)
+  // Everything is denied except clipboard writes from the trusted top frame (Copy buttons).
+  window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    callback(contents === window.webContents && allowShellPermission(permission, details, trustedDocumentUrl))
+  })
+  window.webContents.session.setPermissionCheckHandler((contents, permission, _origin, details) =>
+    contents === window.webContents && allowShellPermission(permission, details, trustedDocumentUrl))
   window.webContents.on('did-start-navigation', (details) => {
     if (details.isMainFrame && !details.isSameDocument) {
       trustedFrame.invalidateNavigation(window.webContents)

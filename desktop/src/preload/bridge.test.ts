@@ -206,7 +206,7 @@ describe('preload bridge', () => {
       [BROWSER_CHANNELS.back, {}],
       [BROWSER_CHANNELS.forward, {}],
       [BROWSER_CHANNELS.reload, {}],
-      [BROWSER_CHANNELS.bounds, { bounds }],
+      [BROWSER_CHANNELS.bounds, bounds],
       [BROWSER_CHANNELS.close, {}],
       [BROWSER_CHANNELS.openExternal, { url: 'https://example.com/' }],
     ])
@@ -293,5 +293,26 @@ describe('preload bridge', () => {
     const invoke = vi.fn(async () => ({ extensionsDirectory: '/x', profiles: [], unpinnedInstalled: [], pinsVerified: false, note: 'x', injected: true }))
     const bridge = createDesktopBridge({ invoke })
     await expect(bridge.languageProfiles.list({ workspaceId })).rejects.toThrow(TypeError)
+  })
+})
+
+describe('browser bridge round trip', () => {
+  it('sends each call in the exact form the main process parses', async () => {
+    const { BROWSER_CHANNELS, parseBrowserRequest } = await import('../shared/bridge/validation')
+    const sent: [string, unknown][] = []
+    const invoke = vi.fn(async (channel: string, arg: unknown) => {
+      sent.push([channel, arg])
+      // Main parses the same argument again; it must not be wrapped twice.
+      parseBrowserRequest(channel, [arg])
+      if (channel === BROWSER_CHANNELS.bounds || channel === BROWSER_CHANNELS.close || channel === BROWSER_CHANNELS.openExternal) return true
+      return { url: 'https://example.test/', title: '', canGoBack: false, canGoForward: false, loading: false, error: null }
+    })
+    const browser = createDesktopBridge({ invoke, on: vi.fn(), removeListener: vi.fn() }).browser!
+    const bounds = { x: 10, y: 20, width: 300, height: 200 }
+    await expect(browser.bounds(bounds)).resolves.toBe(true)
+    await expect(browser.bounds({ x: -2, y: -2, width: 1, height: 1 })).resolves.toBe(true)
+    await browser.close()
+    await browser.openExternal({ url: 'https://example.test/' })
+    expect(sent[0]).toEqual([BROWSER_CHANNELS.bounds, bounds])
   })
 })
