@@ -7,6 +7,8 @@ import { OPERATIONS_ITEMS, type OperationsView } from '../operations/OperationsV
 
 export type WorkspaceView = 'chat' | 'sessions' | 'tasks' | 'projects' | 'connection' | 'server' | 'codex'
   | OperationsView
+  // Server operations pages
+  | 'serverFiles'
 
 export function isPreviewView(view: WorkspaceView) {
   return view === 'chat' || view === 'sessions' || view === 'tasks' || view === 'projects'
@@ -30,6 +32,11 @@ const liveItems: { id: WorkspaceView; label: string; icon: IconName }[] = [
   { id: 'sessions', label: 'Sessions', icon: 'history' },
   { id: 'tasks', label: 'Tasks', icon: 'activity' },
   { id: 'projects', label: 'Projects', icon: 'folder' },
+]
+
+/** Pages that operate on the server itself rather than on a conversation. */
+const serverItems: { id: WorkspaceView; label: string; icon: IconName }[] = [
+  { id: 'serverFiles', label: 'Files', icon: 'file' },
 ]
 
 /** Sidebar rows shown for the connected server; ids are server ids only. */
@@ -69,6 +76,12 @@ function LiveSidebarContent({ view, collapsed, live, onView }: {
     <nav className="primary-navigation" aria-label="Server conversations">
       {liveItems.map((item) => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} aria-label={item.label} title={item.label} aria-current={view === item.id ? 'page' : undefined} onClick={() => onView(item.id)}>
         <Icon name={item.icon} /><span className="nav-label">{item.label}</span>{item.id === 'chat' && !collapsed && <kbd title="New conversation">Ctrl N</kbd>}
+      </button>)}
+    </nav>
+    <div className="sidebar-section-head"><span className="sidebar-section-label">SERVER</span></div>
+    <nav className="primary-navigation" aria-label="Server">
+      {serverItems.map((item) => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} aria-label={`Server ${item.label}`} title={`Server ${item.label}`} aria-current={view === item.id ? 'page' : undefined} onClick={() => onView(item.id)}>
+        <Icon name={item.icon} /><span className="nav-label">{item.label}</span>
       </button>)}
     </nav>
     {note && <p className="live-sidebar-note">{note}</p>}

@@ -14,6 +14,7 @@ import { LiveWorkbench } from '../live/LiveWorkbench'
 import type { BrowserLink } from '../live/browserLinks'
 import { useLiveServer } from '../live/useLiveServer'
 import { isOperationsView, OperationsPageView, operationsTitle } from '../operations/OperationsView'
+import { ServerFilesPage } from '../operations/ServerFilesPage'
 import { FIXTURE_PROJECTS, FIXTURE_SESSIONS, FIXTURE_TASKS, runtimeLabel, sessionForId } from './fixtures'
 import { Icon } from './Icon'
 import { isPreviewView, Sidebar, type LiveSidebarData, type WorkspaceView } from './Sidebar'
@@ -193,7 +194,7 @@ export function App() {
       <main className={`workspace-main ${demo ? 'workspace-main-demo' : 'workspace-main-live'}`} dir={preferences.direction}>
         <div className="workspace-view-header">
           <div className="view-heading">
-            <span className="eyebrow">{demo ? 'PREVIEW/DEMO · SYNTHETIC DATA' : preview ? liveEyebrow(view) : isOperationsView(view) ? 'SERVER OPERATIONS' : view === 'connection' ? 'DESKTOP CONNECTION' : view === 'server' ? 'SERVER WORK' : 'THIS PC · CODEX'}</span>
+            <span className="eyebrow">{demo ? 'PREVIEW/DEMO · SYNTHETIC DATA' : preview ? liveEyebrow(view) : isOperationsView(view) ? 'SERVER OPERATIONS' : view === 'connection' ? 'DESKTOP CONNECTION' : view === 'server' ? 'SERVER WORK' : view === 'serverFiles' ? 'SERVER · FILE ROOT' : 'THIS PC · CODEX'}</span>
             <h1 dir="auto">{live && preview ? liveViewTitle(view, liveSelection?.sessionId ? liveSession?.title ?? 'Server conversation' : null) : viewTitle(view, currentSession.title)}</h1>
           </div>
           <div className="view-actions">
@@ -233,6 +234,7 @@ export function App() {
         />}
         {live && isOperationsView(view) && <OperationsPageView view={view} server={liveServer} onOpenConnection={openConnection} />}
         {view === 'connection' && <ConnectionPanel bridge={window.archon} />}
+        {live && view === 'serverFiles' && <ServerFilesPage server={liveServer} onOpenConnection={openConnection} />}
         {view === 'server' && <ServerCollectionsView bridge={window.archon} onLocalCodexProjectRegistered={openRegisteredLocalCodexProject} />}
         <div className="local-codex-route" hidden={view !== 'codex'}><LocalCodexPanel bridge={window.archon} active={view === 'codex'} selectionRequest={localCodexSelectionRequest} /></div>
       </main>
@@ -250,7 +252,7 @@ export function App() {
     </div>
 
     <div className="reconstruction-ribbon" aria-label="Reconstruction and fixture status">
-      <span><i />SOURCE RECONSTRUCTION</span><b>·</b><span>{isOperationsView(view) ? 'SERVER OPERATIONS' : view === 'connection' ? 'CONNECTION STATUS' : view === 'server' ? 'SERVER CHECKOUTS · LINE CONSOLE' : view === 'codex' ? 'LOCAL CODEX · ONE TURN' : live ? 'SERVER CONVERSATIONS' : 'SYNTHETIC FIXTURE DATA'}</span><b>·</b><span>BASELINE PARITY UNVERIFIED</span>
+      <span><i />SOURCE RECONSTRUCTION</span><b>·</b><span>{isOperationsView(view) ? 'SERVER OPERATIONS' : view === 'connection' ? 'CONNECTION STATUS' : view === 'server' ? 'SERVER CHECKOUTS · LINE CONSOLE' : view === 'codex' ? 'LOCAL CODEX · ONE TURN' : view === 'serverFiles' ? 'SERVER FILES' : live ? 'SERVER CONVERSATIONS' : 'SYNTHETIC FIXTURE DATA'}</span><b>·</b><span>BASELINE PARITY UNVERIFIED</span>
     </div>
 
     {appearanceOpen && <AppearanceStudio value={preferences} onChange={setPreferences} onClose={() => setAppearanceOpen(false)} />}
@@ -281,6 +283,7 @@ function viewTitle(view: WorkspaceView, sessionTitle: string) {
   if (view === 'server') return 'Server work'
   if (view === 'codex') return 'Local Codex'
   if (isOperationsView(view)) return operationsTitle(view)
+  if (view === 'serverFiles') return 'Server files'
   return 'Demo projects'
 }
 

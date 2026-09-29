@@ -751,6 +751,81 @@ export interface AudioTranscribeResult {
   provider: string
 }
 
+// Server files (ARCHON_ROOT). Paths are relative to the server's file root;
+// '' names the root itself and is accepted only where listing it makes sense.
+
+export interface ServerFileListPayload {
+  path: string
+}
+
+export interface ServerFilePathPayload {
+  path: string
+}
+
+export interface ServerFileReadPayload {
+  path: string
+  maxBytes: number
+}
+
+export interface ServerFileWritePayload {
+  path: string
+  content: string
+}
+
+export interface ServerFileMovePayload {
+  path: string
+  destination: string
+}
+
+export interface ServerFileDeletePayload {
+  path: string
+  confirm: true
+}
+
+/** Uploads the local file picked by `files.pickUpload`; the renderer never names a local path. */
+export interface ServerFileUploadPayload {
+  pickId: string
+  path: string
+  /** False refuses to overwrite an existing server file with `already_exists`. */
+  replace: boolean
+}
+
+/** One directory entry exactly as the server lists it. Names are display text. */
+export type ServerFileItem = JsonRecord & {
+  name: string
+  path: string
+  is_dir: boolean
+  is_symlink: boolean
+  restricted: boolean
+  size: number
+  modified_at: string
+  mime: string | null
+}
+
+export type ServerFileListResult = JsonRecord & {
+  /** The server's absolute file root, for display only. */
+  root: string
+  path: string
+  items: readonly ServerFileItem[]
+}
+
+export type ServerFileReadResult = JsonRecord & {
+  path: string
+  content: string
+  size: number
+  read: number
+  truncated: boolean
+  binary: false
+}
+
+export type ServerFileUploadPick =
+  | { cancelled: true }
+  | { cancelled: false; pickId: string; name: string; size: number }
+
+export type ServerFileDownloadResult =
+  | { saved: false }
+  | { saved: true; name: string; size: number }
+
 export interface OperationMap {
   readiness: {
     payload: EmptyPayload
@@ -945,6 +1020,49 @@ export interface OperationMap {
   'audio.transcribe': {
     payload: AudioTranscribePayload
     result: AudioTranscribeResult
+  }
+  // Server files (ARCHON_ROOT)
+  'files.list': {
+    payload: ServerFileListPayload
+    result: ServerFileListResult
+  }
+  'files.read': {
+    payload: ServerFileReadPayload
+    result: ServerFileReadResult
+  }
+  'files.writeText': {
+    payload: ServerFileWritePayload
+    result: ServerFileReadResult
+  }
+  'files.mkdir': {
+    payload: ServerFilePathPayload
+    result: { path: string; created: boolean }
+  }
+  'files.rename': {
+    payload: ServerFileMovePayload
+    result: { path: string }
+  }
+  'files.copy': {
+    payload: ServerFileMovePayload
+    result: { path: string }
+  }
+  /** Opens a native file picker in the main process; only a one-use pick id crosses the bridge. */
+  'files.pickUpload': {
+    payload: EmptyPayload
+    result: ServerFileUploadPick
+  }
+  'files.upload': {
+    payload: ServerFileUploadPayload
+    result: { path: string; size: number }
+  }
+  /** Saves through a native save dialog in the main process; no local path crosses the bridge. */
+  'files.download': {
+    payload: ServerFilePathPayload
+    result: ServerFileDownloadResult
+  }
+  'files.delete': {
+    payload: ServerFileDeletePayload
+    result: { ok: true }
   }
 }
 

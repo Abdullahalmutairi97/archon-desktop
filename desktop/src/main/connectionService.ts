@@ -11,6 +11,12 @@ import type { CredentialDescription, CredentialStore } from './storage/credentia
 import { BackendTransportError, validateBackendConnectionInput } from './transport/backendTransport'
 import type { LocalCodexProxyRequest } from './localCodexProxy'
 
+// Server files (ARCHON_ROOT): mutations and native-dialog transfers.
+const SERVER_FILE_NO_RETRY = new Set<OperationName>([
+  'files.writeText', 'files.mkdir', 'files.rename', 'files.copy', 'files.pickUpload',
+  'files.upload', 'files.download', 'files.delete',
+])
+
 /** The transport and its credential remain exclusively in the main process. */
 export interface ConnectionTransportPort {
   readonly generation: number
@@ -249,6 +255,9 @@ export async function createConnectionService(
         if (transport.generation !== retryGeneration || activeLocalPairingGeneration() !== retryGeneration) {
           throw new BackendTransportError('connection_changed')
         }
+        // Server file changes and transfers are never sent twice; the pairing
+        // is renewed and the user repeats the action.
+        if (SERVER_FILE_NO_RETRY.has(operation)) throw error
         return transport.invoke(operation, payload)
       }
     },

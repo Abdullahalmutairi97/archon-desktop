@@ -10,6 +10,7 @@ import {
 import { createConnectionService } from './connectionService'
 import { registerBridgeHandlers } from './registerBridge'
 import { allowShellPermission } from './security/shellPermissions'
+import { createServerFileLocalPort } from './serverFileLocalPort'
 import { TrustedShellFrameGuard, type TrustedShellIpcEvent } from './security/TrustedShellFrameGuard'
 import { MicrophonePermissionGate } from './security/microphonePermission'
 import { CredentialStore } from './storage/credentialStore'
@@ -173,7 +174,25 @@ void app.whenReady().then(async () => {
   } catch {
     // An unavailable or invalid local pairing path leaves the app in its disconnected state.
   }
-  const connection = await createConnectionService(new BackendTransport(), credentialStore, { localPairing })
+  // Server files (ARCHON_ROOT): transfers use native dialogs owned by this process.
+  const serverFiles = createServerFileLocalPort({
+    chooseOpenFile: async () => {
+      const owner = mainWindow
+      if (!owner || owner.isDestroyed()) return null
+      const result = await dialog.showOpenDialog(owner, { title: 'Upload to server', properties: ['openFile'] })
+      return result.canceled ? null : result.filePaths[0] ?? null
+    },
+    chooseSaveFile: async (defaultPath) => {
+      const owner = mainWindow
+      if (!owner || owner.isDestroyed()) return null
+      const result = await dialog.showSaveDialog(owner, {
+        title: 'Save server file', defaultPath, properties: ['createDirectory', 'showOverwriteConfirmation'],
+      })
+      return result.canceled ? null : result.filePath ?? null
+    },
+    downloadsDirectory: () => app.getPath('downloads'),
+  })
+  const connection = await createConnectionService(new BackendTransport({ serverFiles }), credentialStore, { localPairing })
   let localCodexBridge: LocalCodexIpcController
   const pickProjectDirectory = async (): Promise<string | null> => {
     const owner = mainWindow

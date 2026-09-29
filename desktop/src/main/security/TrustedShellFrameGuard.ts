@@ -64,9 +64,21 @@ export const AUDIO_TRANSCRIBE_IPC_PAYLOAD_LIMITS: Readonly<BoundedPayloadLimits>
   maxObjectKeys: 4,
 })
 
-/** Payload limits for one API operation; only `audio.transcribe` gets the audio envelope. */
+/**
+ * Server files (ARCHON_ROOT): a text save carries one string up to 1 MiB of
+ * JSON-encoded UTF-8, which validation then checks exactly. Every other
+ * operation keeps the default envelope.
+ */
+export const SERVER_FILE_TEXT_IPC_LIMITS: Readonly<BoundedPayloadLimits> = Object.freeze({
+  ...IPC_PAYLOAD_LIMITS,
+  maxBytes: 1024 * 1024 + 64 * 1024,
+  maxStringLength: 1024 * 1024,
+})
+
+/** Payload limits for one API operation: audio uploads and server file text saves each get their own bounded envelope. */
 export function ipcPayloadLimitsForOperation(operation: unknown): Readonly<BoundedPayloadLimits> {
-  return operation === 'audio.transcribe' ? AUDIO_TRANSCRIBE_IPC_PAYLOAD_LIMITS : IPC_PAYLOAD_LIMITS
+  if (operation === 'audio.transcribe') return AUDIO_TRANSCRIBE_IPC_PAYLOAD_LIMITS
+  return operation === 'files.writeText' ? SERVER_FILE_TEXT_IPC_LIMITS : IPC_PAYLOAD_LIMITS
 }
 
 /** A constant message avoids reflecting sender-controlled details to IPC callers. */

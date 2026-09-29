@@ -3,6 +3,7 @@ import type { JsonRecord, TaskEventRecord, WorkspaceRecord } from '../../shared/
 import { WorkspaceConsole } from '../server/WorkspaceConsole'
 import { WorkspaceFileBrowser } from '../server/WorkspaceFileBrowser'
 import { WorkspaceServices } from '../server/WorkspaceServices'
+import { NotesPanel } from '../operations/NotesPanel'
 import { workspaceFilePort } from '../server/workspaceFilePort'
 import { Icon, type IconName } from '../shell/Icon'
 import type { BenchId } from '../shell/shortcuts'
@@ -20,6 +21,7 @@ const tabs: { id: BenchId; label: string; icon: IconName }[] = [
   { id: 'browser', label: 'Browser', icon: 'browser' },
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
   { id: 'preview', label: 'Preview', icon: 'code' },
+  { id: 'notes', label: 'Notes', icon: 'file' },
 ]
 
 const NO_LINKS: readonly BrowserLink[] = []
@@ -288,7 +290,8 @@ export function LiveWorkbench({
     <div className="bench-content live-bench-content">
       {active === 'activity' && <ActivityPanel scope={scope} session={session} />}
       {active === 'browser' && <LiveBrowser key={scope.generation} bridge={scope.bridge.browser} links={links} />}
-      {active !== 'activity' && active !== 'browser' && checkoutBar()}
+      {active !== 'activity' && active !== 'browser' && active !== 'notes' && checkoutBar()}
+      {active === 'notes' && <NotesPanel key={scope.generation} scope={scope} />}
       {active === 'files' && current?.state === 'ready' && (checkout
         ? <WorkspaceFileBrowser key={`${checkout.id}:${checkout.generation}`} workspaceId={checkout.id} readOnlyFilePort={filePort} />
         : needsCheckout('Files'))}
