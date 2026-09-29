@@ -3,8 +3,10 @@ import { runtimeLabel } from './fixtures'
 import { Icon, type IconName } from './Icon'
 import { runtimeLabel as liveRuntimeLabel, type LiveProject, type LiveSession } from '../live/liveModels'
 import type { LiveStatus } from '../live/useLiveServer'
+import { OPERATIONS_ITEMS, type OperationsView } from '../operations/OperationsView'
 
 export type WorkspaceView = 'chat' | 'sessions' | 'tasks' | 'projects' | 'connection' | 'server' | 'codex'
+  | OperationsView
 
 export function isPreviewView(view: WorkspaceView) {
   return view === 'chat' || view === 'sessions' || view === 'tasks' || view === 'projects'
@@ -136,6 +138,15 @@ export function Sidebar({
       </nav>
 
       {live && <LiveSidebarContent view={view} collapsed={collapsed} live={live} onView={onView} />}
+
+      {live && <>
+        <div className="sidebar-section-head"><span className="sidebar-section-label">OPERATIONS</span></div>
+        <nav className="primary-navigation" aria-label="Operations">
+          {OPERATIONS_ITEMS.map((item) => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} aria-label={item.label} title={item.label} aria-current={view === item.id ? 'page' : undefined} onClick={() => onView(item.id)}>
+            <Icon name={item.icon} /><span className="nav-label">{item.label}</span>
+          </button>)}
+        </nav>
+      </>}
 
       {!live && <nav className="preview-navigation" aria-label="Preview/demo">
         <button className={`nav-item ${preview ? 'active' : ''}`} aria-label="Preview/demo" title="Preview/demo · sample data only" aria-current={preview ? 'page' : undefined} onClick={() => onView('chat')}>

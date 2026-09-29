@@ -478,6 +478,172 @@ export interface WorkspaceServiceLogsDto {
   truncated: boolean
 }
 
+/** Host resource snapshot from `GET /api/status`. Byte counts are integers. */
+export interface StatusSnapshot {
+  hostname: string
+  system: string
+  architecture: string
+  kernel: string
+  uptime_seconds: number
+  cpu: { percent: number; cores: number; load_1: number; load_5: number; load_15: number }
+  memory: { total: number; used: number; available: number; percent: number }
+  swap: { total: number; used: number; percent: number }
+  disk: { path: string; total: number; used: number; free: number; percent: number }
+  archon: {
+    cpu_percent: number
+    memory_used: number
+    memory_percent: number
+    processes: number
+    accounting: 'systemd-cgroup' | 'process-tree'
+  }
+}
+
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL'
+
+export interface LogsListPayload {
+  limit: number
+  /** Minimum level the server returns; omitted means every level. */
+  level?: LogLevel
+}
+
+/** One log row. `message` is display text only and never markup. */
+export interface LogEntry {
+  id: string
+  timestamp: string
+  level: LogLevel
+  source: string
+  component: string
+  message: string
+}
+
+export interface ModelRef {
+  provider: string
+  model: string
+}
+
+export interface ModelCatalog {
+  current: { provider: string | null; model: string | null; base_url_configured: boolean }
+  fallback: null
+  providers: readonly { id: string; models: readonly string[] }[]
+  choices: readonly ModelRef[]
+}
+
+export interface SkillRecord {
+  name: string
+  description: string
+  category: string
+  enabled: boolean
+  /** Server path, for display only. */
+  path: string
+}
+
+export interface SkillDetail extends SkillRecord {
+  content: string
+}
+
+export interface SkillByNamePayload {
+  name: string
+}
+
+export interface SkillTogglePayload {
+  name: string
+  enabled: boolean
+}
+
+export interface CronJob {
+  id: string
+  name: string
+  enabled: boolean
+  state: string | null
+  schedule: string | null
+  next_run_at: string | null
+  last_run_at: string | null
+  last_status: string | null
+  last_error: string | null
+  deliver: string | null
+  prompt: string
+  skills: readonly string[]
+  model: string | null
+  provider: string | null
+  script: string | null
+  no_agent: boolean
+}
+
+export type CronAction = 'pause' | 'resume' | 'run' | 'remove'
+
+/** Every cron mutation carries the renderer's explicit confirmation. */
+export interface CronCreatePayload {
+  schedule: string
+  prompt: string
+  name: string
+  deliver: string
+  confirm: true
+}
+
+export interface CronUpdateFields {
+  schedule?: string
+  prompt?: string
+  name?: string
+  deliver?: string
+}
+
+export interface CronUpdatePayload {
+  jobId: string
+  fields: CronUpdateFields
+  confirm: true
+}
+
+export interface CronActionPayload {
+  jobId: string
+  action: CronAction
+  confirm: true
+}
+
+export interface CronMutationResult {
+  ok: true
+  output: string
+  jobs: readonly CronJob[]
+}
+
+export interface BackupRecord {
+  id: string
+  created_at: string
+  plain_path: string | null
+  encrypted_path: string | null
+  plain_size: number | null
+  encrypted_size: number | null
+  encrypted: boolean
+}
+
+export interface BackupSchedule {
+  calendar: string | null
+  ActiveState?: string
+  UnitFileState?: string
+  NextElapseUSecRealtime?: string
+  LastTriggerUSec?: string
+}
+
+export interface BackupConfirmPayload {
+  confirm: true
+}
+
+export interface BackupScheduleSetPayload {
+  calendar: string
+  confirm: true
+}
+
+export interface BackupInspectPayload {
+  source: string
+}
+
+/** `allFiles` restores everything and then `paths` is empty; otherwise `paths` names archive entries. */
+export interface BackupRestorePayload {
+  source: string
+  allFiles: boolean
+  paths: readonly string[]
+  confirm: true
+}
+
 export interface WorkspacePreviewBounds {
   x: number
   y: number
@@ -648,6 +814,75 @@ export interface OperationMap {
   'tasks.cancel': {
     payload: TaskByIdPayload
     result: { ok: true }
+  }
+  // Operations pages
+  'status.get': {
+    payload: EmptyPayload
+    result: StatusSnapshot
+  }
+  'logs.list': {
+    payload: LogsListPayload
+    result: { logs: readonly LogEntry[] }
+  }
+  'models.list': {
+    payload: EmptyPayload
+    result: ModelCatalog
+  }
+  'models.setDefault': {
+    payload: ModelRef
+    result: ModelCatalog
+  }
+  'skills.list': {
+    payload: EmptyPayload
+    result: { skills: readonly SkillRecord[] }
+  }
+  'skills.get': {
+    payload: SkillByNamePayload
+    result: SkillDetail
+  }
+  'skills.toggle': {
+    payload: SkillTogglePayload
+    result: SkillRecord
+  }
+  'cron.list': {
+    payload: EmptyPayload
+    result: { jobs: readonly CronJob[] }
+  }
+  'cron.create': {
+    payload: CronCreatePayload
+    result: CronMutationResult
+  }
+  'cron.update': {
+    payload: CronUpdatePayload
+    result: CronMutationResult
+  }
+  'cron.action': {
+    payload: CronActionPayload
+    result: CronMutationResult
+  }
+  'backups.list': {
+    payload: EmptyPayload
+    result: { backups: readonly BackupRecord[] }
+  }
+  'backups.create': {
+    payload: BackupConfirmPayload
+    result: { ok: true; output: string; backups: readonly BackupRecord[] }
+  }
+  'backups.schedule.get': {
+    payload: EmptyPayload
+    result: BackupSchedule
+  }
+  'backups.schedule.set': {
+    payload: BackupScheduleSetPayload
+    result: { calendar: string; updated: true }
+  }
+  'backups.inspect': {
+    payload: BackupInspectPayload
+    result: { source: string; contents: string }
+  }
+  'backups.restore': {
+    payload: BackupRestorePayload
+    result: { ok: true; output: string }
   }
 }
 

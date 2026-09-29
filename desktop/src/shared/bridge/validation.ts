@@ -168,6 +168,24 @@ const operationNames = Object.freeze([
   'workspaces.files.search',
   'workspaces.files.write',
   'workspaces.files.create',
+  // Operations pages
+  'status.get',
+  'logs.list',
+  'models.list',
+  'models.setDefault',
+  'skills.list',
+  'skills.get',
+  'skills.toggle',
+  'cron.list',
+  'cron.create',
+  'cron.update',
+  'cron.action',
+  'backups.list',
+  'backups.create',
+  'backups.schedule.get',
+  'backups.schedule.set',
+  'backups.inspect',
+  'backups.restore',
 ] as const satisfies readonly OperationName[])
 
 const channels = new Set<string>(Object.values(BRIDGE_CHANNELS))
@@ -536,6 +554,375 @@ function parseTaskEventsPayload(value: unknown): TaskEventsPayload {
   return Object.freeze({ taskId: record.taskId, after: record.after })
 }
 
+// Operations pages: status, logs, models, skills, cron and backups.
+// Every response is read with exact key sets, so a sensitive field name can
+// never pass; free-text command output is additionally redacted.
+const MAX_OPS_LOG_ROWS = 2_000
+const MAX_OPS_SKILLS = 1_000
+const MAX_OPS_CRON_JOBS = 500
+const MAX_OPS_BACKUPS = 1_000
+const MAX_OPS_PATH_LENGTH = 4_096
+const MAX_OPS_TEXT_OUTPUT = 1_000_000
+const MAX_OPS_CRON_PROMPT_INPUT = 8_000
+const MAX_OPS_CRON_PROMPT_RESULT = 100_000
+const MAX_OPS_RESTORE_PATHS = 200
+const OPS_LOG_LEVELS = new Set(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'])
+const OPS_CRON_ACTIONS = new Set(['pause', 'resume', 'run', 'remove'])
+const OPS_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/u
+const OPS_CRON_JOB_ID = /^[a-f0-9]{12}$/u
+const OPS_CRON_LISTED_ID = /^[A-Za-z0-9_-]{1,64}$/u
+const OPS_CRON_DELIVER = /^[A-Za-z0-9][A-Za-z0-9_:.@+-]{0,63}$/u
+const OPS_BACKUP_ID = /^\d{8}_\d{6}$/u
+const OPS_BACKUP_FILE = /^archon-backup-\d{8}_\d{6}\.tar\.gz(?:\.age)?$/u
+// The server's own systemd calendar alphabet.
+const OPS_BACKUP_CALENDAR = /^[A-Za-z0-9*,:./+_@~ -]{3,120}$/u
+const OPS_SECRET_ASSIGNMENT = /\b(token|api[_-]?key|authorization|password|secret)\b(\s*[:=]\s*)(?:Bearer\s+)?[^\s,;]+/giu
+const OPS_BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gu
+const OPS_PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu
+// ANSI escape sequences and every control character except tab, newline and carriage return.
+const OPS_TERMINAL_NOISE = /\u001b\[[0-?]*[ -/]*[@-~]|[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/gu
+
+function redactSecretText(text: string): string {
+  return text
+    .replace(OPS_PRIVATE_KEY, '[REDACTED PRIVATE KEY]')
+    .replace(OPS_SECRET_ASSIGNMENT, (_match, name: string, separator: string) => `${name}${separator}[REDACTED]`)
+    .replace(OPS_BEARER, 'Bearer [REDACTED]')
+}
+
+/** Single-line display text: bounded and free of control characters. */
+function opsText(value: unknown, maxLength: number, allowEmpty = false): value is string {
+  return boundedString(value, maxLength, allowEmpty) && !/[\u0000-\u001f\u007f-\u009f]/u.test(value)
+}
+
+function opsNullableText(value: unknown, maxLength: number): value is string | null {
+  return value === null || opsText(value, maxLength, true)
+}
+
+function opsCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function opsPercent(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
+}
+
+function opsLoad(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1_000_000
+}
+
+function opsServerPath(value: unknown): value is string {
+  return isCanonicalAbsolutePath(value) && value.length <= MAX_OPS_PATH_LENGTH
+}
+
+/** Command output and archive listings: text only, redacted, never markup. */
+function opsCommandOutput(value: unknown): string {
+  if (typeof value !== 'string' || value.length > MAX_OPS_TEXT_OUTPUT) return fail()
+  return redactSecretText(value.replace(OPS_TERMINAL_NOISE, ''))
+}
+
+/** A value the server hands to its scheduler CLI as an argument; never option-shaped. */
+function opsCliArgument(value: unknown, maxLength: number, allowEmpty: boolean): value is string {
+  return opsText(value, maxLength, allowEmpty) && value === value.trim() && !value.startsWith('-')
+}
+
+function opsCronSchedule(value: unknown): value is string {
+  return opsCliArgument(value, 120, false)
+}
+
+function opsCronPrompt(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_OPS_CRON_PROMPT_INPUT && value.trim().length > 0 &&
+    !/^-\S/u.test(value) && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value)
+}
+
+function opsCronName(value: unknown): value is string {
+  return opsCliArgument(value, 300, true)
+}
+
+function opsCronDeliver(value: unknown): value is string {
+  return typeof value === 'string' && OPS_CRON_DELIVER.test(value)
+}
+
+function opsBackupCalendar(value: unknown): value is string {
+  return typeof value === 'string' && OPS_BACKUP_CALENDAR.test(value) && value === value.trim()
+}
+
+function opsBackupSource(value: unknown): value is string {
+  return isCanonicalAbsolutePath(value) && value.length <= 1_000 && OPS_BACKUP_FILE.test(value.slice(value.lastIndexOf('/') + 1))
+}
+
+function opsSkillName(value: unknown): value is string {
+  return opsText(value, 200) && value === value.trim() && value !== '.' && value !== '..' &&
+    !value.includes('/') && !value.includes('\\')
+}
+
+function opsConfirm(record: Record<string, unknown>): void {
+  if (record.confirm !== true) fail()
+}
+
+function parseLogsListPayload(value: unknown): OperationMap['logs.list']['payload'] {
+  const record = readOwnDataRecord(value, ['limit', 'level'])
+  if (typeof record.limit !== 'number' || !Number.isInteger(record.limit) || record.limit < 1 || record.limit > MAX_OPS_LOG_ROWS) return fail()
+  if (Object.hasOwn(record, 'level') && (typeof record.level !== 'string' || !OPS_LOG_LEVELS.has(record.level))) return fail()
+  return Object.freeze({
+    limit: record.limit,
+    ...(Object.hasOwn(record, 'level') ? { level: record.level as OperationMap['logs.list']['payload']['level'] } : {}),
+  })
+}
+
+function parseModelRefPayload(value: unknown): OperationMap['models.setDefault']['payload'] {
+  const record = exactObject(value, ['provider', 'model'])
+  if (typeof record.provider !== 'string' || !OPS_MODEL_ID.test(record.provider) ||
+      typeof record.model !== 'string' || !OPS_MODEL_ID.test(record.model)) return fail()
+  return Object.freeze({ provider: record.provider, model: record.model })
+}
+
+function parseSkillByNamePayload(value: unknown): OperationMap['skills.get']['payload'] {
+  const record = exactObject(value, ['name'])
+  if (!opsSkillName(record.name)) return fail()
+  return Object.freeze({ name: record.name })
+}
+
+function parseSkillTogglePayload(value: unknown): OperationMap['skills.toggle']['payload'] {
+  const record = exactObject(value, ['name', 'enabled'])
+  if (!opsSkillName(record.name) || typeof record.enabled !== 'boolean') return fail()
+  return Object.freeze({ name: record.name, enabled: record.enabled })
+}
+
+function parseCronCreatePayload(value: unknown): OperationMap['cron.create']['payload'] {
+  const record = exactObject(value, ['schedule', 'prompt', 'name', 'deliver', 'confirm'])
+  opsConfirm(record)
+  if (!opsCronSchedule(record.schedule) || !opsCronPrompt(record.prompt) ||
+      !opsCronName(record.name) || !opsCronDeliver(record.deliver)) return fail()
+  return Object.freeze({ schedule: record.schedule, prompt: record.prompt, name: record.name, deliver: record.deliver, confirm: true as const })
+}
+
+function parseCronUpdatePayload(value: unknown): OperationMap['cron.update']['payload'] {
+  const record = exactObject(value, ['jobId', 'fields', 'confirm'])
+  opsConfirm(record)
+  if (typeof record.jobId !== 'string' || !OPS_CRON_JOB_ID.test(record.jobId)) return fail()
+  const fields = readOwnDataRecord(record.fields, ['schedule', 'prompt', 'name', 'deliver'])
+  if (Object.keys(fields).length === 0) return fail()
+  if (Object.hasOwn(fields, 'schedule') && !opsCronSchedule(fields.schedule)) return fail()
+  if (Object.hasOwn(fields, 'prompt') && !opsCronPrompt(fields.prompt)) return fail()
+  if (Object.hasOwn(fields, 'name') && !opsCronName(fields.name)) return fail()
+  if (Object.hasOwn(fields, 'deliver') && !opsCronDeliver(fields.deliver)) return fail()
+  const copy: Record<string, string> = {}
+  for (const key of ['schedule', 'prompt', 'name', 'deliver'] as const) {
+    if (Object.hasOwn(fields, key)) copy[key] = fields[key] as string
+  }
+  return Object.freeze({ jobId: record.jobId, fields: Object.freeze(copy), confirm: true as const })
+}
+
+function parseCronActionPayload(value: unknown): OperationMap['cron.action']['payload'] {
+  const record = exactObject(value, ['jobId', 'action', 'confirm'])
+  opsConfirm(record)
+  if (typeof record.jobId !== 'string' || !OPS_CRON_JOB_ID.test(record.jobId) ||
+      typeof record.action !== 'string' || !OPS_CRON_ACTIONS.has(record.action)) return fail()
+  return Object.freeze({ jobId: record.jobId, action: record.action as OperationMap['cron.action']['payload']['action'], confirm: true as const })
+}
+
+function parseBackupConfirmPayload(value: unknown): OperationMap['backups.create']['payload'] {
+  const record = exactObject(value, ['confirm'])
+  opsConfirm(record)
+  return Object.freeze({ confirm: true as const })
+}
+
+function parseBackupScheduleSetPayload(value: unknown): OperationMap['backups.schedule.set']['payload'] {
+  const record = exactObject(value, ['calendar', 'confirm'])
+  opsConfirm(record)
+  if (!opsBackupCalendar(record.calendar)) return fail()
+  return Object.freeze({ calendar: record.calendar, confirm: true as const })
+}
+
+function parseBackupInspectPayload(value: unknown): OperationMap['backups.inspect']['payload'] {
+  const record = exactObject(value, ['source'])
+  if (!opsBackupSource(record.source)) return fail()
+  return Object.freeze({ source: record.source })
+}
+
+function parseBackupRestorePayload(value: unknown): OperationMap['backups.restore']['payload'] {
+  const record = exactObject(value, ['source', 'allFiles', 'paths', 'confirm'])
+  opsConfirm(record)
+  if (!opsBackupSource(record.source) || typeof record.allFiles !== 'boolean') return fail()
+  const paths = readLocalArray(record.paths, MAX_OPS_RESTORE_PATHS)
+  if (record.allFiles ? paths.length !== 0 : paths.length === 0) return fail()
+  for (const path of paths) {
+    if (!opsCliArgument(path, 1_000, false) || path.split('/').some((part) => part === '..')) return fail()
+  }
+  if (new Set(paths).size !== paths.length) return fail()
+  return Object.freeze({ source: record.source, allFiles: record.allFiles, paths: Object.freeze(paths as string[]), confirm: true as const })
+}
+
+function parseStatusSnapshot(value: unknown): OperationMap['status.get']['result'] {
+  const record = exactObject(value, ['hostname', 'system', 'architecture', 'kernel', 'uptime_seconds', 'cpu', 'memory', 'swap', 'disk', 'archon'])
+  if (!opsText(record.hostname, 255) || !opsText(record.system, 64, true) || !opsText(record.architecture, 64, true) ||
+      !opsText(record.kernel, 256, true) || !opsCount(record.uptime_seconds)) return fail()
+  const cpu = exactObject(record.cpu, ['percent', 'cores', 'load_1', 'load_5', 'load_15'])
+  if (!opsPercent(cpu.percent) || !opsCount(cpu.cores) || cpu.cores < 1 ||
+      !opsLoad(cpu.load_1) || !opsLoad(cpu.load_5) || !opsLoad(cpu.load_15)) return fail()
+  const memory = exactObject(record.memory, ['total', 'used', 'available', 'percent'])
+  if (!opsCount(memory.total) || !opsCount(memory.used) || !opsCount(memory.available) || !opsPercent(memory.percent)) return fail()
+  const swap = exactObject(record.swap, ['total', 'used', 'percent'])
+  if (!opsCount(swap.total) || !opsCount(swap.used) || !opsPercent(swap.percent)) return fail()
+  const disk = exactObject(record.disk, ['path', 'total', 'used', 'free', 'percent'])
+  if (!opsServerPath(disk.path) || !opsCount(disk.total) || !opsCount(disk.used) || !opsCount(disk.free) || !opsPercent(disk.percent)) return fail()
+  const archon = exactObject(record.archon, ['cpu_percent', 'memory_used', 'memory_percent', 'processes', 'accounting'])
+  if (!opsPercent(archon.cpu_percent) || !opsCount(archon.memory_used) || !opsPercent(archon.memory_percent) ||
+      !opsCount(archon.processes) || (archon.accounting !== 'systemd-cgroup' && archon.accounting !== 'process-tree')) return fail()
+  return Object.freeze({
+    hostname: record.hostname,
+    system: record.system,
+    architecture: record.architecture,
+    kernel: record.kernel,
+    uptime_seconds: record.uptime_seconds,
+    cpu: Object.freeze({ percent: cpu.percent, cores: cpu.cores, load_1: cpu.load_1, load_5: cpu.load_5, load_15: cpu.load_15 }),
+    memory: Object.freeze({ total: memory.total, used: memory.used, available: memory.available, percent: memory.percent }),
+    swap: Object.freeze({ total: swap.total, used: swap.used, percent: swap.percent }),
+    disk: Object.freeze({ path: disk.path, total: disk.total, used: disk.used, free: disk.free, percent: disk.percent }),
+    archon: Object.freeze({
+      cpu_percent: archon.cpu_percent,
+      memory_used: archon.memory_used,
+      memory_percent: archon.memory_percent,
+      processes: archon.processes,
+      accounting: archon.accounting,
+    }),
+  })
+}
+
+function parseLogEntry(value: unknown): OperationMap['logs.list']['result']['logs'][number] {
+  const record = exactObject(value, ['id', 'timestamp', 'level', 'source', 'component', 'message'])
+  if (!opsText(record.id, 256) || !opsText(record.timestamp, 64, true) ||
+      typeof record.level !== 'string' || !OPS_LOG_LEVELS.has(record.level) ||
+      !opsText(record.source, 64) || !opsText(record.component, 256, true) ||
+      typeof record.message !== 'string' || record.message.length > 16_000) return fail()
+  return Object.freeze({
+    id: record.id,
+    timestamp: record.timestamp,
+    level: record.level as OperationMap['logs.list']['result']['logs'][number]['level'],
+    source: record.source,
+    component: record.component,
+    message: redactSecretText(record.message.replace(OPS_TERMINAL_NOISE, '')),
+  })
+}
+
+function parseModelCatalog(value: unknown): OperationMap['models.list']['result'] {
+  const record = exactObject(value, ['current', 'fallback', 'providers', 'choices'])
+  const current = exactObject(record.current, ['provider', 'model', 'base_url_configured'])
+  const modelOrNull = (item: unknown): item is string | null => item === null || (typeof item === 'string' && OPS_MODEL_ID.test(item))
+  if (!modelOrNull(current.provider) || !modelOrNull(current.model) || typeof current.base_url_configured !== 'boolean') return fail()
+  if (record.fallback !== null) return fail()
+  const providers = readLocalArray(record.providers, 32).map((item) => {
+    const provider = exactObject(item, ['id', 'models'])
+    if (typeof provider.id !== 'string' || !OPS_MODEL_ID.test(provider.id)) return fail()
+    const models = readLocalArray(provider.models, 256)
+    if (models.some((model) => typeof model !== 'string' || !OPS_MODEL_ID.test(model)) || new Set(models).size !== models.length) return fail()
+    return Object.freeze({ id: provider.id, models: Object.freeze(models as string[]) })
+  })
+  if (new Set(providers.map((provider) => provider.id)).size !== providers.length) return fail()
+  const choices = readLocalArray(record.choices, 2_048).map((item) => {
+    const choice = exactObject(item, ['provider', 'model'])
+    if (typeof choice.provider !== 'string' || !OPS_MODEL_ID.test(choice.provider) ||
+        typeof choice.model !== 'string' || !OPS_MODEL_ID.test(choice.model)) return fail()
+    return Object.freeze({ provider: choice.provider, model: choice.model })
+  })
+  return Object.freeze({
+    current: Object.freeze({ provider: current.provider, model: current.model, base_url_configured: current.base_url_configured }),
+    fallback: null,
+    providers: Object.freeze(providers),
+    choices: Object.freeze(choices),
+  })
+}
+
+function parseSkillRecord(value: unknown, withContent: true): OperationMap['skills.get']['result']
+function parseSkillRecord(value: unknown, withContent: false): OperationMap['skills.toggle']['result']
+function parseSkillRecord(value: unknown, withContent: boolean): OperationMap['skills.get']['result'] | OperationMap['skills.toggle']['result'] {
+  const keys = ['name', 'description', 'category', 'enabled', 'path']
+  const record = exactObject(value, withContent ? [...keys, 'content'] : keys)
+  if (!opsText(record.name, 200) || !boundedString(record.description, 4_000, true) ||
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(record.description) ||
+      !opsText(record.category, 200, true) || typeof record.enabled !== 'boolean' || !opsServerPath(record.path)) return fail()
+  const base = { name: record.name, description: record.description, category: record.category, enabled: record.enabled, path: record.path }
+  if (!withContent) return Object.freeze(base)
+  if (typeof record.content !== 'string' || record.content.length > MAX_OPS_TEXT_OUTPUT || record.content.includes('\0')) return fail()
+  return Object.freeze({ ...base, content: record.content })
+}
+
+function parseCronJobs(value: unknown): OperationMap['cron.list']['result']['jobs'] {
+  const jobs = readLocalArray(value, MAX_OPS_CRON_JOBS).map((item) => {
+    const record = exactObject(item, [
+      'id', 'name', 'enabled', 'state', 'schedule', 'next_run_at', 'last_run_at', 'last_status', 'last_error',
+      'deliver', 'prompt', 'skills', 'model', 'provider', 'script', 'no_agent',
+    ])
+    if (typeof record.id !== 'string' || !OPS_CRON_LISTED_ID.test(record.id) || !opsText(record.name, 300) ||
+        typeof record.enabled !== 'boolean' || typeof record.no_agent !== 'boolean' ||
+        !opsNullableText(record.state, 64) || !opsNullableText(record.schedule, 200) ||
+        !opsNullableText(record.next_run_at, 64) || !opsNullableText(record.last_run_at, 64) ||
+        !opsNullableText(record.last_status, 64) || !opsNullableText(record.deliver, 200) ||
+        !opsNullableText(record.model, 200) || !opsNullableText(record.provider, 200) ||
+        !(record.script === null || opsText(record.script, MAX_OPS_PATH_LENGTH, true))) return fail()
+    if (record.last_error !== null && (typeof record.last_error !== 'string' || record.last_error.length > 16_000)) return fail()
+    if (typeof record.prompt !== 'string' || record.prompt.length > MAX_OPS_CRON_PROMPT_RESULT || record.prompt.includes('\0')) return fail()
+    const skills = readLocalArray(record.skills, 64)
+    if (skills.some((skill) => !opsText(skill, 200))) return fail()
+    return Object.freeze({
+      id: record.id,
+      name: record.name,
+      enabled: record.enabled,
+      state: record.state,
+      schedule: record.schedule,
+      next_run_at: record.next_run_at,
+      last_run_at: record.last_run_at,
+      last_status: record.last_status,
+      last_error: record.last_error === null ? null : redactSecretText(record.last_error.replace(OPS_TERMINAL_NOISE, '')),
+      deliver: record.deliver,
+      prompt: record.prompt,
+      skills: Object.freeze(skills as string[]),
+      model: record.model,
+      provider: record.provider,
+      script: record.script,
+      no_agent: record.no_agent,
+    })
+  })
+  if (new Set(jobs.map((job) => job.id)).size !== jobs.length) return fail()
+  return Object.freeze(jobs)
+}
+
+function parseBackupRecords(value: unknown): OperationMap['backups.list']['result']['backups'] {
+  const backups = readLocalArray(value, MAX_OPS_BACKUPS).map((item) => {
+    const record = exactObject(item, ['id', 'created_at', 'plain_path', 'encrypted_path', 'plain_size', 'encrypted_size', 'encrypted'])
+    if (typeof record.id !== 'string' || !OPS_BACKUP_ID.test(record.id) || !opsText(record.created_at, 64) ||
+        typeof record.encrypted !== 'boolean') return fail()
+    for (const [path, size] of [['plain_path', 'plain_size'], ['encrypted_path', 'encrypted_size']] as const) {
+      if (record[path] === null ? record[size] !== null : !opsServerPath(record[path]) || !opsCount(record[size])) return fail()
+    }
+    if (record.encrypted !== (record.encrypted_path !== null)) return fail()
+    return Object.freeze({
+      id: record.id,
+      created_at: record.created_at,
+      plain_path: record.plain_path as string | null,
+      encrypted_path: record.encrypted_path as string | null,
+      plain_size: record.plain_size as number | null,
+      encrypted_size: record.encrypted_size as number | null,
+      encrypted: record.encrypted,
+    })
+  })
+  if (new Set(backups.map((backup) => backup.id)).size !== backups.length) return fail()
+  return Object.freeze(backups)
+}
+
+function parseBackupSchedule(value: unknown): OperationMap['backups.schedule.get']['result'] {
+  const optional = ['ActiveState', 'UnitFileState', 'NextElapseUSecRealtime', 'LastTriggerUSec'] as const
+  const record = readOwnDataRecord(value, ['calendar', ...optional])
+  if (!Object.hasOwn(record, 'calendar') || !opsNullableText(record.calendar, 200)) return fail()
+  const result: OperationMap['backups.schedule.get']['result'] = { calendar: record.calendar }
+  for (const key of optional) {
+    if (!Object.hasOwn(record, key)) continue
+    if (!opsText(record[key], 256, true)) return fail()
+    result[key] = record[key] as string
+  }
+  return Object.freeze(result)
+}
+
 export function isOperationName(value: unknown): value is OperationName {
   return typeof value === 'string' && operations.has(value)
 }
@@ -589,6 +976,36 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseTaskByIdPayload(payload)])
     case 'tasks.events':
       return Object.freeze([operation, parseTaskEventsPayload(payload)])
+    // Operations pages
+    case 'status.get':
+    case 'models.list':
+    case 'skills.list':
+    case 'cron.list':
+    case 'backups.list':
+    case 'backups.schedule.get':
+      return Object.freeze([operation, parseEmptyPayload(payload)])
+    case 'logs.list':
+      return Object.freeze([operation, parseLogsListPayload(payload)])
+    case 'models.setDefault':
+      return Object.freeze([operation, parseModelRefPayload(payload)])
+    case 'skills.get':
+      return Object.freeze([operation, parseSkillByNamePayload(payload)])
+    case 'skills.toggle':
+      return Object.freeze([operation, parseSkillTogglePayload(payload)])
+    case 'cron.create':
+      return Object.freeze([operation, parseCronCreatePayload(payload)])
+    case 'cron.update':
+      return Object.freeze([operation, parseCronUpdatePayload(payload)])
+    case 'cron.action':
+      return Object.freeze([operation, parseCronActionPayload(payload)])
+    case 'backups.create':
+      return Object.freeze([operation, parseBackupConfirmPayload(payload)])
+    case 'backups.schedule.set':
+      return Object.freeze([operation, parseBackupScheduleSetPayload(payload)])
+    case 'backups.inspect':
+      return Object.freeze([operation, parseBackupInspectPayload(payload)])
+    case 'backups.restore':
+      return Object.freeze([operation, parseBackupRestorePayload(payload)])
   }
 }
 
@@ -1037,6 +1454,61 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       const record = exactObject(value, ['ok'])
       if (record.ok !== true) return fail()
       return Object.freeze({ ok: true })
+    }
+    // Operations pages
+    case 'status.get':
+      return parseStatusSnapshot(value)
+    case 'logs.list': {
+      const record = exactObject(value, ['logs'])
+      return Object.freeze({ logs: Object.freeze(readLocalArray(record.logs, MAX_OPS_LOG_ROWS).map(parseLogEntry)) })
+    }
+    case 'models.list':
+    case 'models.setDefault':
+      return parseModelCatalog(value)
+    case 'skills.list': {
+      const record = exactObject(value, ['skills'])
+      return Object.freeze({ skills: Object.freeze(readLocalArray(record.skills, MAX_OPS_SKILLS).map((item) => parseSkillRecord(item, false))) })
+    }
+    case 'skills.get':
+      return parseSkillRecord(value, true)
+    case 'skills.toggle':
+      return parseSkillRecord(value, false)
+    case 'cron.list': {
+      const record = exactObject(value, ['jobs'])
+      return Object.freeze({ jobs: parseCronJobs(record.jobs) })
+    }
+    case 'cron.create':
+    case 'cron.update':
+    case 'cron.action': {
+      const record = exactObject(value, ['ok', 'output', 'jobs'])
+      if (record.ok !== true) return fail()
+      return Object.freeze({ ok: true as const, output: opsCommandOutput(record.output), jobs: parseCronJobs(record.jobs) })
+    }
+    case 'backups.list': {
+      const record = exactObject(value, ['backups'])
+      return Object.freeze({ backups: parseBackupRecords(record.backups) })
+    }
+    case 'backups.create': {
+      const record = exactObject(value, ['ok', 'output', 'backups'])
+      if (record.ok !== true) return fail()
+      return Object.freeze({ ok: true as const, output: opsCommandOutput(record.output), backups: parseBackupRecords(record.backups) })
+    }
+    case 'backups.schedule.get':
+      return parseBackupSchedule(value)
+    case 'backups.schedule.set': {
+      const record = exactObject(value, ['calendar', 'updated'])
+      if (!opsBackupCalendar(record.calendar) || record.updated !== true) return fail()
+      return Object.freeze({ calendar: record.calendar, updated: true as const })
+    }
+    case 'backups.inspect': {
+      const record = exactObject(value, ['source', 'contents'])
+      if (!isCanonicalAbsolutePath(record.source) || record.source.length > MAX_OPS_PATH_LENGTH) return fail()
+      return Object.freeze({ source: record.source, contents: opsCommandOutput(record.contents) })
+    }
+    case 'backups.restore': {
+      const record = exactObject(value, ['ok', 'output'])
+      if (record.ok !== true) return fail()
+      return Object.freeze({ ok: true as const, output: opsCommandOutput(record.output) })
     }
   }
 }
