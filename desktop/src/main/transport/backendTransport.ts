@@ -9,6 +9,7 @@ import type {
 import type { LocalCodexProxyRequest } from '../localCodexProxy'
 import { BRIDGE_CHANNELS, isOperationName, parseBridgeResponse, parseOperationPayload } from '../../shared/bridge/validation'
 import {
+  ipcPayloadLimitsForOperation,
   isBoundedIpcPayload,
   type BoundedPayloadLimits,
 } from '../security/TrustedShellFrameGuard'
@@ -74,6 +75,13 @@ export const OPERATIONS_PAGE_OPERATIONS: readonly OperationName[] = Object.freez
   'backups.restore',
 ])
 
+/** Composer support: Prime's model catalog, and server speech-to-text for review before sending. */
+export const COMPOSER_OPERATIONS: readonly OperationName[] = Object.freeze([
+  'models.catalog',
+  'audio.status',
+  'audio.transcribe',
+])
+
 const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST' | 'PUT' | 'DELETE'>> = Object.freeze({
   readiness: 'GET',
   'projects.list': 'GET',
@@ -117,6 +125,10 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST' | 'PUT' |
   'backups.schedule.set': 'PUT',
   'backups.inspect': 'POST',
   'backups.restore': 'POST',
+  // Composer
+  'models.catalog': 'GET',
+  'audio.status': 'GET',
+  'audio.transcribe': 'POST',
 })
 
 export const MAX_BACKEND_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -173,6 +185,10 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'backups.schedule.set': '/api/backups/schedule',
   'backups.inspect': '/api/backups/inspect',
   'backups.restore': '/api/backups/restore',
+  // Composer
+  'models.catalog': '/api/models',
+  'audio.status': '/api/audio/status',
+  'audio.transcribe': '/api/audio/transcribe',
 })
 
 const SAFE_MESSAGES = Object.freeze({
@@ -634,6 +650,7 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
         prompt: submitPayload.prompt,
         session_id: submitPayload.sessionId,
         ...(submitPayload.projectId === undefined ? {} : { project_id: submitPayload.projectId }),
+        ...(submitPayload.model === undefined ? {} : { model: submitPayload.model, provider: submitPayload.provider }),
         approval_mode: 'auto',
         chat_only: false,
       })
@@ -649,6 +666,7 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
       prompt: submitPayload.prompt,
       project_id: submitPayload.projectId,
       profile: submitPayload.runtime ?? 'prime',
+      ...(submitPayload.model === undefined ? {} : { model: submitPayload.model, provider: submitPayload.provider }),
       approval_mode: 'auto',
       chat_only: false,
     })
@@ -668,6 +686,10 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
   if (operation === 'workspaces.files.create') {
     const createPayload = payload as OperationMap['workspaces.files.create']['payload']
     return JSON.stringify({ path: createPayload.path, content: createPayload.content })
+  }
+  if (operation === 'audio.transcribe') {
+    const audioPayload = payload as OperationMap['audio.transcribe']['payload']
+    return JSON.stringify({ data_url: audioPayload.dataUrl, mime_type: audioPayload.mimeType })
   }
   return operationsPageRequestBody(operation, payload)
 }
@@ -1040,7 +1062,7 @@ export class BackendTransport {
     let normalizedPayload: OperationMap[K]['payload']
     if (!isOperationName(operation)) throw new BackendTransportError('unsupported_operation')
     try {
-      if (!isBoundedIpcPayload(payload)) throw new BackendTransportError('invalid_payload')
+      if (!isBoundedIpcPayload(payload, ipcPayloadLimitsForOperation(operation))) throw new BackendTransportError('invalid_payload')
       normalizedPayload = parseOperationPayload(operation, payload)
     } catch (error) {
       if (error instanceof BackendTransportError) throw error
@@ -1065,7 +1087,8 @@ export class BackendTransport {
         Authorization: `Bearer ${connection.token}`,
       }
       if (operation === 'projects.create' || operation === 'tasks.submit' || operation === 'workspaces.provision' ||
-          operation === 'workspaces.files.write' || operation === 'workspaces.files.create' || operation === 'sessions.delete') {
+          operation === 'workspaces.files.write' || operation === 'workspaces.files.create' || operation === 'sessions.delete' ||
+          operation === 'audio.transcribe') {
         headers['Content-Type'] = 'application/json'
       }
       if (body !== undefined && OPERATIONS_PAGE_OPERATIONS.includes(operation)) {

@@ -26,6 +26,8 @@ import {
 } from './liveModels'
 import { checkoutChoices, type CheckoutChoice } from './LiveWorkbench'
 import { extractBrowserLinks, type BrowserLink } from './browserLinks'
+import { appendTranscript, MicButton, ModelPicker, useModelCatalog } from './ComposerControls'
+import { modelChoicesFor, rememberedChoice, saveLastModel, type ModelChoice } from './composerPreferences'
 import { Markdown } from './Markdown'
 import { ShareDialog } from './LiveSharing'
 import type { LiveScope, LiveServer } from './useLiveServer'
@@ -229,6 +231,23 @@ type Submission =
   | { state: 'submitting' }
   | { state: 'unknown'; checking: boolean }
 
+/** The runtime's model choice: the user's pick in this form, else the remembered one. */
+function useRuntimeModel(runtime: LiveRuntime | null, choices: readonly ModelChoice[]) {
+  const [picked, setPicked] = useState<Partial<Record<LiveRuntime, ModelChoice | null>>>({})
+  const stored = runtime ? picked[runtime] : undefined
+  const selected = !runtime || !choices.length
+    ? null
+    : stored === undefined
+      ? rememberedChoice(runtime, choices)
+      : stored && choices.some((choice) => choice.model === stored.model && choice.provider === stored.provider) ? stored : null
+  const choose = useCallback((choice: ModelChoice | null) => {
+    if (!runtime) return
+    setPicked((current) => ({ ...current, [runtime]: choice }))
+    saveLastModel(runtime, choice)
+  }, [runtime])
+  return { selected, choose }
+}
+
 function submitOnShortcut(event: KeyboardEvent<HTMLTextAreaElement>): void {
   if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
     event.preventDefault()
@@ -357,6 +376,13 @@ function LiveConversation({
   useConversationLinks(onLinks, `${scope.generation}:${sessionId}`, trackedTask, transcript.state === 'ready' ? transcript.messages : NO_MESSAGES)
 
   const runtime: LiveRuntime | null = session?.runtime ?? null
+  // The server passes a follow-up's model to Prime on resume; Pi gets no catalog.
+  const catalog = useModelCatalog(bridge, runtime === 'prime')
+  const modelChoices = useMemo(
+    () => modelChoicesFor(runtime, catalog.state === 'ready' ? catalog.catalog : null),
+    [runtime, catalog],
+  )
+  const model = useRuntimeModel(runtime, modelChoices)
   const entries = useMemo(
     () => transcript.state === 'ready' ? transcriptEntries(transcript.messages, runtime) : [],
     [transcript, runtime],
@@ -411,10 +437,12 @@ function LiveConversation({
     setSubmission({ state: 'submitting' })
     setNotice(null)
     try {
+      const chosen = runtime === 'prime' ? model.selected : null
       const result = await bridge.api.invoke('tasks.submit', {
         sessionId,
         prompt,
         ...(session.projectId ? { projectId: session.projectId } : {}),
+        ...(chosen ? { model: chosen.model, provider: chosen.provider } : {}),
       })
       if (!alive.current) return
       setDraft('')
@@ -548,6 +576,18 @@ function LiveConversation({
       </div>}
       {notice && <p className="live-task-note" role="status">{notice}</p>}
       {inspection === 'failed' && <p className="live-task-note">Running tasks could not be checked for this conversation.</p>}
+      {runtime === 'prime' && !staticBlocker && <div className="live-form live-composer-model">
+        <ModelPicker
+          id="live-continue-model"
+          runtime={runtime}
+          checkout={false}
+          catalog={catalog}
+          choices={modelChoices}
+          value={model.selected}
+          disabled={submission.state !== 'idle'}
+          onChange={model.choose}
+        />
+      </div>}
       <div className="composer-frame">
         <textarea
           aria-label="Message"
@@ -563,6 +603,11 @@ function LiveConversation({
         <div className="composer-toolbar">
           <span>{runtimeLabel(runtime)} · Trusted execution</span>
           <span>{draft.length.toLocaleString()} / 8,000</span>
+          <MicButton
+            bridge={bridge}
+            disabled={!!staticBlocker || submission.state !== 'idle'}
+            onTranscript={(text) => setDraft((current) => appendTranscript(current, text, MAX_PROMPT_LENGTH))}
+          />
           <button type="submit" aria-label="Send message" disabled={!canSend}><Icon className="live-flip" name="chevron" /></button>
         </div>
       </div>
@@ -659,14 +704,24 @@ function NewConversation({
     ? choices.find((choice) => choice.id === 'prime') ?? null
     : choices.find((choice) => choice.id === runtime) ?? choices[0] ?? null
   const locked = submission !== 'idle' || (!!trackedTask && !isTerminalStatus(trackedTask.status))
+  const catalog = useModelCatalog(bridge)
+  const modelRuntime: LiveRuntime | null = selectedCheckout ? null : selectedRuntime?.id ?? null
+  const modelChoices = useMemo(
+    () => modelChoicesFor(modelRuntime, catalog.state === 'ready' ? catalog.catalog : null),
+    [modelRuntime, catalog],
+  )
+  const model = useRuntimeModel(modelRuntime, modelChoices)
   const canStart = !locked && !!selectedProject && !!selectedRuntime && prompt.trim().length > 0 && prompt.length <= MAX_PROMPT_LENGTH
 
   async function start(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     if (!canStart || !selectedProject || !selectedRuntime || submitLock.current) return
+    // Only Prime in the project source honours a model; the checkout route and Pi never get one.
+    const chosen = !selectedCheckout && selectedRuntime.id === 'prime' ? model.selected : null
     const frozen = selectedCheckout
       ? { projectId: selectedProject.id, prompt, workspaceId: selectedCheckout.id, workspaceGeneration: selectedCheckout.generation }
-      : { projectId: selectedProject.id, prompt, runtime: selectedRuntime.id }
+      : { projectId: selectedProject.id, prompt, runtime: selectedRuntime.id,
+        ...(chosen ? { model: chosen.model, provider: chosen.provider } : {}) }
     submitLock.current = true
     setSubmission('submitting')
     try {
@@ -711,10 +766,28 @@ function NewConversation({
         {runtimes.state === 'ready' && !choices.length && <p className="live-task-note" role="alert">The server reports no available runtime, so a conversation cannot be started.</p>}
         {runtimes.state === 'error' && <p className="live-task-note" role="alert">Available runtimes could not be read from the server.</p>}
 
+        <ModelPicker
+          id="live-new-model"
+          runtime={selectedCheckout ? 'prime' : selectedRuntime?.id ?? null}
+          checkout={!!selectedCheckout}
+          catalog={catalog}
+          choices={modelChoices}
+          value={model.selected}
+          disabled={locked}
+          onChange={model.choose}
+        />
+
         <label htmlFor="live-new-prompt">First message</label>
         <textarea id="live-new-prompt" dir="auto" value={prompt} onChange={(event) => setPrompt(event.currentTarget.value)} onKeyDown={submitOnShortcut} maxLength={MAX_PROMPT_LENGTH} rows={5} disabled={locked} placeholder="What should this conversation start with?" />
         <div className="live-form-footer">
           <span>{prompt.length.toLocaleString()} / 8,000 characters</span>
+          <span className="live-form-voice">
+            <MicButton
+              bridge={bridge}
+              disabled={locked}
+              onTranscript={(text) => setPrompt((current) => appendTranscript(current, text, MAX_PROMPT_LENGTH))}
+            />
+          </span>
           <button type="submit" disabled={!canStart}>{submission === 'submitting' ? 'Starting…' : 'Start conversation'}</button>
         </div>
         <p className="live-task-note">Sends once to {scope.serverUrl ?? 'the connected server'}. Trusted execution is unsandboxed and may edit files or run commands in the selected project. Provider credentials and native conformance are unverified.</p>

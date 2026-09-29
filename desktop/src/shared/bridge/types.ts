@@ -125,6 +125,12 @@ export interface TaskSubmitProjectPayload {
   workspaceId?: string
   workspaceGeneration?: number
   sessionId?: never
+  /**
+   * A Prime model choice from the server catalog. Sent only together with
+   * `provider`, never with Pi or the checkout route, which do not honour it.
+   */
+  model?: string
+  provider?: TaskModelProvider
 }
 
 /**
@@ -138,7 +144,13 @@ export interface TaskSubmitSessionPayload {
   runtime?: never
   workspaceId?: never
   workspaceGeneration?: never
+  /** The server passes a follow-up's model to the Prime runner on resume. */
+  model?: string
+  provider?: TaskModelProvider
 }
+
+/** The only provider the server's Prime runner forwards; it drops any other. */
+export type TaskModelProvider = 'openai-codex'
 
 export type TaskSubmitPayload = TaskSubmitProjectPayload | TaskSubmitSessionPayload
 
@@ -702,6 +714,43 @@ export interface WorkspaceServicesBridge {
   logs(input: { workspaceId: string; name: string; lines: number }): Promise<WorkspaceServiceLogsDto>
 }
 
+/** One signed-in provider and the models the server lets Prime run through it. */
+export interface ModelCatalogProvider {
+  id: string
+  models: readonly string[]
+}
+
+export interface ModelCatalogChoice {
+  provider: string
+  model: string
+}
+
+/** `GET /api/models`: Prime's signed-in providers only; it says nothing about Pi. */
+export interface ModelCatalogResult {
+  current: { provider: string | null; model: string | null; base_url_configured: boolean }
+  fallback: JsonRecord | null
+  providers: readonly ModelCatalogProvider[]
+  choices: readonly ModelCatalogChoice[]
+}
+
+export interface AudioStatusResult {
+  available: boolean
+  stt: { available: boolean; provider: string }
+  tts: { available: boolean; provider: string }
+}
+
+/** A base64 `data:audio/...` URL whose header media type equals `mimeType`. */
+export interface AudioTranscribePayload {
+  dataUrl: string
+  mimeType: string
+}
+
+export interface AudioTranscribeResult {
+  success: true
+  transcript: string
+  provider: string
+}
+
 export interface OperationMap {
   readiness: {
     payload: EmptyPayload
@@ -883,6 +932,19 @@ export interface OperationMap {
   'backups.restore': {
     payload: BackupRestorePayload
     result: { ok: true; output: string }
+  }
+  // Composer
+  'models.catalog': {
+    payload: EmptyPayload
+    result: ModelCatalogResult
+  }
+  'audio.status': {
+    payload: EmptyPayload
+    result: AudioStatusResult
+  }
+  'audio.transcribe': {
+    payload: AudioTranscribePayload
+    result: AudioTranscribeResult
   }
 }
 

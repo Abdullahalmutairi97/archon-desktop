@@ -64,6 +64,22 @@ describe('finite desktop IPC registration', () => {
     await expect(handlers.get('archon:connection:describe')!(trusted)).rejects.toThrow()
   })
 
+  it('allows the audio envelope only for a bounded transcription invoke', async () => {
+    const { handlers, service, trusted } = fixture()
+    const transcript = { success: true, transcript: 'hello', provider: 'stt' }
+    service.invoke.mockResolvedValue(transcript as never)
+    const upload = { dataUrl: `data:audio/webm;base64,${Buffer.alloc(200_000, 1).toString('base64')}`, mimeType: 'audio/webm' }
+    await expect(handlers.get('archon:api:invoke')!(trusted, 'audio.transcribe', upload)).resolves.toEqual(transcript)
+    expect(service.invoke).toHaveBeenCalledTimes(1)
+
+    // The same size under any other operation is refused before the backend.
+    await expect(handlers.get('archon:api:invoke')!(trusted, 'tasks.submit', { projectId: 'p', prompt: upload.dataUrl })).rejects.toThrow()
+    await expect(handlers.get('archon:connection:save')!(trusted, { serverUrl: 'http://127.0.0.1:8000', token: upload.dataUrl })).rejects.toThrow()
+    const oversized = { dataUrl: `data:audio/webm;base64,${Buffer.alloc(25 * 1024 * 1024 + 3, 1).toString('base64')}`, mimeType: 'audio/webm' }
+    await expect(handlers.get('archon:api:invoke')!(trusted, 'audio.transcribe', oversized)).rejects.toThrow()
+    expect(service.invoke).toHaveBeenCalledTimes(1)
+  })
+
   it('revokes an in-flight response when the trusted frame navigates', async () => {
     const { handlers, service, trusted, guard } = fixture()
     let trustedNow = true
