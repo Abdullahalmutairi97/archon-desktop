@@ -48,7 +48,28 @@ export const WORKSPACE_OPERATIONS: readonly OperationName[] = Object.freeze([
   'workspaces.files.create',
 ])
 
-const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Object.freeze({
+/** Operations pages. Every mutation here carries an explicit renderer confirmation and is sent once. */
+export const OPERATIONS_PAGE_OPERATIONS: readonly OperationName[] = Object.freeze([
+  'status.get',
+  'logs.list',
+  'models.list',
+  'models.setDefault',
+  'skills.list',
+  'skills.get',
+  'skills.toggle',
+  'cron.list',
+  'cron.create',
+  'cron.update',
+  'cron.action',
+  'backups.list',
+  'backups.create',
+  'backups.schedule.get',
+  'backups.schedule.set',
+  'backups.inspect',
+  'backups.restore',
+])
+
+const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST' | 'PUT'>> = Object.freeze({
   readiness: 'GET',
   'projects.list': 'GET',
   'projects.create': 'POST',
@@ -72,6 +93,24 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'workspaces.files.search': 'GET',
   'workspaces.files.write': 'POST',
   'workspaces.files.create': 'POST',
+  // Operations pages
+  'status.get': 'GET',
+  'logs.list': 'GET',
+  'models.list': 'GET',
+  'models.setDefault': 'PUT',
+  'skills.list': 'GET',
+  'skills.get': 'GET',
+  'skills.toggle': 'PUT',
+  'cron.list': 'GET',
+  'cron.create': 'POST',
+  'cron.update': 'PUT',
+  'cron.action': 'POST',
+  'backups.list': 'GET',
+  'backups.create': 'POST',
+  'backups.schedule.get': 'GET',
+  'backups.schedule.set': 'PUT',
+  'backups.inspect': 'POST',
+  'backups.restore': 'POST',
 })
 
 export const MAX_BACKEND_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -109,6 +148,24 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'workspaces.files.search': '/api/workspaces',
   'workspaces.files.write': '/api/workspaces',
   'workspaces.files.create': '/api/workspaces',
+  // Operations pages
+  'status.get': '/api/status',
+  'logs.list': '/api/logs',
+  'models.list': '/api/models',
+  'models.setDefault': '/api/models/default',
+  'skills.list': '/api/skills',
+  'skills.get': '/api/skills',
+  'skills.toggle': '/api/skills/toggle',
+  'cron.list': '/api/cron',
+  'cron.create': '/api/cron',
+  'cron.update': '/api/cron',
+  'cron.action': '/api/cron',
+  'backups.list': '/api/backups',
+  'backups.create': '/api/backups',
+  'backups.schedule.get': '/api/backups/schedule',
+  'backups.schedule.set': '/api/backups/schedule',
+  'backups.inspect': '/api/backups/inspect',
+  'backups.restore': '/api/backups/restore',
 })
 
 const SAFE_MESSAGES = Object.freeze({
@@ -365,6 +422,11 @@ function operationUrl(
   } else if (operation === 'workspaces.files.create') {
     const workspacePayload = payload as OperationMap['workspaces.files.create']['payload']
     path += `/${encodeURIComponent(workspacePayload.workspaceId)}/files/create`
+  } else if (operation === 'skills.get') {
+    path += `/${encodeURIComponent((payload as OperationMap['skills.get']['payload']).name)}`
+  } else if (operation === 'cron.update' || operation === 'cron.action') {
+    path += `/${encodeURIComponent((payload as OperationMap['cron.update']['payload']).jobId)}`
+    if (operation === 'cron.action') path += '/action'
   }
   const url = new URL(path, origin)
   if (operation === 'workspaces.list' || operation === 'workspaces.get') {
@@ -399,6 +461,10 @@ function operationUrl(
   } else if (operation === 'workspaces.files.search') {
     const searchPayload = payload as OperationMap['workspaces.files.search']['payload']
     url.searchParams.set('q', searchPayload.query)
+  } else if (operation === 'logs.list') {
+    const logsPayload = payload as OperationMap['logs.list']['payload']
+    url.searchParams.set('limit', String(logsPayload.limit))
+    if (logsPayload.level !== undefined) url.searchParams.set('level', logsPayload.level)
   }
   return url
 }
@@ -468,6 +534,24 @@ function isSupportedResult(
         typeof value.content === 'string' &&
         value.content.length <= 12_000 && !value.content.includes('\0') &&
         new TextEncoder().encode(value.content).byteLength <= 16 * 1024
+    }
+    // Operations pages: the committed state must be the one requested.
+    if (operation === 'logs.list') {
+      return Array.isArray(value.logs) && value.logs.length <= (payload as OperationMap['logs.list']['payload']).limit
+    }
+    if (operation === 'models.setDefault') {
+      const requested = payload as OperationMap['models.setDefault']['payload']
+      return isRecord(value.current) && value.current.provider === requested.provider && value.current.model === requested.model
+    }
+    if (operation === 'skills.get') {
+      return value.name === (payload as OperationMap['skills.get']['payload']).name
+    }
+    if (operation === 'skills.toggle') {
+      const requested = payload as OperationMap['skills.toggle']['payload']
+      return value.name === requested.name && value.enabled === requested.enabled
+    }
+    if (operation === 'backups.schedule.set') {
+      return value.calendar === (payload as OperationMap['backups.schedule.set']['payload']).calendar
     }
     return true
   } catch {
@@ -560,7 +644,53 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
     const createPayload = payload as OperationMap['workspaces.files.create']['payload']
     return JSON.stringify({ path: createPayload.path, content: createPayload.content })
   }
-  return undefined
+  return operationsPageRequestBody(operation, payload)
+}
+
+/** Fixed request bodies for the operations pages; the confirmation flag is sent only after renderer confirmation. */
+function operationsPageRequestBody(operation: OperationName, payload: OperationMap[OperationName]['payload']): string | undefined {
+  switch (operation) {
+    case 'models.setDefault': {
+      const modelPayload = payload as OperationMap['models.setDefault']['payload']
+      return JSON.stringify({ provider: modelPayload.provider, model: modelPayload.model })
+    }
+    case 'skills.toggle': {
+      const skillPayload = payload as OperationMap['skills.toggle']['payload']
+      return JSON.stringify({ name: skillPayload.name, enabled: skillPayload.enabled })
+    }
+    case 'cron.create': {
+      const cronPayload = payload as OperationMap['cron.create']['payload']
+      return JSON.stringify({
+        schedule: cronPayload.schedule, prompt: cronPayload.prompt, name: cronPayload.name,
+        deliver: cronPayload.deliver, confirm: cronPayload.confirm,
+      })
+    }
+    case 'cron.update': {
+      const cronPayload = payload as OperationMap['cron.update']['payload']
+      return JSON.stringify({ fields: cronPayload.fields, confirm: cronPayload.confirm })
+    }
+    case 'cron.action': {
+      const cronPayload = payload as OperationMap['cron.action']['payload']
+      return JSON.stringify({ action: cronPayload.action, confirm: cronPayload.confirm })
+    }
+    case 'backups.create':
+      return JSON.stringify({ confirm: (payload as OperationMap['backups.create']['payload']).confirm })
+    case 'backups.schedule.set': {
+      const schedulePayload = payload as OperationMap['backups.schedule.set']['payload']
+      return JSON.stringify({ calendar: schedulePayload.calendar, confirm: schedulePayload.confirm })
+    }
+    case 'backups.inspect':
+      return JSON.stringify({ source: (payload as OperationMap['backups.inspect']['payload']).source })
+    case 'backups.restore': {
+      const restorePayload = payload as OperationMap['backups.restore']['payload']
+      return JSON.stringify({
+        source: restorePayload.source, paths: restorePayload.paths,
+        all_files: restorePayload.allFiles, confirm: restorePayload.confirm,
+      })
+    }
+    default:
+      return undefined
+  }
 }
 
 async function readBoundedBody(response: Response): Promise<Uint8Array> {
@@ -911,6 +1041,9 @@ export class BackendTransport {
       }
       if (operation === 'projects.create' || operation === 'tasks.submit' || operation === 'workspaces.provision' ||
           operation === 'workspaces.files.write' || operation === 'workspaces.files.create') {
+        headers['Content-Type'] = 'application/json'
+      }
+      if (body !== undefined && OPERATIONS_PAGE_OPERATIONS.includes(operation)) {
         headers['Content-Type'] = 'application/json'
       }
       if (operation === 'tasks.submit') {

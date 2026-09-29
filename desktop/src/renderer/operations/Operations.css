@@ -1,0 +1,529 @@
+/* Operations pages. Logical properties only, so the layout mirrors in RTL. */
+.ops-page {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.ops-page button,
+.ops-dialog button {
+  min-block-size: 28px;
+  padding-block: 4px;
+  padding-inline: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(11px * var(--font-scale));
+  cursor: pointer;
+}
+
+.ops-page button.text-button {
+  min-block-size: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.ops-page button:disabled,
+.ops-dialog button:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.ops-page button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ops-primary {
+  border-color: var(--accent) !important;
+  background: var(--accent) !important;
+  color: var(--accent-ink) !important;
+}
+
+.ops-danger {
+  border-color: #b8453a !important;
+  color: #f0a39a !important;
+}
+
+.ops-page input,
+.ops-page textarea,
+.ops-dialog input,
+.ops-dialog textarea {
+  inline-size: 100%;
+  box-sizing: border-box;
+  padding-block: 6px;
+  padding-inline: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(11px * var(--font-scale));
+}
+
+.ops-page input[type='radio'],
+.ops-dialog input[type='radio'] {
+  inline-size: auto;
+}
+
+.ops-note,
+.ops-current {
+  margin: 0;
+  color: var(--muted);
+  font-size: calc(10px * var(--font-scale));
+  overflow-wrap: anywhere;
+}
+
+.ops-error,
+.ops-success {
+  margin: 0;
+  padding-block: 8px;
+  padding-inline: 12px;
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid #b8453a;
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: calc(11px * var(--font-scale));
+}
+
+.ops-success {
+  border-inline-start-color: var(--accent);
+}
+
+.ops-error p,
+.ops-success p {
+  margin: 0;
+}
+
+.ops-error-text {
+  display: block;
+  color: #f0a39a;
+}
+
+.ops-pre {
+  max-block-size: 420px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--canvas);
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  font-size: calc(10px * var(--font-scale));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+
+.ops-host h3 {
+  margin: 0;
+  color: var(--text);
+}
+
+.ops-host p {
+  margin-block: 2px 0;
+  color: var(--muted);
+  font-size: calc(10px * var(--font-scale));
+}
+
+.ops-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.ops-metric {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.ops-metric-head {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: calc(11px * var(--font-scale));
+}
+
+.ops-metric-head strong {
+  color: var(--text);
+}
+
+.ops-metric small {
+  color: var(--quiet);
+  font-size: calc(10px * var(--font-scale));
+}
+
+.ops-meter {
+  block-size: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--surface-3);
+}
+
+.ops-meter i {
+  display: block;
+  block-size: 100%;
+  background: var(--accent);
+}
+
+.ops-filter-bar,
+.ops-row-actions,
+.ops-toolbar,
+.ops-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ops-log-stream {
+  display: grid;
+  max-block-size: 60vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--canvas);
+  font-family: ui-monospace, monospace;
+  font-size: calc(10px * var(--font-scale));
+}
+
+.ops-log-line {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 70px minmax(60px, auto) 1fr;
+  gap: 10px;
+  padding-block: 3px;
+  padding-inline: 10px;
+  border-block-end: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.ops-log-line p {
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+
+.ops-log-line.level-error .ops-log-level,
+.ops-log-line.level-critical .ops-log-level {
+  color: #f0a39a;
+}
+
+.ops-log-line.level-warning .ops-log-level {
+  color: #e0b26b;
+}
+
+.ops-split {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(260px, 2fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.ops-list {
+  display: grid;
+  gap: 4px;
+}
+
+.ops-list > button {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: start;
+}
+
+.ops-list small,
+.ops-card small {
+  display: block;
+  color: var(--quiet);
+}
+
+.ops-detail {
+  display: grid;
+  gap: 10px;
+  min-inline-size: 0;
+}
+
+.ops-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ops-detail-head h3 {
+  margin: 0;
+}
+
+.ops-radio-list {
+  display: grid;
+  gap: 4px;
+}
+
+.ops-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-block: 4px;
+  padding-inline: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: calc(11px * var(--font-scale));
+}
+
+.ops-radio small {
+  margin-inline-start: auto;
+  color: var(--quiet);
+}
+
+.ops-card-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ops-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.ops-card-copy header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text);
+}
+
+.ops-card-copy header span {
+  color: var(--quiet);
+  font-size: calc(10px * var(--font-scale));
+}
+
+.ops-card-copy p {
+  margin-block: 4px 0;
+  color: var(--muted);
+  font-size: calc(11px * var(--font-scale));
+}
+
+.ops-page .ops-switch {
+  position: relative;
+  inline-size: 34px;
+  block-size: 18px;
+  min-block-size: 18px;
+  padding: 0;
+  border-radius: 9px;
+}
+
+.ops-switch i {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-start: 2px;
+  inline-size: 12px;
+  block-size: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.ops-switch.on i {
+  inset-inline-start: 18px;
+  background: var(--accent);
+}
+
+.ops-table-wrap {
+  min-inline-size: 0;
+  overflow-x: auto;
+}
+
+.ops-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: calc(11px * var(--font-scale));
+}
+
+.ops-table th,
+.ops-table td {
+  padding-block: 6px;
+  padding-inline: 8px;
+  border-block-end: 1px solid var(--line);
+  color: var(--text);
+  text-align: start;
+  vertical-align: top;
+}
+
+.ops-table th {
+  color: var(--quiet);
+  font-weight: 600;
+}
+
+.ops-table small {
+  display: block;
+  color: var(--quiet);
+}
+
+.ops-table tr[aria-selected='true'] td {
+  background: var(--accent-soft);
+}
+
+.ops-visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.ops-form,
+.ops-dialog label,
+.ops-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: calc(11px * var(--font-scale));
+}
+
+.ops-form {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.ops-form h3 {
+  margin: 0;
+  color: var(--text);
+}
+
+.ops-schedule {
+  display: grid;
+  grid-template-columns: 1fr minmax(160px, 260px) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  font-size: calc(11px * var(--font-scale));
+}
+
+.ops-schedule small {
+  display: block;
+  color: var(--quiet);
+}
+
+.ops-dialog-backdrop {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(0 0 0 / 68%);
+}
+
+.ops-dialog {
+  display: grid;
+  gap: 12px;
+  inline-size: min(560px, 100%);
+  max-block-size: min(85vh, 800px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: 0 16px 70px rgb(0 0 0 / 55%);
+  color: var(--text);
+  text-align: start;
+}
+
+.ops-dialog h2 {
+  margin: 0;
+  font-size: calc(14px * var(--font-scale));
+}
+
+.ops-dialog-body {
+  display: grid;
+  gap: 10px;
+  font-size: calc(11px * var(--font-scale));
+}
+
+.ops-dialog-body p {
+  margin: 0;
+}
+
+.ops-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ops-reader {
+  inline-size: min(820px, 100%);
+}
+
+.ops-reader-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ops-reader-head span {
+  margin-inline-start: auto;
+  color: var(--quiet);
+  font-size: calc(10px * var(--font-scale));
+}
+
+.ops-fieldset {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.ops-fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ops-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.ops-dl dt {
+  color: var(--quiet);
+}
+
+.ops-dl dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .ops-split,
+  .ops-schedule {
+    grid-template-columns: 1fr;
+  }
+}
