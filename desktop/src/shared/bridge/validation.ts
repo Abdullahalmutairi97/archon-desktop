@@ -150,6 +150,17 @@ const operationNames = Object.freeze([
   'workspaces.files.search',
   'workspaces.files.write',
   'workspaces.files.create',
+  // Server files (ARCHON_ROOT)
+  'files.list',
+  'files.read',
+  'files.writeText',
+  'files.mkdir',
+  'files.rename',
+  'files.copy',
+  'files.pickUpload',
+  'files.upload',
+  'files.download',
+  'files.delete',
 ] as const satisfies readonly OperationName[])
 
 const channels = new Set<string>(Object.values(BRIDGE_CHANNELS))
@@ -508,6 +519,203 @@ function parseTaskEventsPayload(value: unknown): TaskEventsPayload {
   return Object.freeze({ taskId: record.taskId, after: record.after })
 }
 
+// Server files (ARCHON_ROOT) --------------------------------------------------
+
+/** The server's `max_length` for every file path it accepts. */
+export const SERVER_FILE_PATH_MAX_LENGTH = 1_000
+/** Largest text window the editor reads; a longer file opens truncated and read-only. */
+export const SERVER_FILE_READ_MAX_BYTES = 1024 * 1024
+/**
+ * Largest text the editor saves, measured as JSON-encoded UTF-8. The server
+ * echoes the saved file back, so this keeps that reply inside the transport's
+ * 2 MiB response cap.
+ */
+export const SERVER_FILE_TEXT_MAX_BYTES = 1024 * 1024
+/** The server refuses uploads over 100 MiB; downloads are held to the same bound. */
+export const SERVER_FILE_TRANSFER_MAX_BYTES = 100 * 1024 * 1024
+/** Matches the transport's response array bound. */
+export const SERVER_FILE_LIST_MAX_ITEMS = 2_000
+const SERVER_FILE_PICK_ID = /^upload-[0-9a-f]{32}$/u
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength
+}
+
+/**
+ * A path relative to the server's file root: no absolute or home-relative
+ * form (the server expands a leading `~`), no `.`/`..` segment, no backslash,
+ * control character, NUL or unpaired surrogate. `''` is the root itself.
+ */
+export function isServerFilePath(value: unknown, allowRoot = false): value is string {
+  if (typeof value !== 'string' || value.length > SERVER_FILE_PATH_MAX_LENGTH) return false
+  if (value === '') return allowRoot
+  if (value.startsWith('/') || value.startsWith('~') || value.includes('\\') ||
+      /[\u0000-\u001f\u007f-\u009f]/u.test(value) || !isWellFormedLocalText(value)) return false
+  const parts = value.split('/')
+  return parts.length <= 128 && parts.every((part) =>
+    part.length > 0 && part !== '.' && part !== '..' && utf8ByteLength(part) <= 255)
+}
+
+/** Text the server can store and echo back unchanged within the bridge bounds. */
+export function isServerFileText(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= SERVER_FILE_TEXT_MAX_BYTES &&
+    !value.includes('\0') && isWellFormedLocalText(value) &&
+    utf8ByteLength(JSON.stringify(value)) <= SERVER_FILE_TEXT_MAX_BYTES
+}
+
+function parseServerFileListPayload(value: unknown): OperationMap['files.list']['payload'] {
+  const record = exactObject(value, ['path'])
+  if (!isServerFilePath(record.path, true)) return fail()
+  return Object.freeze({ path: record.path })
+}
+
+function parseServerFilePathPayload(value: unknown): OperationMap['files.mkdir']['payload'] {
+  const record = exactObject(value, ['path'])
+  if (!isServerFilePath(record.path)) return fail()
+  return Object.freeze({ path: record.path })
+}
+
+function parseServerFileReadPayload(value: unknown): OperationMap['files.read']['payload'] {
+  const record = exactObject(value, ['path', 'maxBytes'])
+  if (!isServerFilePath(record.path) || typeof record.maxBytes !== 'number' || !Number.isSafeInteger(record.maxBytes) ||
+      record.maxBytes < 1 || record.maxBytes > SERVER_FILE_READ_MAX_BYTES) return fail()
+  return Object.freeze({ path: record.path, maxBytes: record.maxBytes })
+}
+
+function parseServerFileWritePayload(value: unknown): OperationMap['files.writeText']['payload'] {
+  const record = exactObject(value, ['path', 'content'])
+  if (!isServerFilePath(record.path) || !isServerFileText(record.content)) return fail()
+  return Object.freeze({ path: record.path, content: record.content })
+}
+
+function parseServerFileMovePayload(value: unknown): OperationMap['files.rename']['payload'] {
+  const record = exactObject(value, ['path', 'destination'])
+  if (!isServerFilePath(record.path) || !isServerFilePath(record.destination) || record.path === record.destination) return fail()
+  return Object.freeze({ path: record.path, destination: record.destination })
+}
+
+function parseServerFileUploadPayload(value: unknown): OperationMap['files.upload']['payload'] {
+  const record = exactObject(value, ['pickId', 'path', 'replace'])
+  if (typeof record.pickId !== 'string' || !SERVER_FILE_PICK_ID.test(record.pickId) ||
+      !isServerFilePath(record.path) || typeof record.replace !== 'boolean') return fail()
+  return Object.freeze({ pickId: record.pickId, path: record.path, replace: record.replace })
+}
+
+function parseServerFileDeletePayload(value: unknown): OperationMap['files.delete']['payload'] {
+  const record = exactObject(value, ['path', 'confirm'])
+  if (!isServerFilePath(record.path) || record.confirm !== true) return fail()
+  return Object.freeze({ path: record.path, confirm: true as const })
+}
+
+function serverFileCount(value: unknown, max = Number.MAX_SAFE_INTEGER): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= max
+}
+
+/** Display text from the server: bounded, NUL-free. Names may still be unaddressable. */
+function serverFileDisplayText(value: unknown, maxLength: number): value is string {
+  return boundedString(value, maxLength)
+}
+
+function parseServerFileItem(value: unknown): OperationMap['files.list']['result']['items'][number] {
+  const record = exactObject(value, ['name', 'path', 'is_dir', 'is_symlink', 'restricted', 'size', 'modified_at', 'mime'])
+  if (!serverFileDisplayText(record.name, 1_024) || record.name.includes('/') ||
+      !serverFileDisplayText(record.path, 4_096) ||
+      typeof record.is_dir !== 'boolean' || typeof record.is_symlink !== 'boolean' || typeof record.restricted !== 'boolean' ||
+      !serverFileCount(record.size) || !boundedString(record.modified_at, 64) ||
+      (record.mime !== null && !boundedString(record.mime, 256)) ||
+      (record.is_dir && record.mime !== null)) return fail()
+  return Object.freeze({
+    name: record.name,
+    path: record.path,
+    is_dir: record.is_dir,
+    is_symlink: record.is_symlink,
+    restricted: record.restricted,
+    size: record.size,
+    modified_at: record.modified_at,
+    mime: record.mime as string | null,
+  })
+}
+
+function parseServerFileRead(value: unknown): OperationMap['files.read']['result'] {
+  const record = exactObject(value, ['path', 'content', 'size', 'read', 'truncated', 'binary'])
+  // Undecodable bytes arrive as U+FFFD, one code unit per byte at most.
+  if (!serverFileDisplayText(record.path, 4_096) || typeof record.content !== 'string' ||
+      record.content.includes('\0') ||
+      !serverFileCount(record.size) || !serverFileCount(record.read, SERVER_FILE_READ_MAX_BYTES) ||
+      record.content.length > record.read || record.read > record.size || typeof record.truncated !== 'boolean' ||
+      record.truncated !== (record.size > record.read) || record.binary !== false) return fail()
+  return Object.freeze({
+    path: record.path,
+    content: record.content,
+    size: record.size,
+    read: record.read,
+    truncated: record.truncated,
+    binary: false as const,
+  })
+}
+
+function parseServerFileOperationResponse(
+  operation: 'files.list' | 'files.read' | 'files.writeText' | 'files.mkdir' | 'files.rename' | 'files.copy' |
+    'files.pickUpload' | 'files.upload' | 'files.download' | 'files.delete',
+  value: unknown,
+): OperationMap[OperationName]['result'] {
+  switch (operation) {
+    case 'files.list': {
+      const record = exactObject(value, ['root', 'path', 'items'])
+      if (!serverFileDisplayText(record.root, 4_096) || !serverFileDisplayText(record.path, SERVER_FILE_PATH_MAX_LENGTH)) return fail()
+      const items = readLocalArray(record.items, SERVER_FILE_LIST_MAX_ITEMS).map(parseServerFileItem)
+      return Object.freeze({ root: record.root, path: record.path, items: Object.freeze(items) })
+    }
+    case 'files.read':
+    case 'files.writeText': {
+      const parsed = parseServerFileRead(value)
+      if (operation === 'files.writeText' && parsed.truncated) return fail()
+      return parsed
+    }
+    case 'files.mkdir': {
+      const record = exactObject(value, ['path', 'created'])
+      if (!serverFileDisplayText(record.path, 4_096) || typeof record.created !== 'boolean') return fail()
+      return Object.freeze({ path: record.path, created: record.created })
+    }
+    case 'files.rename':
+    case 'files.copy': {
+      const record = exactObject(value, ['path'])
+      if (!serverFileDisplayText(record.path, 4_096)) return fail()
+      return Object.freeze({ path: record.path })
+    }
+    case 'files.pickUpload': {
+      if (isRecord(value) && value.cancelled === true) {
+        exactObject(value, ['cancelled'])
+        return Object.freeze({ cancelled: true as const })
+      }
+      const record = exactObject(value, ['cancelled', 'pickId', 'name', 'size'])
+      if (record.cancelled !== false || typeof record.pickId !== 'string' || !SERVER_FILE_PICK_ID.test(record.pickId) ||
+          !serverFileDisplayText(record.name, 1_024) || !serverFileCount(record.size, SERVER_FILE_TRANSFER_MAX_BYTES)) return fail()
+      return Object.freeze({ cancelled: false as const, pickId: record.pickId, name: record.name, size: record.size })
+    }
+    case 'files.upload': {
+      const record = exactObject(value, ['path', 'size'])
+      if (!serverFileDisplayText(record.path, 4_096) || !serverFileCount(record.size, SERVER_FILE_TRANSFER_MAX_BYTES)) return fail()
+      return Object.freeze({ path: record.path, size: record.size })
+    }
+    case 'files.download': {
+      if (isRecord(value) && value.saved === false) {
+        exactObject(value, ['saved'])
+        return Object.freeze({ saved: false as const })
+      }
+      const record = exactObject(value, ['saved', 'name', 'size'])
+      if (record.saved !== true || !serverFileDisplayText(record.name, 1_024) ||
+          !serverFileCount(record.size, SERVER_FILE_TRANSFER_MAX_BYTES)) return fail()
+      return Object.freeze({ saved: true as const, name: record.name, size: record.size })
+    }
+    case 'files.delete': {
+      const record = exactObject(value, ['ok'])
+      if (record.ok !== true) return fail()
+      return Object.freeze({ ok: true as const })
+    }
+  }
+}
+
 export function isOperationName(value: unknown): value is OperationName {
   return typeof value === 'string' && operations.has(value)
 }
@@ -559,6 +767,25 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseTaskByIdPayload(payload)])
     case 'tasks.events':
       return Object.freeze([operation, parseTaskEventsPayload(payload)])
+    // Server files (ARCHON_ROOT)
+    case 'files.list':
+      return Object.freeze([operation, parseServerFileListPayload(payload)])
+    case 'files.read':
+      return Object.freeze([operation, parseServerFileReadPayload(payload)])
+    case 'files.writeText':
+      return Object.freeze([operation, parseServerFileWritePayload(payload)])
+    case 'files.mkdir':
+    case 'files.download':
+      return Object.freeze([operation, parseServerFilePathPayload(payload)])
+    case 'files.rename':
+    case 'files.copy':
+      return Object.freeze([operation, parseServerFileMovePayload(payload)])
+    case 'files.pickUpload':
+      return Object.freeze([operation, parseEmptyPayload(payload)])
+    case 'files.upload':
+      return Object.freeze([operation, parseServerFileUploadPayload(payload)])
+    case 'files.delete':
+      return Object.freeze([operation, parseServerFileDeletePayload(payload)])
   }
 }
 
@@ -1001,6 +1228,18 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       if (record.ok !== true) return fail()
       return Object.freeze({ ok: true })
     }
+    // Server files (ARCHON_ROOT)
+    case 'files.list':
+    case 'files.read':
+    case 'files.writeText':
+    case 'files.mkdir':
+    case 'files.rename':
+    case 'files.copy':
+    case 'files.pickUpload':
+    case 'files.upload':
+    case 'files.download':
+    case 'files.delete':
+      return parseServerFileOperationResponse(operation, value)
   }
 }
 

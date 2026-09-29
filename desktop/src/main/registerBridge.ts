@@ -1,6 +1,6 @@
 import { BRIDGE_CHANNELS, parseBridgeRequest, parseBridgeResponse } from '../shared/bridge/validation'
 import type { ConnectionSaveInput, OperationName, OperationMap } from '../shared/bridge/types'
-import { assertBoundedIpcPayload } from './security/TrustedShellFrameGuard'
+import { IPC_PAYLOAD_LIMITS, ipcPayloadLimitsForOperation, isBoundedIpcPayload } from './security/TrustedShellFrameGuard'
 
 type InvokeHandler = (event: unknown, ...args: unknown[]) => Promise<unknown>
 
@@ -25,7 +25,9 @@ export function registerBridgeHandlers(
   for (const channel of Object.values(BRIDGE_CHANNELS)) {
     ipc.handle(channel, async (event, ...args) => {
       if (guard(event) === false) throw new Error('Untrusted desktop frame')
-      assertBoundedIpcPayload(args)
+      // Only a server file text save may carry a larger (still bounded) string.
+      const limits = channel === BRIDGE_CHANNELS.apiInvoke ? ipcPayloadLimitsForOperation(args[0]) : IPC_PAYLOAD_LIMITS
+      if (!isBoundedIpcPayload(args, limits)) throw new TypeError('Invalid or oversized IPC payload')
       const request = parseBridgeRequest(channel, args)
       let result: unknown
       switch (request.channel) {

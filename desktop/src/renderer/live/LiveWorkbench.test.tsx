@@ -109,6 +109,21 @@ describe('live workbench', () => {
     expect(openServerWork).toHaveBeenCalled()
   })
 
+  it('shows server notes without asking for a checkout', async () => {
+    const { bridge, invoke } = bridgeFor((operation) => {
+      if (operation === 'workspaces.list') return { workspaces: [] }
+      if (operation === 'files.list') return { root: '/home/owner', path: 'notes', items: [] }
+      throw new Error(operation)
+    })
+    const [session] = liveSessions([sessionRow])
+    render(<LiveWorkbench scope={scopeFor(bridge)} session={session} projects={[]} active="notes" onSelect={vi.fn()} onClose={vi.fn()} onOpenServerWork={vi.fn()} />)
+
+    expect(await screen.findByText(/No notes yet/)).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Notes' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByLabelText('Checkout')).not.toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('files.list', { path: 'notes' })
+  })
+
   it('keeps terminals disabled without same-user pairing', async () => {
     const { bridge } = bridgeFor((operation) => {
       if (operation === 'workspaces.list') return { workspaces: [checkout] }

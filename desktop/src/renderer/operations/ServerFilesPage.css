@@ -1,0 +1,71 @@
+/* Server files page, notes panel and their dialogs. Logical sides only, so every panel mirrors in RTL. */
+.server-files { display: flex; flex-direction: column; gap: 10px; min-block-size: 0; padding-block: 12px; padding-inline: 18px; color: var(--text); font-size: calc(12px * var(--font-scale, 1)); }
+.server-files button,
+.server-notes button,
+.operation-dialog button { font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding-block: 5px; padding-inline: 10px; cursor: pointer; }
+.server-files button:disabled,
+.server-notes button:disabled,
+.operation-dialog button:disabled { opacity: .5; cursor: default; }
+.server-files .operation-danger,
+.server-notes .operation-danger,
+.operation-dialog .operation-danger { border-color: color-mix(in srgb, #d27272 60%, var(--line)); color: #e39a9a; }
+.server-files .operation-primary,
+.server-notes .operation-primary,
+.operation-dialog .operation-primary { border-color: var(--accent); background: var(--accent-soft); }
+.server-files-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.server-files-breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-inline-size: 0; }
+.server-files-breadcrumbs span { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.server-files-breadcrumbs button { padding-block: 2px; padding-inline: 6px; background: transparent; border-color: transparent; }
+.server-files-breadcrumbs button[aria-current='location'] { font-weight: 600; border-color: var(--line); }
+.server-files-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.server-files-root { margin: 0; color: var(--muted); }
+.server-files-root code { overflow-wrap: anywhere; }
+.server-files-status,
+.server-files-note { margin: 0; color: var(--muted); }
+.server-files-notice { margin: 0; padding-block: 6px; padding-inline: 10px; border-radius: 6px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.server-files-notice-ok { border-color: color-mix(in srgb, #78bd98 50%, var(--line)); }
+.server-files-notice-error { border-color: color-mix(in srgb, #d27272 60%, var(--line)); color: #e39a9a; }
+.server-files-empty { margin: 0; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); line-height: 1.5; }
+.server-files-empty p { margin-block: 0 8px; margin-inline: 0; }
+.server-files-layout { display: grid; grid-template-columns: minmax(260px, 2fr) minmax(0, 3fr); gap: 12px; min-block-size: 0; flex: 1; }
+.server-files-list { min-inline-size: 0; overflow: auto; }
+.server-files-list ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.server-files-list li { display: flex; align-items: center; gap: 4px; border-radius: 6px; }
+.server-files-list li.selected { background: var(--accent-soft); }
+.server-files-list .server-files-entry { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; flex: 1; min-inline-size: 0; text-align: start; background: transparent; border-color: transparent; }
+.server-files-entry svg { inline-size: 16px; block-size: 16px; }
+.server-files-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-files-entry small { color: var(--muted); }
+.server-files-unusable { opacity: .6; padding-block: 5px; padding-inline: 10px; }
+.server-files-row-actions { display: inline-flex; gap: 3px; opacity: 0; }
+.server-files-list li:hover .server-files-row-actions,
+.server-files-list li:focus-within .server-files-row-actions,
+.server-files-list li.selected .server-files-row-actions { opacity: 1; }
+.server-files-row-actions button { padding-block: 2px; padding-inline: 6px; font-size: calc(10px * var(--font-scale, 1)); }
+.server-files-editor { display: flex; flex-direction: column; gap: 8px; min-inline-size: 0; min-block-size: 0; }
+.server-files-editor header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.server-files-editor h2 { margin: 0; font-size: calc(13px * var(--font-scale, 1)); overflow-wrap: anywhere; }
+.server-files-editor code { color: var(--muted); overflow-wrap: anywhere; }
+.server-files-editor textarea,
+.server-notes textarea { flex: 1; min-block-size: 320px; resize: vertical; font-family: var(--mono, ui-monospace, monospace); font-size: calc(12px * var(--font-scale, 1)); line-height: 1.5; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding-block: 8px; padding-inline: 10px; }
+
+.server-notes { display: flex; flex-direction: column; gap: 8px; font-size: calc(11px * var(--font-scale, 1)); }
+.server-notes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.server-notes-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; max-block-size: 180px; overflow: auto; }
+.server-notes-list button { inline-size: 100%; text-align: start; }
+.server-notes-list button[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); }
+.server-notes-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.server-notes-state { color: var(--muted); }
+.server-notes-state-error { color: #e39a9a; }
+.server-notes textarea { min-block-size: 240px; }
+
+.operation-dialog-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgb(0 0 0 / .5); }
+.operation-dialog { inline-size: min(460px, calc(100vw - 32px)); display: grid; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface, #212121); color: var(--text, #e8e5e0); }
+.operation-dialog h2 { margin: 0; font-size: calc(14px * var(--font-scale, 1)); overflow-wrap: anywhere; }
+.operation-dialog p { margin: 0; line-height: 1.5; }
+.operation-dialog code { overflow-wrap: anywhere; }
+.operation-dialog form { display: grid; gap: 8px; }
+.operation-dialog input { font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding-block: 6px; padding-inline: 8px; }
+.operation-dialog-problem { color: #e39a9a; }
+.operation-dialog footer { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 900px) { .server-files-layout { grid-template-columns: minmax(0, 1fr); } }

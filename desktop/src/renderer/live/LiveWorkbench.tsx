@@ -3,6 +3,7 @@ import type { JsonRecord, TaskEventRecord, WorkspaceRecord } from '../../shared/
 import { WorkspaceConsole } from '../server/WorkspaceConsole'
 import { WorkspaceFileBrowser } from '../server/WorkspaceFileBrowser'
 import { WorkspaceServices } from '../server/WorkspaceServices'
+import { NotesPanel } from '../operations/NotesPanel'
 import { workspaceFilePort } from '../server/workspaceFilePort'
 import { Icon, type IconName } from '../shell/Icon'
 import type { BenchId } from '../shell/shortcuts'
@@ -17,6 +18,7 @@ const tabs: { id: BenchId; label: string; icon: IconName }[] = [
   { id: 'files', label: 'Files', icon: 'folder' },
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
   { id: 'browser', label: 'Preview', icon: 'browser' },
+  { id: 'notes', label: 'Notes', icon: 'file' },
 ]
 
 const ACTIVITY_POLL_MS = 2_000
@@ -271,14 +273,15 @@ export function LiveWorkbench({
           aria-selected={active === tab.id}
           className={`bench-tab ${active === tab.id ? 'active' : ''}`}
           onClick={() => onSelect(tab.id)}
-          title={`${tab.label} · Ctrl ${index + 1}`}
+          title={index < 4 ? `${tab.label} · Ctrl ${index + 1}` : tab.label}
         ><Icon name={tab.icon} /><span>{tab.label}</span></button>)}
       </div>
       <button className="quiet-icon-button bench-close" aria-label="Close workbench" onClick={onClose}><Icon name="close" /></button>
     </div>
     <div className="bench-content live-bench-content">
       {active === 'activity' && <ActivityPanel scope={scope} session={session} />}
-      {active !== 'activity' && checkoutBar()}
+      {active !== 'activity' && active !== 'notes' && checkoutBar()}
+      {active === 'notes' && <NotesPanel key={scope.generation} scope={scope} />}
       {active === 'files' && current?.state === 'ready' && (checkout
         ? <WorkspaceFileBrowser key={`${checkout.id}:${checkout.generation}`} workspaceId={checkout.id} readOnlyFilePort={filePort} />
         : needsCheckout('Files'))}

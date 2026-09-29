@@ -1,5 +1,5 @@
 /** Pure keyboard mapping for the authored desktop shell. */
-export type BenchId = 'activity' | 'files' | 'terminal' | 'browser'
+export type BenchId = 'activity' | 'files' | 'terminal' | 'browser' | 'notes'
 
 export type ShortcutState = {
   appearanceOpen: boolean

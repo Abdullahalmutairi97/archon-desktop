@@ -7,11 +7,19 @@ import type {
   OperationName,
 } from '../../shared/bridge/types'
 import type { LocalCodexProxyRequest } from '../localCodexProxy'
-import { BRIDGE_CHANNELS, isOperationName, parseBridgeResponse, parseOperationPayload } from '../../shared/bridge/validation'
+import {
+  BRIDGE_CHANNELS,
+  isOperationName,
+  parseBridgeResponse,
+  parseOperationPayload,
+  SERVER_FILE_TRANSFER_MAX_BYTES,
+} from '../../shared/bridge/validation'
 import {
   isBoundedIpcPayload,
+  ipcPayloadLimitsForOperation,
   type BoundedPayloadLimits,
 } from '../security/TrustedShellFrameGuard'
+import type { ServerFileLocalPort } from '../serverFileLocalPort'
 
 export const READ_ONLY_OPERATIONS: readonly OperationName[] = Object.freeze([
   'readiness',
@@ -48,7 +56,27 @@ export const WORKSPACE_OPERATIONS: readonly OperationName[] = Object.freeze([
   'workspaces.files.create',
 ])
 
-const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Object.freeze({
+// Server files (ARCHON_ROOT)
+export const SERVER_FILE_OPERATIONS: readonly OperationName[] = Object.freeze([
+  'files.list',
+  'files.read',
+  'files.writeText',
+  'files.mkdir',
+  'files.rename',
+  'files.copy',
+  'files.pickUpload',
+  'files.upload',
+  'files.download',
+  'files.delete',
+])
+
+const serverFileOperations = new Set<OperationName>(SERVER_FILE_OPERATIONS)
+/** Server file routes that send a JSON body. */
+const SERVER_FILE_JSON_OPERATIONS = new Set<OperationName>([
+  'files.writeText', 'files.mkdir', 'files.rename', 'files.copy', 'files.delete',
+])
+
+const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST' | 'PUT' | 'DELETE'>> = Object.freeze({
   readiness: 'GET',
   'projects.list': 'GET',
   'projects.create': 'POST',
@@ -72,6 +100,17 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'workspaces.files.search': 'GET',
   'workspaces.files.write': 'POST',
   'workspaces.files.create': 'POST',
+  // Server files (ARCHON_ROOT)
+  'files.list': 'GET',
+  'files.read': 'GET',
+  'files.writeText': 'PUT',
+  'files.mkdir': 'POST',
+  'files.rename': 'POST',
+  'files.copy': 'POST',
+  'files.pickUpload': 'GET',
+  'files.upload': 'POST',
+  'files.download': 'GET',
+  'files.delete': 'DELETE',
 })
 
 export const MAX_BACKEND_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -109,6 +148,17 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'workspaces.files.search': '/api/workspaces',
   'workspaces.files.write': '/api/workspaces',
   'workspaces.files.create': '/api/workspaces',
+  // Server files (ARCHON_ROOT). `files.pickUpload` never reaches the server.
+  'files.list': '/api/files',
+  'files.read': '/api/files/read',
+  'files.writeText': '/api/files/text',
+  'files.mkdir': '/api/files/mkdir',
+  'files.rename': '/api/files/rename',
+  'files.copy': '/api/files/copy',
+  'files.pickUpload': '/api/files',
+  'files.upload': '/api/files/upload',
+  'files.download': '/api/files/download',
+  'files.delete': '/api/files',
 })
 
 const SAFE_MESSAGES = Object.freeze({
@@ -125,6 +175,14 @@ const SAFE_MESSAGES = Object.freeze({
   connection_changed: 'The server connection changed while this request was running.',
   binary_file: 'Binary files cannot be previewed as text.',
   write_conflict: 'The file changed on the server. Reload it before saving again.',
+  // Server files (ARCHON_ROOT)
+  restricted_path: 'The server does not expose this path. Secret files and paths outside the file root are blocked.',
+  not_found: 'That file or folder does not exist on the server.',
+  already_exists: 'Something with that name already exists on the server.',
+  not_a_directory: 'That path is not a folder on the server.',
+  too_large: 'The file is larger than the 100 MiB transfer limit.',
+  upload_expired: 'Choose the file to upload again.',
+  local_file_error: 'The file on this PC could not be read or written.',
 } as const)
 
 export type BackendTransportErrorCode = keyof typeof SAFE_MESSAGES
@@ -154,6 +212,8 @@ export interface BackendTransportOptions {
   token?: string
   /** Required only for tests; production uses Node/Electron's built-in fetch. */
   fetch?: BackendFetch
+  /** Native pickers for server file upload and download; absent means both are unsupported. */
+  serverFiles?: ServerFileLocalPort
 }
 
 interface ActiveConnection {
@@ -399,6 +459,15 @@ function operationUrl(
   } else if (operation === 'workspaces.files.search') {
     const searchPayload = payload as OperationMap['workspaces.files.search']['payload']
     url.searchParams.set('q', searchPayload.query)
+  } else if (operation === 'files.list') {
+    // The server names its root '.'; the bridge names it ''.
+    url.searchParams.set('path', (payload as OperationMap['files.list']['payload']).path || '.')
+  } else if (operation === 'files.read') {
+    const readPayload = payload as OperationMap['files.read']['payload']
+    url.searchParams.set('path', readPayload.path)
+    url.searchParams.set('max_bytes', String(readPayload.maxBytes))
+  } else if (operation === 'files.download' || operation === 'files.upload') {
+    url.searchParams.set('path', (payload as OperationMap['files.download']['payload']).path)
   }
   return url
 }
@@ -469,6 +538,14 @@ function isSupportedResult(
         value.content.length <= 12_000 && !value.content.includes('\0') &&
         new TextEncoder().encode(value.content).byteLength <= 16 * 1024
     }
+    // Server files (ARCHON_ROOT). The server may resolve a symlinked path, so
+    // only the content it read back after saving is compared.
+    if (operation === 'files.read') {
+      return (value.content as string).length <= (payload as OperationMap['files.read']['payload']).maxBytes
+    }
+    if (operation === 'files.writeText') {
+      return value.content === (payload as OperationMap['files.writeText']['payload']).content
+    }
     return true
   } catch {
     return false
@@ -478,6 +555,10 @@ function isSupportedResult(
 function checkResponseStatus(operation: OperationName, response: Response): void {
   if (response.redirected || response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
     throw new BackendTransportError('redirect_rejected')
+  }
+  if (serverFileOperations.has(operation)) {
+    checkServerFileStatus(operation, response.status)
+    return
   }
   if (response.status === 401 || response.status === 403) {
     throw new BackendTransportError('unauthorized', response.status)
@@ -513,6 +594,33 @@ function checkResponseStatus(operation: OperationName, response: Response): void
   }
   if (operation !== 'readiness' && response.status === 200) return
   throw new BackendTransportError('http_error')
+}
+
+/**
+ * The file routes answer a restricted path with 403, not an auth failure, and
+ * report a missing path, a name collision and an oversized upload distinctly.
+ */
+function checkServerFileStatus(operation: OperationName, status: number): void {
+  if (status === 200) return
+  if (status === 401) throw new BackendTransportError('unauthorized', 401)
+  if (status === 403) throw new BackendTransportError('restricted_path')
+  if (status === 404) throw new BackendTransportError('not_found')
+  if (status === 409) throw new BackendTransportError('already_exists')
+  if (status === 413) throw new BackendTransportError('too_large')
+  // The only 400s these routes raise: a listing of a non-directory, and a
+  // file whose first 8 KiB holds a NUL byte.
+  if (status === 400 && operation === 'files.list') throw new BackendTransportError('not_a_directory')
+  if (status === 400 && operation === 'files.read') throw new BackendTransportError('binary_file')
+  throw new BackendTransportError('http_error')
+}
+
+function serverFileBaseName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1)
+}
+
+function serverFileParent(path: string): string {
+  const index = path.lastIndexOf('/')
+  return index < 0 ? '' : path.slice(0, index)
 }
 
 function requestBody(operation: OperationName, payload: OperationMap[OperationName]['payload']): string | undefined {
@@ -559,6 +667,21 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
   if (operation === 'workspaces.files.create') {
     const createPayload = payload as OperationMap['workspaces.files.create']['payload']
     return JSON.stringify({ path: createPayload.path, content: createPayload.content })
+  }
+  // Server files (ARCHON_ROOT)
+  if (operation === 'files.writeText') {
+    const writePayload = payload as OperationMap['files.writeText']['payload']
+    return JSON.stringify({ path: writePayload.path, content: writePayload.content })
+  }
+  if (operation === 'files.mkdir') {
+    return JSON.stringify({ path: (payload as OperationMap['files.mkdir']['payload']).path })
+  }
+  if (operation === 'files.rename' || operation === 'files.copy') {
+    const movePayload = payload as OperationMap['files.rename']['payload']
+    return JSON.stringify({ path: movePayload.path, destination: movePayload.destination })
+  }
+  if (operation === 'files.delete') {
+    return JSON.stringify({ path: (payload as OperationMap['files.delete']['payload']).path, confirm: true })
   }
   return undefined
 }
@@ -834,6 +957,7 @@ function generationChanged(transport: BackendTransport, generation: number): boo
 /** Fixed-route, memory-only transport for read-only state plus narrow task and workspace actions. */
 export class BackendTransport {
   private readonly fetchImpl: BackendFetch
+  private readonly serverFiles: ServerFileLocalPort | undefined
   private activeConnection: ActiveConnection | undefined
   private readonly pending = new Set<AbortController>()
   private currentGeneration = 0
@@ -848,6 +972,7 @@ export class BackendTransport {
       throw new BackendTransportError('network_error')
     }
     this.fetchImpl = fetchImplementation
+    this.serverFiles = options.serverFiles
 
     if (hasServerUrl && hasToken) {
       this.switchConnection({ serverUrl: options.serverUrl as string, token: options.token as string })
@@ -885,11 +1010,20 @@ export class BackendTransport {
     let normalizedPayload: OperationMap[K]['payload']
     if (!isOperationName(operation)) throw new BackendTransportError('unsupported_operation')
     try {
-      if (!isBoundedIpcPayload(payload)) throw new BackendTransportError('invalid_payload')
+      if (!isBoundedIpcPayload(payload, ipcPayloadLimitsForOperation(operation))) throw new BackendTransportError('invalid_payload')
       normalizedPayload = parseOperationPayload(operation, payload)
     } catch (error) {
       if (error instanceof BackendTransportError) throw error
       throw new BackendTransportError('invalid_payload')
+    }
+
+    // Server files (ARCHON_ROOT): local file transfers go through native pickers.
+    if (operation === 'files.pickUpload') return await this.pickServerUpload() as OperationMap[K]['result']
+    if (operation === 'files.upload') {
+      return await this.uploadServerFile(normalizedPayload as OperationMap['files.upload']['payload']) as OperationMap[K]['result']
+    }
+    if (operation === 'files.download') {
+      return await this.downloadServerFile(normalizedPayload as OperationMap['files.download']['payload']) as OperationMap[K]['result']
     }
 
     const connection = this.activeConnection
@@ -910,7 +1044,8 @@ export class BackendTransport {
         Authorization: `Bearer ${connection.token}`,
       }
       if (operation === 'projects.create' || operation === 'tasks.submit' || operation === 'workspaces.provision' ||
-          operation === 'workspaces.files.write' || operation === 'workspaces.files.create') {
+          operation === 'workspaces.files.write' || operation === 'workspaces.files.create' ||
+          SERVER_FILE_JSON_OPERATIONS.has(operation)) {
         headers['Content-Type'] = 'application/json'
       }
       if (operation === 'tasks.submit') {
@@ -950,6 +1085,159 @@ export class BackendTransport {
       if (generationChanged(this, connection.generation)) {
         throw new BackendTransportError('connection_changed')
       }
+      if (error instanceof BackendTransportError) throw error
+      throw new BackendTransportError('network_error')
+    } finally {
+      this.pending.delete(controller)
+    }
+  }
+
+  // Server files (ARCHON_ROOT) ------------------------------------------------
+
+  private requireServerFiles(): ServerFileLocalPort {
+    if (!this.serverFiles) throw new BackendTransportError('unsupported_operation')
+    return this.serverFiles
+  }
+
+  private async pickServerUpload(): Promise<OperationMap['files.pickUpload']['result']> {
+    const port = this.requireServerFiles()
+    let picked: Awaited<ReturnType<ServerFileLocalPort['pickUpload']>>
+    try {
+      picked = await port.pickUpload()
+    } catch {
+      throw new BackendTransportError('local_file_error')
+    }
+    if (!picked) return { cancelled: true }
+    if (picked.size > SERVER_FILE_TRANSFER_MAX_BYTES) {
+      port.discardUpload(picked.pickId)
+      throw new BackendTransportError('too_large')
+    }
+    return { cancelled: false, pickId: picked.pickId, name: picked.name, size: picked.size }
+  }
+
+  /**
+   * Upload the picked local file once. Without `replace`, an existing server
+   * entry of the same name is reported rather than overwritten; the server's
+   * own upload route would replace it silently.
+   */
+  private async uploadServerFile(payload: OperationMap['files.upload']['payload']): Promise<OperationMap['files.upload']['result']> {
+    const port = this.requireServerFiles()
+    if (!port.hasUpload(payload.pickId)) throw new BackendTransportError('upload_expired')
+    const name = serverFileBaseName(payload.path)
+    if (!payload.replace) {
+      const listing = await this.invoke('files.list', { path: serverFileParent(payload.path) })
+      if (listing.items.some((item) => item.name === name)) throw new BackendTransportError('already_exists')
+    }
+    const connection = this.activeConnection
+    if (!connection) throw new BackendTransportError('not_connected')
+    let file: Awaited<ReturnType<ServerFileLocalPort['takeUpload']>>
+    try {
+      // One use: whatever happens next, this pick is never sent again.
+      file = await port.takeUpload(payload.pickId)
+    } catch {
+      throw new BackendTransportError('local_file_error')
+    }
+    if (!file) throw new BackendTransportError('upload_expired')
+    if (file.size > SERVER_FILE_TRANSFER_MAX_BYTES || file.blob.size !== file.size) throw new BackendTransportError('too_large')
+
+    const controller = new AbortController()
+    this.pending.add(controller)
+    try {
+      const form = new FormData()
+      form.set('upload', file.blob, name)
+      // No Content-Type header: fetch sets the multipart boundary itself.
+      const response = await this.fetchImpl(operationUrl(connection.origin, connection.basePath, 'files.upload', payload), {
+        method: OPERATION_METHODS['files.upload'],
+        headers: { Accept: 'application/json', Authorization: `Bearer ${connection.token}` },
+        body: form,
+        redirect: 'manual',
+        signal: controller.signal,
+      })
+      if (generationChanged(this, connection.generation)) throw new BackendTransportError('connection_changed')
+      checkResponseStatus('files.upload', response)
+      const bytes = await readBoundedBody(response)
+      if (generationChanged(this, connection.generation)) throw new BackendTransportError('connection_changed')
+      const result = parseJsonResponse(bytes, response.headers.get('content-type'))
+      let parsed: OperationMap['files.upload']['result']
+      try {
+        parsed = parseBridgeResponse(BRIDGE_CHANNELS.apiInvoke, result, 'files.upload') as OperationMap['files.upload']['result']
+      } catch {
+        throw new BackendTransportError('invalid_response')
+      }
+      if (parsed.size !== file.size) throw new BackendTransportError('invalid_response')
+      return parsed
+    } catch (error) {
+      if (generationChanged(this, connection.generation)) throw new BackendTransportError('connection_changed')
+      if (error instanceof BackendTransportError) throw error
+      throw new BackendTransportError('network_error')
+    } finally {
+      this.pending.delete(controller)
+    }
+  }
+
+  /**
+   * Ask where to save first, then stream the server file into that place.
+   * The bytes never cross into the renderer and are bounded to the transfer cap.
+   */
+  private async downloadServerFile(payload: OperationMap['files.download']['payload']): Promise<OperationMap['files.download']['result']> {
+    const port = this.requireServerFiles()
+    if (!this.activeConnection) throw new BackendTransportError('not_connected')
+    let sink: Awaited<ReturnType<ServerFileLocalPort['chooseDownloadTarget']>>
+    try {
+      sink = await port.chooseDownloadTarget(serverFileBaseName(payload.path))
+    } catch {
+      throw new BackendTransportError('local_file_error')
+    }
+    if (!sink) return { saved: false }
+    const target = sink
+    const connection = this.activeConnection
+    if (!connection) {
+      await target.abort().catch(() => undefined)
+      throw new BackendTransportError('not_connected')
+    }
+
+    const controller = new AbortController()
+    this.pending.add(controller)
+    try {
+      const response = await this.fetchImpl(operationUrl(connection.origin, connection.basePath, 'files.download', payload), {
+        method: OPERATION_METHODS['files.download'],
+        headers: { Accept: '*/*', Authorization: `Bearer ${connection.token}` },
+        redirect: 'manual',
+        signal: controller.signal,
+      })
+      if (generationChanged(this, connection.generation)) throw new BackendTransportError('connection_changed')
+      checkResponseStatus('files.download', response)
+      const declaredLength = response.headers.get('content-length')
+      if (declaredLength !== null) {
+        if (!/^\d+$/u.test(declaredLength)) throw new BackendTransportError('invalid_response')
+        if (Number(declaredLength) > SERVER_FILE_TRANSFER_MAX_BYTES) throw new BackendTransportError('too_large')
+      }
+      let size = 0
+      if (response.body) {
+        const reader = response.body.getReader()
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            size += value.byteLength
+            if (size > SERVER_FILE_TRANSFER_MAX_BYTES) {
+              await reader.cancel().catch(() => undefined)
+              throw new BackendTransportError('too_large')
+            }
+            if (generationChanged(this, connection.generation)) throw new BackendTransportError('connection_changed')
+            await target.write(value).catch(() => { throw new BackendTransportError('local_file_error') })
+          }
+        } finally {
+          try { reader.releaseLock() } catch { /* The stream may already be cancelled. */ }
+        }
+      }
+      if (declaredLength !== null && Number(declaredLength) !== size) throw new BackendTransportError('invalid_response')
+      if (generationChanged(this, connection.generation)) throw new BackendTransportError('connection_changed')
+      await target.commit().catch(() => { throw new BackendTransportError('local_file_error') })
+      return { saved: true, name: target.name, size }
+    } catch (error) {
+      await target.abort().catch(() => undefined)
+      if (generationChanged(this, connection.generation)) throw new BackendTransportError('connection_changed')
       if (error instanceof BackendTransportError) throw error
       throw new BackendTransportError('network_error')
     } finally {
