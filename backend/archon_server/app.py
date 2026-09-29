@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -21,15 +21,19 @@ from .config import Settings
 from .db import Database
 from .prime_runner import PrimeRunner
 from .pi_runner import PiRunner
+from .opencode_runner import OpenCodeModels, OpenCodeRunner
 from .services.backups import BackupScheduleService, BackupService
 from .services.commands import CommandRunner
 from .services.cron import CronService
 from .services.files import DEFAULT_READ_BYTES, MAX_READ_BYTES, FileService
+from .services.git import GitCommandError, GitService
+from .services.harnesses import Harness, HarnessError, HarnessService
 from .services.logs import LogService
 from .services.migration import MigrationService
 from .services.models import ModelService
 from .services.skills import SkillService
 from .services.prime_skills import PrimeSkillService
+from .services.preview import PreviewError, PreviewGateway, PreviewLimit, PreviewUnavailable
 from .services.agent_resources import AgentResourceService
 from .services.status import StatusService
 from .services.terminal import TmuxService
@@ -201,7 +205,42 @@ class TerminalCreate(BaseModel):
     cwd: str = "."
 
 
+class HarnessUpdate(BaseModel):
+    enabled: bool | None = None
+    default_model: str | None = Field(default=None, max_length=200)
+
+
+class HarnessConfirm(BaseModel):
+    confirm: bool = False
+
+
+class PreviewCreate(BaseModel):
+    port: int = Field(ge=1, le=65535)
+
+
 class TerminalDelete(BaseModel):
+    confirm: bool = False
+
+
+class GitFiles(BaseModel):
+    path: str = Field(default=".", max_length=4096)
+    files: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(min_length=1, max_length=2000)
+    confirm: bool = False
+
+
+class GitCommit(BaseModel):
+    path: str = Field(default=".", max_length=4096)
+    message: str = Field(min_length=1, max_length=10_000)
+
+
+class GitSwitch(BaseModel):
+    path: str = Field(default=".", max_length=4096)
+    branch: str = Field(min_length=1, max_length=200)
+    create: bool = False
+
+
+class GitRepo(BaseModel):
+    path: str = Field(default=".", max_length=4096)
     confirm: bool = False
 
 
@@ -241,6 +280,27 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     agents = AgentService(settings.hermes_home, settings.profile)
     kanban = KanbanService(settings.kanban_db, settings.hermes_executable, agents)
     store = TaskStore(Database(settings.database_path))
+
+    def runtime_usage() -> dict[str, dict[str, int]]:
+        usage: dict[str, dict[str, int]] = {}
+        with store.db.connect() as conn:
+            for row in conn.execute(
+                "SELECT profile, COUNT(DISTINCT session_id) sessions, "
+                "SUM(CASE WHEN status IN ('queued','running','cancelling') THEN 1 ELSE 0 END) running "
+                "FROM tasks GROUP BY profile"
+            ):
+                key = row["profile"] if row["profile"] in ("pi", "opencode") else "prime"
+                entry = usage.setdefault(key, {"sessions": 0, "running": 0})
+                entry["sessions"] += int(row["sessions"] or 0)
+                entry["running"] += int(row["running"] or 0)
+        return usage
+
+    harnesses = HarnessService([
+        Harness("prime", "Prime", "Prime Agent, the default Archon coding agent.", settings.prime_executable, settings.prime_auth_path, None),
+        Harness("pi", "Pi", "The Pi coding agent.", settings.pi_executable, settings.pi_resources_dir / "auth.json", "@earendil-works/pi-coding-agent"),
+        Harness("opencode", "OpenCode", "The OpenCode CLI and its models.", settings.opencode_executable,
+                Path.home() / ".local/share/opencode/auth.json", "opencode-ai"),
+    ], settings.data_dir / "harnesses.json", runtime_usage=runtime_usage)
     # Archon Desktop is Prime-only. Hermes is not started, resumed, or used as
     # a fallback; native Prime sessions remain isolated from any legacy Hermes
     # state that may exist on the host.
@@ -252,13 +312,22 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             settings.prime_agent_session_dir,
         ),
         "pi": PiRunner(
-            Path.home() / ".local/bin/pi",
+            settings.pi_executable,
             settings.data_dir / "prime-sessions",
             settings.archon_root,
         ),
+        "opencode": OpenCodeRunner(
+            settings.opencode_executable,
+            settings.data_dir / "prime-sessions",
+            settings.archon_root,
+            settings.opencode_model,
+            lambda: harnesses.default_model("opencode"),
+        ),
     }
+    opencode_models = OpenCodeModels(settings.opencode_executable)
     engine = TaskEngine(store, selected_runner, settings.worker_poll_seconds, settings.quota_retry_seconds)
     files = FileService(settings.archon_root)
+    git = GitService(files)
     models = ModelService(
         settings.config_path, settings.profile_home / "provider_models_cache.json", settings.prime_auth_path
     )
@@ -295,17 +364,20 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     terminals = TmuxService(settings.archon_root, command_runner)
     logs = LogService(settings.profile_home / "logs")
     voice = VoiceService(settings.hermes_home / "hermes-agent", settings.profile_home, command_runner)
+    previews = PreviewGateway(settings.bind_host, (settings.bind_port,))
+    preview_sweeper: asyncio.Task | None = None
     worker_tasks: list[asyncio.Task] = []
     telegram_bridge: TelegramBridge | None = None
     telegram_task: asyncio.Task | None = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal worker_tasks, telegram_bridge, telegram_task
+        nonlocal worker_tasks, telegram_bridge, telegram_task, preview_sweeper
         app.state.settings = settings
         app.state.store = store
         app.state.engine = engine
-        app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban}
+        app.state.services = {"files": files, "models": models, "projects": projects, "sessions": prime_sessions, "skills": skills, "resources": resources, "backups": backups, "cron": cron, "terminals": terminals, "logs": logs, "voice": voice, "agents": agents, "kanban": kanban, "previews": previews}
+        preview_sweeper = asyncio.create_task(previews.run_sweeper(), name="archon-preview-sweeper")
         if settings.start_worker:
             # Each worker shares the engine's one-time recovery guard and
             # claims its own row atomically.
@@ -322,6 +394,9 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             )
             telegram_task = asyncio.create_task(telegram_bridge.run_forever(), name="archon-telegram-bridge")
         yield
+        preview_sweeper.cancel()
+        await asyncio.gather(preview_sweeper, return_exceptions=True)
+        await previews.close_all()
         # Close Telegram intake first. If it already submitted a turn, keep the
         # engine alive until that turn completes; otherwise a queued Telegram
         # task could be stranded while the bridge waits for it forever.
@@ -413,6 +488,17 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                 "mcps": [],
                 "orchestrator": False,
             })
+        roster.append({
+            "name": "opencode",
+            "description": "OpenCode running on the Archon MiniPC.",
+            "model": settings.opencode_model,
+            "provider": "opencode",
+            "reasoning_effort": "",
+            "toolsets": ["file", "terminal", "code_execution"],
+            "mcps": [],
+            "orchestrator": False,
+            "available": harnesses.describe("opencode")["ready"],
+        })
         return {"agents": roster}
 
     @app.get("/api/kanban/tasks", dependencies=protected)
@@ -455,7 +541,7 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project was not found")
         task_cwd = payload.cwd
         try:
-            task_profile = "pi" if payload.profile == "pi" else agents.resolve(payload.profile)
+            task_profile = payload.profile if payload.profile in ("pi", "opencode") else agents.resolve(payload.profile)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if payload.session_id:
@@ -470,6 +556,9 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
             prime_sessions.messages(payload.session_id, limit=1)
             task_cwd = prime_sessions.cwd_for(payload.session_id) or (owner["cwd"] if owner else None) or task_cwd
             task_profile = (owner["profile"] if owner else None) or agents.resolve(None)
+        runtime = task_profile if task_profile in ("pi", "opencode") else "prime"
+        if not harnesses.enabled(runtime):
+            raise HTTPException(status_code=409, detail=f"{harnesses.get(runtime).label} is turned off in Agent harnesses")
         try:
             task = store.submit(
                 payload.prompt, task_cwd, payload.model, payload.provider, payload.skills,
@@ -636,11 +725,12 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
                     (row["id"],),
                 ).fetchone()
                 native_pi = row["source"] == "pi-cli"
-                row["runtime"] = "pi" if native_pi or (owner and owner["profile"] == "pi") else "prime"
+                profile = owner["profile"] if owner else None
+                row["runtime"] = "pi" if native_pi or profile == "pi" else "opencode" if profile == "opencode" else "prime"
                 row["read_only"] = native_pi
                 row["can_delete"] = True
-                if row["runtime"] == "pi" and not native_pi:
-                    row["source"] = "pi"
+                if row["runtime"] in ("pi", "opencode") and not native_pi:
+                    row["source"] = row["runtime"]
         return {"sessions": rows}
 
     @app.put("/api/sessions/{session_id}/project", dependencies=protected)
@@ -707,7 +797,9 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
 
     @app.get("/api/models", dependencies=protected)
     def get_models():
-        return models.get()
+        result = models.get()
+        result["choices"] = [*result["choices"], *({"provider": "opencode", "model": model} for model in opencode_models.list())]
+        return result
 
     @app.put("/api/models/default", dependencies=protected)
     def set_model(payload: ModelUpdate):
@@ -904,6 +996,108 @@ def create_app(settings: Settings | None = None, runner=None) -> FastAPI:
     @app.delete("/api/terminals/{name}", dependencies=protected)
     async def kill_terminal(name: str, payload: TerminalDelete):
         await terminals.kill(name, confirm=payload.confirm)
+        return {"ok": True}
+
+    async def git_call(action):
+        try:
+            return await action
+        except GitCommandError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/git/status", dependencies=protected)
+    async def git_status(path: str = Query(default=".", max_length=4096)):
+        return await git_call(git.status(path))
+
+    @app.get("/api/git/diff", dependencies=protected)
+    async def git_diff(
+        path: str = Query(default=".", max_length=4096),
+        scope: str = Query(default="unstaged", pattern="^(unstaged|staged|commit|compare)$"),
+        ref: str | None = Query(default=None, max_length=200),
+        base: str | None = Query(default=None, max_length=200),
+        file: str | None = Query(default=None, max_length=4096),
+    ):
+        return await git_call(git.diff(path, scope, ref=ref, base=base, file=file))
+
+    @app.get("/api/git/log", dependencies=protected)
+    async def git_log(
+        path: str = Query(default=".", max_length=4096), ref: str | None = Query(default=None, max_length=200),
+        limit: int = Query(default=50, ge=1, le=200), skip: int = Query(default=0, ge=0),
+    ):
+        return await git_call(git.log(path, ref, limit, skip))
+
+    @app.get("/api/git/branches", dependencies=protected)
+    async def git_branches(path: str = Query(default=".", max_length=4096)):
+        return await git_call(git.branches(path))
+
+    @app.post("/api/git/stage", dependencies=protected)
+    async def git_stage(payload: GitFiles):
+        return await git_call(git.stage(payload.path, payload.files))
+
+    @app.post("/api/git/unstage", dependencies=protected)
+    async def git_unstage(payload: GitFiles):
+        return await git_call(git.unstage(payload.path, payload.files))
+
+    @app.post("/api/git/discard", dependencies=protected)
+    async def git_discard(payload: GitFiles):
+        return await git_call(git.discard(payload.path, payload.files, confirm=payload.confirm))
+
+    @app.post("/api/git/commit", dependencies=protected)
+    async def git_commit(payload: GitCommit):
+        return await git_call(git.commit(payload.path, payload.message))
+
+    @app.post("/api/git/switch", dependencies=protected)
+    async def git_switch(payload: GitSwitch):
+        return await git_call(git.switch(payload.path, payload.branch, create=payload.create))
+
+    @app.post("/api/git/fetch", dependencies=protected)
+    async def git_fetch(payload: GitRepo):
+        return await git_call(git.fetch(payload.path))
+
+    @app.post("/api/git/push", dependencies=protected)
+    async def git_push(payload: GitRepo):
+        return await git_call(git.push(payload.path, confirm=payload.confirm))
+
+    @app.get("/api/harnesses", dependencies=protected)
+    def list_harnesses():
+        return {"harnesses": harnesses.list()}
+
+    @app.put("/api/harnesses/{harness_id}", dependencies=protected)
+    def configure_harness(harness_id: str, payload: HarnessUpdate):
+        return harnesses.configure(harness_id, enabled=payload.enabled, default_model=payload.default_model)
+
+    @app.post("/api/harnesses/{harness_id}/check", dependencies=protected)
+    async def check_harness(harness_id: str):
+        return await harnesses.check(harness_id)
+
+    @app.post("/api/harnesses/{harness_id}/update", dependencies=protected)
+    async def update_harness(harness_id: str, payload: HarnessConfirm):
+        try:
+            return await harnesses.update(harness_id, confirm=payload.confirm)
+        except HarnessError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/previews", dependencies=protected)
+    def list_previews(request: Request):
+        return {"previews": previews.list(request.url.hostname or settings.bind_host)}
+
+    @app.post("/api/previews", status_code=201, dependencies=protected)
+    async def open_preview(payload: PreviewCreate, request: Request):
+        try:
+            preview = await previews.open(payload.port, request.url.hostname or settings.bind_host)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except PreviewUnavailable as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PreviewLimit as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except PreviewError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return JSONResponse(status_code=201, content={"preview": preview}, headers={"Cache-Control": "no-store"})
+
+    @app.delete("/api/previews/{preview_id}", dependencies=protected)
+    async def close_preview(preview_id: str):
+        if not await previews.close(preview_id):
+            raise HTTPException(status_code=404, detail="Preview not found")
         return {"ok": True}
 
     @app.websocket("/api/terminals/{name}/ws")

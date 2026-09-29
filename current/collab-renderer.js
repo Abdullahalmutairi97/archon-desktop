@@ -11,12 +11,14 @@ function arLoadPeer(){
  });return window.__archonPeerPromise;
 }
 function ArchonCollab(){
- const {data,settings,say,connected,setUi}=Ne();
+ const {data,settings,say,connected,setUi,ui}=Ne();
  const transcript=arUseTranscript();
- const [open,setOpen]=k.useState(false),[kind,setKind]=k.useState('session'),[selection,setSelection]=k.useState(''),[status,setStatus]=k.useState('Ready'),[error,setError]=k.useState(''),[invite,setInvite]=k.useState(''),[input,setInput]=k.useState(''),[shared,setShared]=k.useState(null),[review,setReview]=k.useState(null),[sessionIndex,setSessionIndex]=k.useState(0),[busy,setBusy]=k.useState(false);
+ // The title bar's Share button opens this dialog by setting ui.collabOpen.
+ const open=!!ui?.collabOpen;
+ const [kind,setKind]=k.useState('session'),[selection,setSelection]=k.useState(''),[status,setStatus]=k.useState('Ready'),[error,setError]=k.useState(''),[invite,setInvite]=k.useState(''),[input,setInput]=k.useState(''),[shared,setShared]=k.useState(null),[review,setReview]=k.useState(null),[sessionIndex,setSessionIndex]=k.useState(0),[busy,setBusy]=k.useState(false);
  // Native web surfaces sit above renderer dialogs; update their covered state
  // in the same event that opens or closes this dialog.
- const show=value=>{setOpen(value);setUi(value?{bench:null,collabOpen:true}:{collabOpen:false})};
+ const show=value=>{setUi(value?{bench:null,collabOpen:true}:{collabOpen:false})};
  k.useEffect(()=>()=>setUi({collabOpen:false}),[setUi]);
  const lifetime=k.useRef({generation:0,peer:null,timer:null,connections:[]});
  const stop=()=>{const life=lifetime.current;life.generation++;clearTimeout(life.timer);life.connections.forEach(c=>c.close());life.connections=[];life.peer?.destroy();life.peer=null;setBusy(false);setInvite('');setStatus('Stopped')};
@@ -97,7 +99,6 @@ function ArchonCollab(){
   p.sessions[Math.min(sessionIndex,p.sessions.length-1)].messages.map((m,i)=>ASn('article',{key:i},ASn('strong',null,m.role==='user'?'You':'Agent'),ASn('pre',null,m.content))));
  return ASn(k.Fragment,null,
   ASn('style',null,ARCHON_COLLAB_CSS),
-  ASn('button',{type:'button',className:'ar-collab-launch btn btn-secondary',onClick:()=>show(true),'aria-label':'Share sessions and projects'},'Share'),
   open&&ASn('div',{className:'ar-collab-backdrop',onKeyDown:e=>{if(e.key==='Escape')show(false)}},
    ASn('section',{className:'ar-collab-card',role:'dialog','aria-modal':true,'aria-label':'Collaboration'},
     ASn('header',null,ASn('strong',null,'Share with a friend'),button('Close',()=>show(false))),
@@ -117,7 +118,6 @@ function ArchonCollab(){
    )));
 }
 const ARCHON_COLLAB_CSS=`
-.ar-collab-launch{position:fixed;right:18px;bottom:18px;z-index:20}
 .ar-collab-backdrop{position:fixed;inset:0;background:#0006;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px}
 .ar-collab-card{width:min(720px,95vw);max-height:90vh;overflow:auto;padding:20px;border:1px solid var(--ar-edge);border-radius:10px;background:var(--color-surface,#191919);color:var(--color-text);font-size:12px}
 .ar-collab-card header,.ar-collab-row{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap}

@@ -1,15 +1,17 @@
 # Archon Desktop
 
-Archon Desktop is a Linux app for working with Prime, Pi, and Codex. The current repository targets **v0.3.0** and includes the release reconstruction kit, the shared backend, tests, and server deployment files.
+Archon Desktop is a Linux app for working with Prime, Pi, and OpenCode. The current repository targets **v0.3.0** and includes the release reconstruction kit, the shared backend, tests, and server deployment files.
 
 ## Use the app
 
 - **Projects and sessions:** organize agent work and open a session from the project list.
 - **IDE:** inspect agent-written files and snippets, switch tabs, edit, copy, reload, and save with `Ctrl/⌘+S`.
-- **Browser:** open web links and local previews from agent replies.
+- **Agent harnesses:** Settings → Agent harnesses lists Prime, Pi and OpenCode as installed on the server: version, providers each is signed in to (names only), Archon sessions and path. Turn a harness off to stop new and continued work with it, set OpenCode's default model, check for a newer version, and update Pi or OpenCode through npm after confirming.
+- **Git:** see the session repository's changes, stage, commit, switch or create branches, fetch and push. Review working-tree changes, any commit, or the whole branch against its base in a unified or split diff, comment on lines, and send the review to the session's agent.
+- **Browser:** open web links from agent replies. A `localhost` link (or a typed `localhost:PORT`) opens the dev server running on the server, through the backend's private preview gateway, with hot reload.
 - **Share:** send a reviewed, read-only session or project snapshot to a friend with PeerJS or an offline snapshot code. Sharing does not change the backend, sync files, or grant agent control.
 
-To connect an agent, open **Settings → Connection**, enter the server URL and device token, test the connection, then choose the agent and model in **Settings → Agents & models**. Codex runs locally on the machine where its CLI is installed; it does not require a backend change. Tailscale can provide private network routing, but each app still needs its own valid device token.
+To connect an agent, open **Settings → Connection**, enter the server URL and device token, test the connection, then choose the agent and model in **Settings → Agents & models**. OpenCode needs the `opencode` CLI on the server (`npm install -g opencode-ai`); its model list comes from `opencode models`, and each agent remembers its own model. Tailscale can provide private network routing, but each app still needs its own valid device token.
 
 ## Repository layout
 

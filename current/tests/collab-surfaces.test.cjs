@@ -23,18 +23,18 @@ function mount(){
  const render=()=>{let rounds=0;do{dirty=false;for(const [name,component] of components){active=component;cursor=0;const next=name==='collab'?scope.ArchonCollab():scope.Lm({id:name});if(name==='collab')tree=next;while(component.effects.length)component.effects.shift()();}if(++rounds>20)throw Error('Render loop')}while(dirty)};
  function nodes(node=tree){return node&&typeof node==='object'?[node,...(node.children||[]).flatMap(nodes)]:[]}
  const click=label=>{const button=nodes().find(node=>node.type==='button'&&node.children.includes(label));assert.ok(button,'Button '+label+' is present');button.props.onClick();render()};
- render();return{ctx,surfaces,render,click,escape(){nodes().find(node=>node.props.className==='ar-collab-backdrop').props.onKeyDown({key:'Escape'});render()},unmount(){const component=components.get('collab');components.delete('collab');component.slots.forEach(slot=>slot?.cleanup?.());render()}};
+ render();return{ctx,surfaces,render,click,open(){ctx.setUi({bench:null,collabOpen:true});render()},escape(){nodes().find(node=>node.props.className==='ar-collab-backdrop').props.onKeyDown({key:'Escape'});render()},unmount(){const component=components.get('collab');components.delete('collab');component.slots.forEach(slot=>slot?.cleanup?.());render()}};
 }
 
 test('collaboration hides native browser and design surfaces and restores them on close, Escape or unmount',{skip:!renderer},()=>{
  const h=mount();const expectVisible=value=>{assert.equal(h.surfaces.get('browser'),value);assert.equal(h.surfaces.get('design'),value)};
- expectVisible(true);h.click('Share');expectVisible(false);h.click('Close');expectVisible(true);
- h.click('Share');expectVisible(false);h.escape();expectVisible(true);
- h.click('Share');expectVisible(false);h.unmount();expectVisible(true);
+ expectVisible(true);h.open();expectVisible(false);h.click('Close');expectVisible(true);
+ h.open();expectVisible(false);h.escape();expectVisible(true);
+ h.open();expectVisible(false);h.unmount();expectVisible(true);
 });
 
 test('closing collaboration does not uncover a native view while another dialog is open',{skip:!renderer},()=>{
- const h=mount();h.click('Share');h.ctx.ui.dialog={title:'Another dialog'};h.render();h.click('Close');
+ const h=mount();h.open();h.ctx.ui.dialog={title:'Another dialog'};h.render();h.click('Close');
  assert.equal(h.surfaces.get('browser'),false);assert.equal(h.surfaces.get('design'),false);
  h.ctx.ui.dialog=null;h.render();assert.equal(h.surfaces.get('browser'),true);assert.equal(h.surfaces.get('design'),true);
 });

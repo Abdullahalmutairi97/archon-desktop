@@ -54,6 +54,8 @@ class PiRunner:
         session_dir = self.session_root / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         requested_cwd = Path(str(task.get("cwd") or self.default_cwd)).expanduser()
+        if not requested_cwd.is_absolute():
+            requested_cwd = self.default_cwd / requested_cwd
         cwd = requested_cwd if requested_cwd.is_dir() else self.default_cwd
         prompt = str(task.get("prompt") or "")
         mode = task.get("approval_mode") or "auto"

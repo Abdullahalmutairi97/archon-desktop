@@ -175,7 +175,9 @@ class PrimeRunner:
                         break
             except (OSError, json.JSONDecodeError):
                 pass
-        requested_cwd = Path(str(saved_cwd or self.default_cwd))
+        requested_cwd = Path(str(saved_cwd or self.default_cwd)).expanduser()
+        if not requested_cwd.is_absolute():
+            requested_cwd = self.default_cwd / requested_cwd
         cwd = requested_cwd if requested_cwd.is_dir() else self.default_cwd
         argv = [str(self.executable), '--print', '--mode', 'json', '--cwd', str(cwd)]
         if agent_session:

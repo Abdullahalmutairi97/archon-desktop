@@ -14,10 +14,10 @@ test('candidate patch requires the official v0.3.0 archive', () => {
   assert.equal(baseline.version, '0.3.0');
 });
 
-test('candidate adds IDE, result links, and six workbench shortcuts', { skip: !renderer }, () => {
+test('candidate adds IDE, Git, result links, and seven workbench shortcuts', { skip: !renderer }, () => {
   const patched = patchRenderer(renderer);
   assert.match(patched, /id:"ide",icon:"ph-code",title:"IDE"/);
-  for (const marker of ['function ArchonIde(', 'function ArchonWorkbench(', 'function ArchonResultLinks(', 'sessionId:E.id,cwd:E.cwd,messages:ke', 'ArchonCodeActions', '["1","2","3","4","5","6"]']) {
+  for (const marker of ['function ArchonIde(', 'function ArchonWorkbench(', 'function ArchonResultLinks(', 'sessionId:E.id,cwd:E.cwd,messages:ke', 'ArchonCodeActions', '["1","2","3","4","5","6","7"]', 'id:"git",icon:"ph-git-diff",title:"Git"', 'function ArchonGit(', 'ASn(ArchonGit,{visible:bench===\'git\'})']) {
     assert.ok(patched.includes(marker), `Missing integration: ${marker}`);
   }
   assert.ok(patched.includes(fs.readFileSync(path.join(__dirname, '../ide-renderer.js'), 'utf8')), 'Helper injection preserves literal replacement characters');
@@ -25,6 +25,19 @@ test('candidate adds IDE, result links, and six workbench shortcuts', { skip: !r
   assert.ok(patched.includes('await K.host();if(!current())return;setTestResult'), 'Connection test verifies authorization for the current server');
   const check = require('node:child_process').spawnSync(process.execPath, ['--input-type=module', '--check'], { input: patched, encoding: 'utf8' });
   assert.equal(check.status, 0, check.stderr);
+});
+
+test('candidate routes browser loopback links through server previews and carries no Codex runtime', { skip: !archivePath }, () => {
+  const patched = patchRenderer(renderer);
+  for (const marker of ['const ArchonPreview=', 'navigate:(n,s)=>ArchonPreview.navigate(n,s)', 'x(ArchonPreview.original(f.url))', 'Look at ${ArchonPreview.original(f.url)}', 'openExternal(ArchonPreview.external(f.url))', "ArchonPreview.navigate('browser',href)", 'void ArchonPreview.openExternal(n)']) {
+    assert.ok(patched.includes(marker), `Missing integration: ${marker}`);
+  }
+  assert.ok(!patched.includes('window.archon?.web.navigate(n,s)'), 'Browser navigation bypasses previews');
+  assert.ok(!/ArchonCodex|codexStatus|codexSnapshot|'codex'/.test(patched), 'Codex runtime is still wired in');
+  const main = require('@electron/asar').extractFile(archivePath, 'dist/main/main.cjs').toString();
+  const patchedMain = require('../main-ops-patch.cjs').patchMain(main);
+  assert.ok(patchedMain.includes('archonExtraOps[op]'));
+  assert.ok(!/codex/i.test(patchedMain));
 });
 
 test('candidate patch fails closed on missing or duplicated anchors', { skip: !renderer }, () => {

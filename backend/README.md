@@ -1,6 +1,6 @@
 # Archon Desktop backend
 
-FastAPI/SQLite service for durable tasks, agent execution, ordered event replay, sessions/projects, files, terminal, resources, and optional Telegram/voice integration.
+FastAPI/SQLite service for durable tasks, agent execution (Prime, Pi and OpenCode), ordered event replay, sessions/projects, files, Git, terminal, dev-server previews, resources, and optional Telegram/voice integration.
 
 **Package version: 0.2.0.** The backend package is outside the Desktop version reset. The official Desktop baseline is **v0.3.0 on AbdullahPC**; see the [baseline record](../docs/releases/v0.3.0.md).
 

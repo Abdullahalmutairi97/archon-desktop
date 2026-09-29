@@ -9,8 +9,10 @@ const { spawnSync } = require('node:child_process');
 
 const baseline = require('./baseline.json');
 const { patchRendererQueueStatus } = require('./queue-status-patch.cjs');
-const { patchCodexRenderer } = require('./codex-patch.cjs');
-const { prepareCodex } = require('./codex-main-patch.cjs');
+const { prepareMain } = require('./main-ops-patch.cjs');
+const { patchRuntimes } = require('./runtime-patch.cjs');
+const { patchHarnesses } = require('./harness-patch.cjs');
+const { patchTitlebar } = require('./titlebar-patch.cjs');
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function verifyOfficial(bytes) {
@@ -20,16 +22,16 @@ function verifyOfficial(bytes) {
 }
 
 const tabsBefore = 'const Qm=[{id:"activity",icon:"ph-pulse",title:"Activity"},{id:"files",icon:"ph-folder-open",title:"Files"},{id:"browser",icon:"ph-globe",title:"Browser"},{id:"notes",icon:"ph-note",title:"Notes"},{id:"terminal",icon:"ph-terminal-window",title:"Terminal"}]';
-const tabsAfter = 'const Qm=[{id:"activity",icon:"ph-pulse",title:"Activity"},{id:"files",icon:"ph-folder-open",title:"Files"},{id:"ide",icon:"ph-code",title:"IDE"},{id:"browser",icon:"ph-globe",title:"Browser"},{id:"notes",icon:"ph-note",title:"Notes"},{id:"terminal",icon:"ph-terminal-window",title:"Terminal"}]';
+const tabsAfter = 'const Qm=[{id:"activity",icon:"ph-pulse",title:"Activity"},{id:"files",icon:"ph-folder-open",title:"Files"},{id:"ide",icon:"ph-code",title:"IDE"},{id:"git",icon:"ph-git-diff",title:"Git"},{id:"browser",icon:"ph-globe",title:"Browser"},{id:"notes",icon:"ph-note",title:"Notes"},{id:"terminal",icon:"ph-terminal-window",title:"Terminal"}]';
 const titleTabsBefore = 'const uy=[{id:"activity",icon:"ph-pulse",title:"Activity",live:!0},{id:"files",icon:"ph-folder-open",title:"Files"},{id:"browser",icon:"ph-globe",title:"Browser"},{id:"notes",icon:"ph-note",title:"Notes"},{id:"terminal",icon:"ph-terminal-window",title:"Terminal"}]';
-const titleTabsAfter = 'const uy=[{id:"activity",icon:"ph-pulse",title:"Activity",live:!0},{id:"files",icon:"ph-folder-open",title:"Files"},{id:"ide",icon:"ph-code",title:"IDE"},{id:"browser",icon:"ph-globe",title:"Browser"},{id:"notes",icon:"ph-note",title:"Notes"},{id:"terminal",icon:"ph-terminal-window",title:"Terminal"}]';
+const titleTabsAfter = 'const uy=[{id:"activity",icon:"ph-pulse",title:"Activity",live:!0},{id:"files",icon:"ph-folder-open",title:"Files"},{id:"ide",icon:"ph-code",title:"IDE"},{id:"git",icon:"ph-git-diff",title:"Git"},{id:"browser",icon:"ph-globe",title:"Browser"},{id:"notes",icon:"ph-note",title:"Notes"},{id:"terminal",icon:"ph-terminal-window",title:"Terminal"}]';
 const benchBefore = "ui.bench==='files'&&ASn(pf,{compact:true}),ui.bench==='browser'&&ASn(uf,{compact:true})";
 const shortcutBefore = 'x&&["1","2","3","4","5"].includes(y)';
-const shortcutAfter = 'x&&["1","2","3","4","5","6"].includes(y)';
+const shortcutAfter = 'x&&["1","2","3","4","5","6","7"].includes(y)';
 const shortcutTabsBefore = '["activity","files","browser","notes","terminal"]';
-const shortcutTabsAfter = '["activity","files","ide","browser","notes","terminal"]';
+const shortcutTabsAfter = '["activity","files","ide","git","browser","notes","terminal"]';
 
-const ideHelpers = ['ide-model.cjs','ide-renderer.js','collab-model.cjs','collab-renderer.js','connection-renderer.js'].map(file=>fs.readFileSync(path.join(__dirname,file),'utf8')).join('\n');
+const ideHelpers = ['ide-model.cjs','git-model.cjs','runtime-renderer.js','harness-renderer.js','titlebar-renderer.js','preview-renderer.js','ide-renderer.js','git-renderer.js','collab-model.cjs','collab-renderer.js','connection-renderer.js'].map(file=>fs.readFileSync(path.join(__dirname,file),'utf8')).join('\n');
 
 const connectionTestLifetime = [
   ' const testScope=k.useRef(null);',
@@ -61,6 +63,11 @@ function patchRenderer(original) {
   replaceOnce(shortcutBefore, shortcutAfter, 'shortcut count');
   replaceOnce(shortcutTabsBefore, shortcutTabsAfter, 'shortcut tab order');
   replaceOnce('p=!!(o.settingsTab||o.palette||o.dialog||o.update),h=!s&&!p;', 'p=!!(o.settingsTab||o.palette||o.dialog||o.update||o.collabOpen),h=!s&&!p;', 'collaboration surface visibility');
+  replaceOnce('navigate:(n,s)=>window.archon?.web.navigate(n,s)', 'navigate:(n,s)=>ArchonPreview.navigate(n,s)', 'browser navigation');
+  replaceOnce('k.useEffect(()=>{S||x(f.url)},[f.url,S])', 'k.useEffect(()=>{S||x(ArchonPreview.original(f.url))},[f.url,S])', 'browser address');
+  replaceOnce('prompt:`Look at ${f.url}', 'prompt:`Look at ${ArchonPreview.original(f.url)}', 'browser ask prompt');
+  replaceOnce('onClick:()=>f.url&&window.archon?.openExternal(f.url)', 'onClick:()=>f.url&&window.archon?.openExternal(ArchonPreview.external(f.url))', 'browser open externally');
+  replaceOnce('function $x(n){/^https?:/i.test(n)&&window.archon?.openExternal(n)}', 'function $x(n){/^https?:/i.test(n)&&void ArchonPreview.openExternal(n)}', 'markdown external links');
   replaceOnce('ASn(ASConnection)', 'ASn(k.Fragment,null,ASn(ASConnection),ASn(ArchonDeviceToken))', 'connection credentials');
   replaceOnce("const [testResult,setTestResult]=k.useState('');", "const [testResult,setTestResult]=k.useState('');\n"+connectionTestLifetime, 'connection test lifetime');
   replaceOnce("onClick:async()=>{setTesting(true);try{const h=await K.health();setTestResult(`${h.service} responded · ${h.latencyMs} ms`)}catch{setTestResult('No response. Check the address and your network.')}finally{setTesting(false)}}", 'onClick:test', 'authenticated connection test');
@@ -88,7 +95,7 @@ function patchRenderer(original) {
   if (result.split(shortcutStrip).length !== 2) throw new Error('browser shortcut strip terminator must occur exactly once');
   result = result.replace(shortcutStrip, '}),r.jsx(ArchonResultLinks,{onOpen:w})]})}const Bm=typeof navigator');
 
-  return patchCodexRenderer(patchRendererQueueStatus(result));
+  return patchTitlebar(patchHarnesses(patchRuntimes(patchRendererQueueStatus(result))));
 }
 
 async function build(args) {
@@ -102,7 +109,7 @@ async function build(args) {
     const app = path.join(temp, 'app');
     asar.extractAll(input, app);
     prepareCollaboration(app);
-    prepareCodex(app);
+    prepareMain(app);
     const renderer = path.join(app, baseline.rendererPath);
     const patched = patchRenderer(fs.readFileSync(renderer, 'utf8'));
     const syntax = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: patched, encoding: 'utf8' });

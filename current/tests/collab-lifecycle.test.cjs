@@ -8,7 +8,7 @@ const model=require('../collab-model.cjs');
 // Exercise the component's actual event handlers without a DOM or a real peer service.
 function mount({messages=async()=>[{role:'agent',content:'Second session'}]}={}){
  const slots=[],effects=[],peers=[],timers=new Map();let cursor=0,dirty=false,tree,timerId=0;
- const context={connected:true,settings:{serverUrl:'https://agent.test'},data:{projects:[{id:'p',title:'Project'}],sessions:[{id:'a',title:'First',projectId:'p'},{id:'b',title:'Second',projectId:'p'}]},say(){},setUi(){}};
+ const context={ui:{},setUi(patch){Object.assign(context.ui,patch);dirty=true},connected:true,settings:{serverUrl:'https://agent.test'},data:{projects:[{id:'p',title:'Project'}],sessions:[{id:'a',title:'First',projectId:'p'},{id:'b',title:'Second',projectId:'p'}]},say(){}};
  const transcript={sessionId:'a',messages:[{role:'agent',content:'First session'}]};
  const hooks={Fragment:Symbol('Fragment'),useState(initial){const at=cursor++;if(!(at in slots))slots[at]=typeof initial==='function'?initial():initial;return [slots[at],value=>{slots[at]=typeof value==='function'?value(slots[at]):value;dirty=true}]},useRef(initial){const at=cursor++;return slots[at]||(slots[at]={current:initial})},useEffect(callback,deps){const at=cursor++,old=slots[at];if(!old||deps.some((d,i)=>d!==old.deps[i])){slots[at]={deps,cleanup:old?.cleanup};effects.push(()=>{slots[at].cleanup?.();slots[at].cleanup=callback()})}}};
  class Peer extends EventEmitter{constructor(){super();peers.push(this)}connect(){this.connection=new EventEmitter();this.connection.close=()=>this.connection.emit('close');return this.connection}destroy(){this.destroyed=true}}
@@ -20,7 +20,7 @@ function mount({messages=async()=>[{role:'agent',content:'Second session'}]}={})
  function button(label){const node=find(n=>n.type==='button'&&n.children.includes(label));assert.ok(node,'Missing button '+label);return node}
  function select(label,value){const node=find(n=>n.props['aria-label']===label);assert.ok(node,'Missing field '+label);node.props.onChange({target:{value}});render()}
  async function click(label){const pending=button(label).props.onClick();render();await pending;render()}
- render();button('Share').props.onClick();render();
+ render();context.setUi({bench:null,collabOpen:true});render();
  return {render,find,button,select,click,peers,timers,context};
 }
 

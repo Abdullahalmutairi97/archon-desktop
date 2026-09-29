@@ -12,7 +12,7 @@ A source commit, candidate ASAR, installed app, and published release are separa
 
 ## Check the app
 
-Use an isolated profile for native Electron checks. Exercise connection authentication, project/session navigation, the IDE explorer and save flow, Browser links, Codex local sessions, and read-only session/project sharing. The preview at `127.0.0.1:4318` is useful for fixture behavior but does not certify native Electron compositing, live agents, or two-PC routing.
+Use an isolated profile for native Electron checks. Exercise connection authentication, project/session navigation, the IDE explorer and save flow, Browser links and server previews (`localhost` links from a server session), the Git tab (stage, commit, push, diff review and sending comments to the agent), and read-only session/project sharing. The preview at `127.0.0.1:4318` is useful for fixture behavior but does not certify native Electron compositing, live agents, or two-PC routing.
 
 ## Package and publish
 

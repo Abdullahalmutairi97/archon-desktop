@@ -31,6 +31,8 @@ def main() -> int:
             "PI_RESOURCES_DIR", "PRIME_AUTH_PATH", "PRIME_USER_SKILLS_DIR",
         ):
             env["ARCHON_DESKTOP_" + key] = str(Path(root) / key.lower())
+        env["ARCHON_DESKTOP_OPENCODE_EXECUTABLE"] = str(Path(root) / "no-opencode")
+        env["ARCHON_DESKTOP_PI_EXECUTABLE"] = str(Path(root) / "no-pi")
         return subprocess.run(
             [str(python), "-m", "pytest", "-o", "addopts=", "-q", *args],
             cwd=root, env=env, check=False,

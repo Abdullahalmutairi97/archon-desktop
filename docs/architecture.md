@@ -17,6 +17,10 @@ Clients request `/api/tasks/{id}/events?after=<sequence>` to replay only events 
 - Skills: listed from the Archon profile and enabled/disabled in profile config
 - Files: confined to the configured account root with traversal and secret-file checks
 - Terminal: named tmux sessions owned by the server account, attached over authenticated WebSockets
+- Harnesses: installed agents are inventoried and switched on or off in `data_dir/harnesses.json`; the task API refuses work for a turned-off harness
+- Agents: Prime, Pi and OpenCode run as server subprocesses; OpenCode turns are mirrored into the same session store Prime and Pi use
+- Git: status, history, branch, diff and commit operations through the `git` CLI, confined to repositories under the account root
+- Previews: one private listener per server loopback port an agent's dev server uses, opened through the authenticated API and closed after 30 idle minutes
 - Backups: existing `archon-backup.sh` and `archon-restore.sh` with inspect-before-restore and confirmation
 - Cron: existing Hermes scheduler through `/home/archon/.local/bin/hermes`, with every mutation confirmed
 - Status: local psutil and systemd inspection

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     profile: str = "archon"
     hermes_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "hermes")
     prime_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "prime-agent")
+    pi_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "pi")
+    opencode_executable: Path = Field(default_factory=lambda: _account_home() / ".local" / "bin" / "opencode")
+    opencode_model: str = "opencode/big-pickle"
     prime_agent_session_dir: Path = Field(default_factory=lambda: _account_home() / ".prime" / "agent" / "sessions")
     pi_agent_session_dir: Path = Field(default_factory=lambda: _account_home() / ".pi" / "agent" / "sessions")
     resource_node_executable: str = "node"
