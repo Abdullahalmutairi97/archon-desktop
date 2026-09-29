@@ -330,3 +330,29 @@ describe('workbench browser', () => {
     ]))
   })
 })
+
+describe('native views under overlays', () => {
+  it('moves the browser page out of the way while a dialog is open and restores it after', async () => {
+    stubLayout()
+    const { browser } = browserBridge()
+    const { LiveBrowser } = await import('./LiveBrowser')
+    const { useOverlay } = await import('../shell/overlays')
+    function Dialog() { useOverlay(); return null }
+    const view = render(<LiveBrowser bridge={browser} links={[{ url: 'https://example.com/', label: 'example.com' }]} />)
+    fireEvent.click(await screen.findByRole('button', { name: /example\.com/ }))
+    await waitFor(() => expect(browser.open).toHaveBeenCalled())
+    await waitFor(() => expect(browser.bounds).toHaveBeenCalled())
+    const lastBounds = () => (browser.bounds.mock.calls as unknown as [{ x: number; y: number; width: number; height: number }][]).at(-1)?.[0]
+    const shown = lastBounds()!
+    expect(shown).toMatchObject({ width: expect.any(Number), height: expect.any(Number) })
+    expect(shown.width).toBeGreaterThan(1)
+
+    view.rerender(<><LiveBrowser bridge={browser} links={[{ url: 'https://example.com/', label: 'example.com' }]} /><Dialog /></>)
+    await waitFor(() => expect(lastBounds()).toEqual({ x: -2, y: -2, width: 1, height: 1 }))
+
+    view.rerender(<LiveBrowser bridge={browser} links={[{ url: 'https://example.com/', label: 'example.com' }]} />)
+    await waitFor(() => expect(lastBounds()).toEqual(shown))
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+})

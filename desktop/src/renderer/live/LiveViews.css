@@ -615,6 +615,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
 /* Composer: model choice and voice input. Logical properties only (mirrors in RTL). */
 .live-composer-model {
   margin-block-end: 8px;
