@@ -10,6 +10,7 @@ import {
 import { createConnectionService } from './connectionService'
 import { registerBridgeHandlers } from './registerBridge'
 import { TrustedShellFrameGuard, type TrustedShellIpcEvent } from './security/TrustedShellFrameGuard'
+import { MicrophonePermissionGate } from './security/microphonePermission'
 import { CredentialStore } from './storage/credentialStore'
 import { ProfileStore } from './storage/profileStore'
 import { BackendTransport } from './transport/backendTransport'
@@ -39,6 +40,7 @@ app.setName('Archon Desktop Reconstruction')
 app.setPath('userData', join(app.getPath('appData'), RECONSTRUCTION_PROFILE))
 
 const trustedFrame = new TrustedShellFrameGuard()
+const microphonePermission = new MicrophonePermissionGate(trustedFrame)
 let mainWindow: BrowserWindow | undefined
 let localCodexController: LocalCodexController | undefined
 let localCodexBackendAdapter: LocalCodexBackendAdapter | undefined
@@ -94,8 +96,12 @@ function createMainWindow(): BrowserWindow {
   const trustedDocumentUrl = devOrigin ? `${devOrigin}/` : rendererFileUrl
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-attach-webview', (event) => event.preventDefault())
-  window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-  window.webContents.session.setPermissionCheckHandler(() => false)
+  // Everything is denied except microphone-only media for the trusted main
+  // frame right after the user pressed a button in this window.
+  window.webContents.on('input-event', (_event, input) => microphonePermission.noteInput(window.webContents, input))
+  window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) =>
+    callback(microphonePermission.decideRequest(contents, permission, details)))
+  window.webContents.session.setPermissionCheckHandler(() => microphonePermission.decideCheck())
   window.webContents.on('did-start-navigation', (details) => {
     if (details.isMainFrame && !details.isSameDocument) {
       trustedFrame.invalidateNavigation(window.webContents)

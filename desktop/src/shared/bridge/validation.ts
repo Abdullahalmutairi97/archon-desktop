@@ -22,10 +22,15 @@ import type {
   SessionMessageRecord,
   SessionMessagesPayload,
   SessionsListPayload,
+  AudioStatusResult,
+  AudioTranscribePayload,
+  AudioTranscribeResult,
+  ModelCatalogResult,
   TaskByIdPayload,
   TaskEventRecord,
   TaskEventsPayload,
   TaskRecord,
+  TaskModelProvider,
   TaskSubmitPayload,
   TasksListPayload,
   WorkspaceCheckoutState,
@@ -150,6 +155,10 @@ const operationNames = Object.freeze([
   'workspaces.files.search',
   'workspaces.files.write',
   'workspaces.files.create',
+  // Composer
+  'models.catalog',
+  'audio.status',
+  'audio.transcribe',
 ] as const satisfies readonly OperationName[])
 
 const channels = new Set<string>(Object.values(BRIDGE_CHANNELS))
@@ -201,6 +210,24 @@ const MAX_WORKSPACE_SEARCH_BYTES = 1024 * 1024
 const MAX_WORKSPACE_SEARCH_HITS = 100
 const MAX_WORKSPACE_FILE_WRITE_LENGTH = 12_000
 const MAX_WORKSPACE_FILE_WRITE_BYTES = 16 * 1024
+// Composer
+/** The server's decoded audio ceiling (`services/voice.py`); the desktop never uploads more. */
+export const MAX_AUDIO_BYTES = 25 * 1024 * 1024
+/** `AudioTranscriptionRequest.mime_type` is at most 100 characters on the server. */
+const MAX_AUDIO_MIME_TYPE_LENGTH = 100
+const MAX_AUDIO_BASE64_LENGTH = 4 * Math.ceil(MAX_AUDIO_BYTES / 3)
+/** Longest `data:<mime>;base64,<audio>` URL that can carry at most MAX_AUDIO_BYTES. */
+export const MAX_AUDIO_DATA_URL_LENGTH = 'data:'.length + MAX_AUDIO_MIME_TYPE_LENGTH + ';base64,'.length + MAX_AUDIO_BASE64_LENGTH
+const MAX_AUDIO_TRANSCRIPT_LENGTH = 100_000
+const AUDIO_MIME_TYPE = /^audio\/[a-z0-9][a-z0-9.+-]{0,62}(?:;[a-z0-9-]{1,32}=[a-z0-9.,+-]{1,64})*$/u
+const AUDIO_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/
+/** The only provider the server's Prime runner forwards (`prime_runner.py`). */
+const TASK_MODEL_PROVIDER: TaskModelProvider = 'openai-codex'
+// `TaskCreate.model` and `.provider` are at most 100 characters on the server.
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u
+const MODEL_PROVIDER_ID = /^[a-z0-9][a-z0-9._-]{0,99}$/u
+const MAX_MODEL_PROVIDERS = 16
+const MAX_MODELS_PER_PROVIDER = 200
 const SENSITIVE_RESPONSE_FIELDS = new Set([
   'token',
   'apitoken',
@@ -452,27 +479,36 @@ function validSessionId(value: unknown): value is string {
 }
 
 function parseTaskSubmitPayload(value: unknown): TaskSubmitPayload {
-  const record = readOwnDataRecord(value, ['projectId', 'prompt', 'workspaceId', 'workspaceGeneration', 'sessionId', 'runtime'])
+  const record = readOwnDataRecord(value, ['projectId', 'prompt', 'workspaceId', 'workspaceGeneration', 'sessionId', 'runtime', 'model', 'provider'])
   const hasProject = Object.hasOwn(record, 'projectId')
   const hasWorkspace = Object.hasOwn(record, 'workspaceId')
   const hasSession = Object.hasOwn(record, 'sessionId')
   const hasRuntime = Object.hasOwn(record, 'runtime')
+  const hasModel = Object.hasOwn(record, 'model')
   if (hasWorkspace !== Object.hasOwn(record, 'workspaceGeneration')) return fail()
   if (!boundedString(record.prompt, MAX_TASK_PROMPT_LENGTH) || !record.prompt.trim()) return fail()
   if (hasProject && !boundedString(record.projectId, MAX_PROJECT_ID_LENGTH)) return fail()
+  // A model travels only with the one provider Prime forwards; Prime silently
+  // drops any other pair, so accepting it would promise a choice that never runs.
+  if (hasModel !== Object.hasOwn(record, 'provider')) return fail()
+  if (hasModel && (record.provider !== TASK_MODEL_PROVIDER || typeof record.model !== 'string' || !MODEL_ID.test(record.model))) return fail()
+  const modelChoice = hasModel ? { model: record.model as string, provider: TASK_MODEL_PROVIDER } : {}
 
   if (hasSession) {
     // A continuation runs under the session's recorded runtime and cwd, so it
-    // never carries a runtime choice or a checkout identity.
+    // never carries a runtime choice or a checkout identity. The server does
+    // pass a follow-up's model to the runner.
     if (hasWorkspace || hasRuntime || !validSessionId(record.sessionId)) return fail()
     return Object.freeze({ sessionId: record.sessionId, prompt: record.prompt,
       ...(hasProject ? { projectId: record.projectId as string } : {}),
+      ...modelChoice,
     })
   }
 
   if (!hasProject) return fail()
   if (hasWorkspace) {
-    if (hasRuntime || !workspaceFileId(record.workspaceId) ||
+    // The checkout route forbids extra fields and always runs Prime's default.
+    if (hasRuntime || hasModel || !workspaceFileId(record.workspaceId) ||
         typeof record.workspaceGeneration !== 'number' || !Number.isSafeInteger(record.workspaceGeneration) ||
         record.workspaceGeneration < 1) return fail()
     return Object.freeze({ projectId: record.projectId as string, prompt: record.prompt,
@@ -480,9 +516,27 @@ function parseTaskSubmitPayload(value: unknown): TaskSubmitPayload {
     })
   }
   if (hasRuntime && record.runtime !== 'prime' && record.runtime !== 'pi') return fail()
+  // The server's model catalog lists Prime's signed-in providers only.
+  if (hasModel && record.runtime === 'pi') return fail()
   return Object.freeze({ projectId: record.projectId as string, prompt: record.prompt,
     ...(hasRuntime ? { runtime: record.runtime as 'prime' | 'pi' } : {}),
+    ...modelChoice,
   })
+}
+
+function parseAudioTranscribePayload(value: unknown): AudioTranscribePayload {
+  const record = exactObject(value, ['dataUrl', 'mimeType'])
+  const { dataUrl, mimeType } = record
+  if (typeof mimeType !== 'string' || mimeType.length > MAX_AUDIO_MIME_TYPE_LENGTH || !AUDIO_MIME_TYPE.test(mimeType)) return fail()
+  if (typeof dataUrl !== 'string' || dataUrl.length > MAX_AUDIO_DATA_URL_LENGTH) return fail()
+  const prefix = `data:${mimeType};base64,`
+  if (!dataUrl.startsWith(prefix)) return fail()
+  const encoded = dataUrl.slice(prefix.length)
+  if (encoded.length % 4 !== 0 || !AUDIO_BASE64.test(encoded)) return fail()
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0
+  const bytes = (encoded.length / 4) * 3 - padding
+  if (bytes < 1 || bytes > MAX_AUDIO_BYTES) return fail()
+  return Object.freeze({ dataUrl, mimeType })
 }
 
 function parseSessionMessagesPayload(value: unknown): SessionMessagesPayload {
@@ -559,6 +613,12 @@ export function parseOperationRequest(operation: unknown, payload: unknown): rea
       return Object.freeze([operation, parseTaskByIdPayload(payload)])
     case 'tasks.events':
       return Object.freeze([operation, parseTaskEventsPayload(payload)])
+    // Composer
+    case 'models.catalog':
+    case 'audio.status':
+      return Object.freeze([operation, parseEmptyPayload(payload)])
+    case 'audio.transcribe':
+      return Object.freeze([operation, parseAudioTranscribePayload(payload)])
   }
 }
 
@@ -878,6 +938,66 @@ function parseSessionMessage(value: unknown): SessionMessageRecord {
   })
 }
 
+function parseModelCatalog(value: unknown): ModelCatalogResult {
+  const record = exactObject(value, ['current', 'fallback', 'providers', 'choices'])
+  const current = exactObject(record.current, ['provider', 'model', 'base_url_configured'])
+  if (current.provider !== null && (typeof current.provider !== 'string' || !MODEL_PROVIDER_ID.test(current.provider))) return fail()
+  if (current.model !== null && (typeof current.model !== 'string' || !MODEL_ID.test(current.model))) return fail()
+  if (typeof current.base_url_configured !== 'boolean') return fail()
+  const fallback = record.fallback === null ? null : boundedJsonRecord(record.fallback)
+  const offered = new Set<string>()
+  const providers = readLocalArray(record.providers, MAX_MODEL_PROVIDERS).map((item) => {
+    const provider = exactObject(item, ['id', 'models'])
+    const id = provider.id
+    if (typeof id !== 'string' || !MODEL_PROVIDER_ID.test(id)) return fail()
+    const models = readLocalArray(provider.models, MAX_MODELS_PER_PROVIDER).map((model) => {
+      if (typeof model !== 'string' || !MODEL_ID.test(model)) return fail()
+      const key = `${id}\u0000${model}`
+      if (offered.has(key)) return fail()
+      offered.add(key)
+      return model
+    })
+    return Object.freeze({ id, models: Object.freeze(models) })
+  })
+  if (new Set(providers.map((provider) => provider.id)).size !== providers.length) return fail()
+  // Every choice must name a model that the providers list offers.
+  const choices = readLocalArray(record.choices, MAX_MODEL_PROVIDERS * MAX_MODELS_PER_PROVIDER).map((item) => {
+    const choice = exactObject(item, ['provider', 'model'])
+    if (typeof choice.provider !== 'string' || typeof choice.model !== 'string' ||
+        !offered.has(`${choice.provider}\u0000${choice.model}`)) return fail()
+    return Object.freeze({ provider: choice.provider, model: choice.model })
+  })
+  return Object.freeze({
+    current: Object.freeze({
+      provider: current.provider as string | null,
+      model: current.model as string | null,
+      base_url_configured: current.base_url_configured,
+    }),
+    fallback,
+    providers: Object.freeze(providers),
+    choices: Object.freeze(choices),
+  })
+}
+
+function parseAudioEngine(value: unknown): { available: boolean; provider: string } {
+  const record = exactObject(value, ['available', 'provider'])
+  if (typeof record.available !== 'boolean' || !workspaceText(record.provider, 128)) return fail()
+  return Object.freeze({ available: record.available, provider: record.provider })
+}
+
+function parseAudioStatus(value: unknown): AudioStatusResult {
+  const record = exactObject(value, ['available', 'stt', 'tts'])
+  if (typeof record.available !== 'boolean') return fail()
+  return Object.freeze({ available: record.available, stt: parseAudioEngine(record.stt), tts: parseAudioEngine(record.tts) })
+}
+
+function parseAudioTranscribeResult(value: unknown): AudioTranscribeResult {
+  const record = exactObject(value, ['success', 'transcript', 'provider'])
+  if (record.success !== true || !boundedString(record.transcript, MAX_AUDIO_TRANSCRIPT_LENGTH, true)) return fail()
+  if (!workspaceText(record.provider, 128)) return fail()
+  return Object.freeze({ success: true as const, transcript: record.transcript, provider: record.provider })
+}
+
 function parseOperationResponse(operation: unknown, value: unknown): OperationMap[OperationName]['result'] {
   if (!isOperationName(operation)) return fail()
   switch (operation) {
@@ -1001,6 +1121,13 @@ function parseOperationResponse(operation: unknown, value: unknown): OperationMa
       if (record.ok !== true) return fail()
       return Object.freeze({ ok: true })
     }
+    // Composer
+    case 'models.catalog':
+      return parseModelCatalog(value)
+    case 'audio.status':
+      return parseAudioStatus(value)
+    case 'audio.transcribe':
+      return parseAudioTranscribeResult(value)
   }
 }
 

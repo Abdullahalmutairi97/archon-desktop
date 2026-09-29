@@ -3,6 +3,7 @@ import type { ReactNode, SVGProps } from 'react'
 export type IconName =
   | 'activity' | 'browser' | 'chat' | 'chevron' | 'close' | 'code' | 'file'
   | 'folder' | 'history' | 'menu' | 'plus' | 'search' | 'settings' | 'terminal'
+  | 'mic' | 'stop'
 
 const paths: Record<IconName, ReactNode> = {
   activity: <><path d="M3 12h4l2.2-6 4.2 12L16 10l2 2h3"/><path d="M21 12h1"/></>,
@@ -18,6 +19,8 @@ const paths: Record<IconName, ReactNode> = {
   plus: <path d="M12 5v14M5 12h14"/>,
   search: <><circle cx="10.8" cy="10.8" r="6.5"/><path d="m16 16 4 4"/></>,
   settings: <><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19.2 13.7 1.1.9-1.2 2.1-1.4-.4a7.8 7.8 0 0 1-1.5.9l-.3 1.5h-2.4l-.5-1.4a7.7 7.7 0 0 1-1.8-.1l-.9 1.1-2.1-1.2.4-1.4a7.8 7.8 0 0 1-.9-1.5l-1.5-.3v-2.4l1.4-.5a7.7 7.7 0 0 1 .1-1.8l-1.1-.9 1.2-2.1 1.4.4a7.8 7.8 0 0 1 1.5-.9l.3-1.5h2.4l.5 1.4a7.7 7.7 0 0 1 1.8.1l.9-1.1 2.1 1.2-.4 1.4a7.8 7.8 0 0 1 .9 1.5l1.5.3v2.4l-1.4.5a7.7 7.7 0 0 1-.1 1.8Z"/></>,
+  mic: <><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></>,
+  stop: <rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/>,
   terminal: <><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="m7 9 3 2.5L7 14M12.5 15H17"/></>,
 }
 

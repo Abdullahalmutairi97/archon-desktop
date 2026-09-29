@@ -1,3 +1,5 @@
+import { MAX_AUDIO_DATA_URL_LENGTH } from '../../shared/bridge/validation'
+
 /** Narrow structural types keep the security policy unit-testable without Electron. */
 export interface ShellFrameLike {
   readonly url: string
@@ -47,6 +49,25 @@ export const IPC_PAYLOAD_LIMITS: Readonly<BoundedPayloadLimits> = Object.freeze(
   maxArrayLength: 512,
   maxObjectKeys: 128,
 })
+
+/**
+ * The one larger envelope: an `audio.transcribe` invoke carrying at most the
+ * server's audio ceiling as a data URL. Operation validation still enforces the
+ * exact shape, so no other operation can use this allowance.
+ */
+export const AUDIO_TRANSCRIBE_IPC_PAYLOAD_LIMITS: Readonly<BoundedPayloadLimits> = Object.freeze({
+  maxBytes: MAX_AUDIO_DATA_URL_LENGTH + 1024,
+  maxDepth: 4,
+  maxNodes: 16,
+  maxStringLength: MAX_AUDIO_DATA_URL_LENGTH,
+  maxArrayLength: 4,
+  maxObjectKeys: 4,
+})
+
+/** Payload limits for one API operation; only `audio.transcribe` gets the audio envelope. */
+export function ipcPayloadLimitsForOperation(operation: unknown): Readonly<BoundedPayloadLimits> {
+  return operation === 'audio.transcribe' ? AUDIO_TRANSCRIBE_IPC_PAYLOAD_LIMITS : IPC_PAYLOAD_LIMITS
+}
 
 /** A constant message avoids reflecting sender-controlled details to IPC callers. */
 export class UntrustedShellIpcError extends Error {
@@ -163,6 +184,22 @@ export class TrustedShellFrameGuard {
     }
   }
 
+  /**
+   * True only for a request from the trusted document's own main frame, as
+   * Electron describes a permission request: the owning webContents, a
+   * main-frame flag and the URL the requesting frame last loaded.
+   */
+  isTrustedMainFrameRequest(webContents: unknown, requestingUrl: unknown, isMainFrame: unknown): boolean {
+    const binding = this.binding
+    if (!binding || !binding.active || isMainFrame !== true || webContents !== binding.webContents) return false
+    try {
+      return this.isTrusted({ sender: binding.webContents, senderFrame: binding.webContents.mainFrame }) &&
+        normalizedDocumentUrl(requestingUrl) === binding.documentUrl
+    } catch {
+      return false
+    }
+  }
+
   assertTrusted(event: TrustedShellIpcEvent): void {
     if (!this.isTrusted(event)) throw new UntrustedShellIpcError()
   }
@@ -234,6 +271,9 @@ export function isBoundedIpcPayload(
   }
 }
 
-export function assertBoundedIpcPayload(value: unknown): void {
-  if (!isBoundedIpcPayload(value)) throw new TypeError('Invalid or oversized IPC payload')
+export function assertBoundedIpcPayload(
+  value: unknown,
+  limits: BoundedPayloadLimits = IPC_PAYLOAD_LIMITS,
+): void {
+  if (!isBoundedIpcPayload(value, limits)) throw new TypeError('Invalid or oversized IPC payload')
 }

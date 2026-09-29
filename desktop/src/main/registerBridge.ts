@@ -1,6 +1,6 @@
 import { BRIDGE_CHANNELS, parseBridgeRequest, parseBridgeResponse } from '../shared/bridge/validation'
 import type { ConnectionSaveInput, OperationName, OperationMap } from '../shared/bridge/types'
-import { assertBoundedIpcPayload } from './security/TrustedShellFrameGuard'
+import { assertBoundedIpcPayload, IPC_PAYLOAD_LIMITS, ipcPayloadLimitsForOperation } from './security/TrustedShellFrameGuard'
 
 type InvokeHandler = (event: unknown, ...args: unknown[]) => Promise<unknown>
 
@@ -25,7 +25,11 @@ export function registerBridgeHandlers(
   for (const channel of Object.values(BRIDGE_CHANNELS)) {
     ipc.handle(channel, async (event, ...args) => {
       if (guard(event) === false) throw new Error('Untrusted desktop frame')
-      assertBoundedIpcPayload(args)
+      // Only an `audio.transcribe` invoke may use the larger audio envelope; the
+      // operation name is read from a data property, never through an accessor.
+      assertBoundedIpcPayload(args, channel === BRIDGE_CHANNELS.apiInvoke && Array.isArray(args)
+        ? ipcPayloadLimitsForOperation(Object.getOwnPropertyDescriptor(args, 0)?.value)
+        : IPC_PAYLOAD_LIMITS)
       const request = parseBridgeRequest(channel, args)
       let result: unknown
       switch (request.channel) {

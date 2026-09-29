@@ -9,6 +9,7 @@ import type {
 import type { LocalCodexProxyRequest } from '../localCodexProxy'
 import { BRIDGE_CHANNELS, isOperationName, parseBridgeResponse, parseOperationPayload } from '../../shared/bridge/validation'
 import {
+  ipcPayloadLimitsForOperation,
   isBoundedIpcPayload,
   type BoundedPayloadLimits,
 } from '../security/TrustedShellFrameGuard'
@@ -48,6 +49,13 @@ export const WORKSPACE_OPERATIONS: readonly OperationName[] = Object.freeze([
   'workspaces.files.create',
 ])
 
+/** Composer support: Prime's model catalog, and server speech-to-text for review before sending. */
+export const COMPOSER_OPERATIONS: readonly OperationName[] = Object.freeze([
+  'models.catalog',
+  'audio.status',
+  'audio.transcribe',
+])
+
 const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Object.freeze({
   readiness: 'GET',
   'projects.list': 'GET',
@@ -72,6 +80,10 @@ const OPERATION_METHODS: Readonly<Record<OperationName, 'GET' | 'POST'>> = Objec
   'workspaces.files.search': 'GET',
   'workspaces.files.write': 'POST',
   'workspaces.files.create': 'POST',
+  // Composer
+  'models.catalog': 'GET',
+  'audio.status': 'GET',
+  'audio.transcribe': 'POST',
 })
 
 export const MAX_BACKEND_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -109,6 +121,10 @@ const OPERATION_PATHS: Readonly<Record<OperationName, string>> = Object.freeze({
   'workspaces.files.search': '/api/workspaces',
   'workspaces.files.write': '/api/workspaces',
   'workspaces.files.create': '/api/workspaces',
+  // Composer
+  'models.catalog': '/api/models',
+  'audio.status': '/api/audio/status',
+  'audio.transcribe': '/api/audio/transcribe',
 })
 
 const SAFE_MESSAGES = Object.freeze({
@@ -529,6 +545,7 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
         prompt: submitPayload.prompt,
         session_id: submitPayload.sessionId,
         ...(submitPayload.projectId === undefined ? {} : { project_id: submitPayload.projectId }),
+        ...(submitPayload.model === undefined ? {} : { model: submitPayload.model, provider: submitPayload.provider }),
         approval_mode: 'auto',
         chat_only: false,
       })
@@ -544,6 +561,7 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
       prompt: submitPayload.prompt,
       project_id: submitPayload.projectId,
       profile: submitPayload.runtime ?? 'prime',
+      ...(submitPayload.model === undefined ? {} : { model: submitPayload.model, provider: submitPayload.provider }),
       approval_mode: 'auto',
       chat_only: false,
     })
@@ -559,6 +577,10 @@ function requestBody(operation: OperationName, payload: OperationMap[OperationNa
   if (operation === 'workspaces.files.create') {
     const createPayload = payload as OperationMap['workspaces.files.create']['payload']
     return JSON.stringify({ path: createPayload.path, content: createPayload.content })
+  }
+  if (operation === 'audio.transcribe') {
+    const audioPayload = payload as OperationMap['audio.transcribe']['payload']
+    return JSON.stringify({ data_url: audioPayload.dataUrl, mime_type: audioPayload.mimeType })
   }
   return undefined
 }
@@ -885,7 +907,7 @@ export class BackendTransport {
     let normalizedPayload: OperationMap[K]['payload']
     if (!isOperationName(operation)) throw new BackendTransportError('unsupported_operation')
     try {
-      if (!isBoundedIpcPayload(payload)) throw new BackendTransportError('invalid_payload')
+      if (!isBoundedIpcPayload(payload, ipcPayloadLimitsForOperation(operation))) throw new BackendTransportError('invalid_payload')
       normalizedPayload = parseOperationPayload(operation, payload)
     } catch (error) {
       if (error instanceof BackendTransportError) throw error
@@ -910,7 +932,8 @@ export class BackendTransport {
         Authorization: `Bearer ${connection.token}`,
       }
       if (operation === 'projects.create' || operation === 'tasks.submit' || operation === 'workspaces.provision' ||
-          operation === 'workspaces.files.write' || operation === 'workspaces.files.create') {
+          operation === 'workspaces.files.write' || operation === 'workspaces.files.create' ||
+          operation === 'audio.transcribe') {
         headers['Content-Type'] = 'application/json'
       }
       if (operation === 'tasks.submit') {
