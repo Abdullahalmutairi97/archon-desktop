@@ -62,6 +62,8 @@ server/deployment side** and **drop the IDE** (code-server, language profiles, t
 those items below are closed by decision, not pending. Skip or remove anything that does not serve
 daily use.
 
+Since then (2026-09-29) the remaining v0.3.0 features were ported: Browser and Notes workbench tabs (Ctrl+1–6 = Activity, Files, Browser, Terminal, Preview, Notes), a Server Files page, Status/Logs/Models/Skills/Cron/Backups pages, a Prime model picker and voice input in the composer, conversation delete, local rename and snapshot sharing. Verified in the built app against an isolated backend; see CHANGELOG. Known limits: native views (browser page, service preview) cannot be seen in DevTools screenshots, so hiding them under dialogs is covered by a renderer test, not a visual check; Terminal and Preview still need same-user pairing on the backend; image/PDF preview from v0.3.0 is not ported (download instead).
+
 State of the app now: it opens on live server conversations (Ctrl+N starts one); a conversation has
 a workbench beside it with Activity, Files, Terminal and Preview for the checkout it runs in; replies
 render as Markdown; a new conversation can run inside a checkout. A portable build is installed next

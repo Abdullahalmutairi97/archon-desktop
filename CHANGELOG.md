@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — the rest of the v0.3.0 app, rebuilt
+
+Ported from the owner's daily v0.3.0 app (readable historical source and the `current/` kit), verified in the built Electron app against an isolated backend:
+
+- **Browser** workbench tab (Ctrl+3): links from the conversation's replies, an address bar, back/forward/reload and "Open in system browser". Pages load in a separate sandboxed native view (own in-memory partition, no preload, http/https only, new windows, permissions and downloads refused) instead of the old in-window iframe.
+- **Notes** workbench tab (Ctrl+6): Markdown notes in `notes/` on the server, autosaved 900 ms after typing, new notes named by date.
+- **Server Files** page: browse, edit text, create folders, rename, copy, upload, download and delete across the server's file root, with confirmations; uploads and downloads go through native dialogs and never expose local paths to the page.
+- **Operations** pages: Status, Logs, Models, Skills, Cron and Backups, with confirmations for every cron and backup change and a typed name for restore.
+- **Composer**: a model picker for Prime (only models the server can really run) and voice input (server speech-to-text, inserted for review, never sent automatically; microphone granted audio-only to the app page right after a click).
+- **Conversations**: delete (single or multi-select, confirmed), rename (kept on this computer; the server has no rename route), and read-only sharing as `archon-snapshot:` codes that open in the v0.3.0 app and vice versa.
+- Fixes found while verifying: the preload wrapped the browser's bounds twice so the page view never moved; native views now step aside while a dialog, the palette or the appearance panel is open; Copy buttons work (clipboard writes only, trusted page only); a merge dropped a CSS brace and left the whole app unstyled — a new test now fails on any unbalanced stylesheet; the live views pick up a new connection without switching views.
+
 ## Unreleased — a workbench beside conversations; the IDE is dropped
 
 - The connected app opens on server conversations, and Ctrl+N starts a new one (the browser preview still opens on Local Codex).
