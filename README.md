@@ -42,3 +42,30 @@ node current/testing/preview.cjs "$ARCHON_V030_ASAR"
 Then open `http://127.0.0.1:4318`. Preview data is synthetic; do not enter real tokens. See the [current kit guide](current/README.md), [candidate ledger](docs/releases/v0.3.0-candidate.md), [release checklist](docs/releases.md), and [changelog](CHANGELOG.md).
 
 The verified frozen input SHA-256 is `36d3ae03bd6b20c4e9ea5fc690461ef972b16eb0c9433bfb1305daeb068e549b`. The MiniPC candidate built from this repository was checked against its installed app payload after the audit.
+
+🏗️ Archon Desktop — Main Features
+- [ ] 💻 Full IDE
+- [ ] 🖥️ Integrated Terminal
+- [ ] 🔄 tmux Integration
+- [ ] 🤖 Multi-Agent System
+- [ ] 🔌 Agent / Harness Manager
+- [ ] 🧩 MCP Manager
+- [ ] 🛠️ Skills Manager
+- [ ] 👥 Team Collaboration
+- [ ] 🔐 Users & Permissions
+- [ ] 📁 Project / Workspace Manager
+- [ ] 🌿 Git Integration
+- [ ] 🌿 Git Worktree Support
+- [ ] 🌐 Live App / Website Preview
+- [ ] 🧭 Self-Hosted Web App Dashboard
+- [ ] 🧑‍💻 Agent ↔ IDE Integration
+- [ ] 🧠 Persistent Agent Sessions
+- [ ] ⚡ Parallel Agent Execution
+- [ ] 📋 Task / Work Coordination
+- [ ] 🔍 Code Review & Diff Viewer
+- [ ] ▶️ Run / Build / Test Controls
+- [ ] 🔑 Secrets & Credentials Manager
+- [ ] 🖥️ Local Execution
+- [ ] ☁️ Remote / Server Execution
+- [ ] 🔄 Persistent Workspace Sessions
+- [ ] 🛡️ Agent Permissions & Sandboxing
